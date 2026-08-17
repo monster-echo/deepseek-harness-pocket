@@ -231,9 +231,12 @@ export function createAdapter(ctx: Context): DshAdapter {
       try {
         const target = await fs.resolve(path)
         const entries = await fs.listDir(target)
+        const base = path.endsWith('/') ? path.slice(0, -1) : path
         return entries
           .filter((e) => e.type === 'directory')
-          .map((e) => ({ name: e.name, path: fs.processPath(e.target) }))
+          // 展示用逻辑路径（用户浏览视角）；真实 realpath 由
+          // workspaceRegistry.create 自行解析，避免 /tmp→/private/tmp 跳变
+          .map((e) => ({ name: e.name, path: `${base}/${e.name}` }))
           .sort((a, b) => {
             const ah = a.name.startsWith('.')
             const bh = b.name.startsWith('.')

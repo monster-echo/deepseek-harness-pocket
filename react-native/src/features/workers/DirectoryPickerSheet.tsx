@@ -4,6 +4,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppIcon } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useDshStore } from '../../state/dshStore';
@@ -17,6 +18,7 @@ export function DirectoryPickerSheet(
   }>,
 ) {
   const { palette } = usePreferences();
+  const insets = useSafeAreaInsets();
   const [current, setCurrent] = useState<string>('/');
   const [dirs, setDirs] = useState<readonly { name: string; path: string }[]>([]);
   const [loading, setLoading] = useState(false);
@@ -59,24 +61,34 @@ export function DirectoryPickerSheet(
   const crumbs = current.split('/').filter(Boolean);
 
   return (
-    <Modal visible={props.visible} transparent animationType="slide" onRequestClose={props.onClose}>
-      <View style={[styles.container, { backgroundColor: palette.background }]}>
+    <Modal visible={props.visible} animationType="slide" onRequestClose={props.onClose}>
+      <View
+        style={[
+          styles.container,
+          {
+            backgroundColor: palette.background,
+            paddingTop: insets.top + spacing.x1,
+            paddingBottom: insets.bottom,
+          },
+        ]}
+      >
         {/* 顶栏 */}
         <View style={[styles.header, { borderBottomColor: palette.border }]}>
           <Pressable onPress={props.onClose} hitSlop={12}>
             <AppIcon name="close" color={palette.text} size={22} />
           </Pressable>
           <Text style={[styles.title, { color: palette.text }]}>选择电脑上的目录</Text>
-          <Pressable
-            style={[styles.pickButton, { backgroundColor: palette.brand }]}
-            onPress={() => props.onPicked(current)}
-          >
-            <Text style={styles.pickText}>选这个</Text>
+          <Pressable onPress={props.onClose} hitSlop={12}>
+            <Text style={[styles.cancelText, { color: palette.brand }]}>取消</Text>
           </Pressable>
         </View>
 
         {/* 面包屑 */}
-        <ScrollView horizontal contentContainerStyle={styles.crumbs}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={[styles.crumbs, { paddingRight: spacing.x3 }]}
+        >
           <Crumb label="/" path="/" current={current === '/'} onPress={() => { setCurrent('/'); load('/'); setHistory([]); }} />
           {crumbs.map((label, i) => {
             const path = `/${crumbs.slice(0, i + 1).join('/')}`;
@@ -93,7 +105,11 @@ export function DirectoryPickerSheet(
         </ScrollView>
 
         {/* 目录列表 */}
-        <ScrollView style={styles.list}>
+        <ScrollView
+          style={styles.list}
+          showsVerticalScrollIndicator
+          contentContainerStyle={{ paddingBottom: spacing.x6 }}
+        >
           {history.length > 0 && (
             <Row name=".." detail="返回上级" onPress={back} />
           )}
@@ -105,6 +121,16 @@ export function DirectoryPickerSheet(
             <Row key={dir.path} name={dir.name} detail="" onPress={() => enter(dir)} chevron />
           ))}
         </ScrollView>
+
+        {/* 底部固定选择栏（避开 home indicator 由容器 paddingBottom 处理） */}
+        <View style={[styles.footer, { borderTopColor: palette.border, backgroundColor: palette.surface }]}>
+          <Text style={[styles.footerPath, { color: palette.textSecondary }]} numberOfLines={1}>
+            {current}
+          </Text>
+          <Pressable style={[styles.pickButton, { backgroundColor: palette.brand }]} onPress={() => props.onPicked(current)}>
+            <Text style={styles.pickText}>选这个目录</Text>
+          </Pressable>
+        </View>
       </View>
     </Modal>
   );
@@ -140,7 +166,7 @@ function Row(props: Readonly<{ name: string; detail: string; onPress: () => void
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: spacing.x6 },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.x3,
     paddingHorizontal: spacing.x3, paddingBottom: spacing.x2,
@@ -152,6 +178,9 @@ const styles = StyleSheet.create({
   crumbs: { flexDirection: 'row', paddingHorizontal: spacing.x3, paddingVertical: spacing.x2, gap: spacing.x1, flexWrap: 'wrap' },
   crumb: { paddingHorizontal: spacing.x2, paddingVertical: spacing.x1, borderRadius: radii.small },
   crumbText: { fontSize: 12, maxWidth: 140 },
+  cancelText: { fontSize: 15 },
+  footer: { flexDirection: 'row', alignItems: 'center', gap: spacing.x3, paddingHorizontal: spacing.x3, paddingVertical: spacing.x2, borderTopWidth: StyleSheet.hairlineWidth },
+  footerPath: { flex: 1, fontSize: 12, fontFamily: 'Menlo' },
   list: { flex: 1, paddingHorizontal: spacing.x3 },
   hint: { fontSize: 13, padding: spacing.x3 },
   row: {

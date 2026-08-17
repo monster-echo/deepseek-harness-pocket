@@ -112,7 +112,8 @@ function createAdapter(ctx) {
       try {
         const target = await fs.resolve(path);
         const entries = await fs.listDir(target);
-        return entries.filter((e) => e.type === "directory").map((e) => ({ name: e.name, path: fs.processPath(e.target) })).sort((a, b) => {
+        const base = path.endsWith("/") ? path.slice(0, -1) : path;
+        return entries.filter((e) => e.type === "directory").map((e) => ({ name: e.name, path: `${base}/${e.name}` })).sort((a, b) => {
           const ah = a.name.startsWith(".");
           const bh = b.name.startsWith(".");
           if (ah !== bh) return ah ? 1 : -1;

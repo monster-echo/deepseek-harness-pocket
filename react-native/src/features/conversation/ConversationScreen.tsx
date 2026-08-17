@@ -205,9 +205,10 @@ function ToolRow({ item }: Readonly<{ item: TimelineItem }>) {
   )
 }
 
-/** dsh StatsLine 紧凑数字：517 / 12.2K / 1.2M。 */
+/** dsh StatsLine 紧凑数字：517 / 1.3K / 1.2M（一位小数）。 */
 function compactTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 10_000) return `${Math.round(n / 1_000)}K`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)
 }

@@ -1,0 +1,29 @@
+// CI release signing for the React Native Android build.
+// Applied from the generated android/app/build.gradle by the
+// `react-native-publish` GitHub Actions workflow (a single `apply from:` line
+// is appended after `expo prebuild`). It is a no-op for normal local builds.
+//
+// When android/key.properties exists (written by CI from the RN_KEYSTORE*
+// secrets), the release build is signed with that keystore. Otherwise it falls
+// back to the debug signing config so the APK is still installable for testing.
+android {
+    signingConfigs {
+        ciRelease {
+            def ciProps = new Properties()
+            def ciPropsFile = rootProject.file("key.properties")
+            if (ciPropsFile.exists()) {
+                ciPropsFile.withInputStream { ciProps.load(it) }
+                keyAlias ciProps['keyAlias']
+                keyPassword ciProps['keyPassword']
+                storeFile file(ciProps['storeFile'])
+                storePassword ciProps['storePassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig rootProject.file("key.properties").exists() \
+                ? signingConfigs.ciRelease : signingConfigs.debug
+        }
+    }
+}

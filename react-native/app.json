@@ -1,0 +1,66 @@
+{
+  "expo": {
+    "name": "DSH Companion",
+    "slug": "dshcompanion",
+    "scheme": [
+      "dshcompanion",
+      "mobileui"
+    ],
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "web": {
+      "bundler": "metro"
+    },
+    "icon": "./assets/app-icon.png",
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 88,
+          "resizeMode": "contain"
+        }
+      ],
+      "expo-web-browser",
+      "@react-native-firebase/app",
+      "@react-native-firebase/analytics",
+      "@react-native-firebase/crashlytics",
+      "expo-apple-authentication",
+      "./plugins/withModularHeaders",
+      "expo-video"
+    ],
+    "ios": {
+      "usesAppleSignIn": true,
+      "bundleIdentifier": "com.rwecho.dshcompanion.dsh_companion",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "associatedDomains": [
+        "applinks:auth.zhongbei.tech"
+      ]
+    },
+    "android": {
+      "package": "com.rwecho.dshcompanion.dsh_companion",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/splash-icon.png",
+        "backgroundColor": "#A84444"
+      },
+      "googleServicesFile": "./google-services.json",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "data": [
+            {
+              "scheme": "https",
+              "host": "auth.zhongbei.tech"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,38 @@
+name: React Native CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "react-native/**"
+      - "assets/**"
+      - ".github/workflows/react-native-ci.yml"
+  pull_request:
+    paths:
+      - "react-native/**"
+      - "assets/**"
+      - ".github/workflows/react-native-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: react-native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: react-native/package-lock.json
+      # Expo 53 pins AsyncStorage 2.x while Firebase declares a newer optional peer.
+      - run: npm ci --legacy-peer-deps
+      - run: npm run typecheck
+      # Unit tests only — apiClient/purchaseFlow hit the live dev server
+      # (localhost:3210) and are skipped in CI. vitest is sequential-only for
+      # these (they mutate module-level apiClient readers).
+      - run: npx vitest run src/__tests__/paymentModels.test.ts src/__tests__/paymentProvider.test.ts

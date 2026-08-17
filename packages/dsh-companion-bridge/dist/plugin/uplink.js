@@ -91,7 +91,7 @@ export function startUplink(ctx, opts) {
         send: (text) => {
             send({ kind: 'phone-frame', inner: text });
         },
-    });
+    }, { trusted: true });
     connect();
     return () => {
         disposed = true;

@@ -45,10 +45,14 @@ export class BridgeHub {
                 n++;
         return n;
     }
-    /** 注册一个新的物理连接（未认证）。返回连接 id，供断开时 detach。 */
-    attach(sender) {
+    /** 注册一个新的物理连接；trusted=true（经 gateway）时立即完成认证。返回连接 id。 */
+    attach(sender, options) {
         const id = `c${++connSeq}`;
-        this.conns.set(id, { id, sender, authed: false, subscribed: new Set() });
+        const trusted = options?.trusted === true;
+        const conn = { id, sender, authed: trusted, trusted, subscribed: new Set() };
+        this.conns.set(id, conn);
+        if (trusted)
+            this.sendTo(conn, { kind: 'auth-ok' });
         return id;
     }
     detach(connId) {
@@ -69,7 +73,7 @@ export class BridgeHub {
             return 'reject';
         switch (frame.kind) {
             case 'auth': {
-                if (this.opts.verifyToken(this.opts.pairingToken, frame.token)) {
+                if (conn.trusted || this.opts.verifyToken(this.opts.pairingToken, frame.token)) {
                     conn.authed = true;
                     this.sendTo(conn, { kind: 'auth-ok' });
                     return 'authed';

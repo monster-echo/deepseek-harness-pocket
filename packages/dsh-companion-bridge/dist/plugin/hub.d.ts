@@ -31,8 +31,10 @@ export declare class BridgeHub {
     dispose(): void;
     /** 已认证连接数（审批应答器据此决定是否接手）。 */
     connectedCount(): number;
-    /** 注册一个新的物理连接（未认证）。返回连接 id，供断开时 detach。 */
-    attach(sender: PhoneSender): string;
+    /** 注册一个新的物理连接；trusted=true（经 gateway）时立即完成认证。返回连接 id。 */
+    attach(sender: PhoneSender, options?: {
+        trusted?: boolean;
+    }): string;
     detach(connId: string): void;
     /**
      * 处理一帧文本（来自直连 WS 或 gateway 转发）。

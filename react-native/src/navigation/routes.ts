@@ -2,6 +2,7 @@ export type AppRoute =
   | 'launch.splash'
   | 'launch.onboarding'
   | 'home'
+  | 'dsh.pair'
   | 'auth.signIn'
   | 'auth.signUp'
   | 'auth.phone'

@@ -26,6 +26,8 @@ interface PhoneConn {
   readonly id: string
   readonly sender: PhoneSender
   authed: boolean
+  /** gateway 隧道连接：gateway 已完成用户鉴权与配对校验，免 pairing token */
+  readonly trusted: boolean
   readonly subscribed: Set<string>
 }
 
@@ -76,10 +78,13 @@ export class BridgeHub {
     return n
   }
 
-  /** 注册一个新的物理连接（未认证）。返回连接 id，供断开时 detach。 */
-  attach(sender: PhoneSender): string {
+  /** 注册一个新的物理连接；trusted=true（经 gateway）时立即完成认证。返回连接 id。 */
+  attach(sender: PhoneSender, options?: { trusted?: boolean }): string {
     const id = `c${++connSeq}`
-    this.conns.set(id, { id, sender, authed: false, subscribed: new Set() })
+    const trusted = options?.trusted === true
+    const conn: PhoneConn = { id, sender, authed: trusted, trusted, subscribed: new Set() }
+    this.conns.set(id, conn)
+    if (trusted) this.sendTo(conn, { kind: 'auth-ok' })
     return id
   }
 
@@ -100,7 +105,7 @@ export class BridgeHub {
     if (frame === null) return 'reject'
     switch (frame.kind) {
       case 'auth': {
-        if (this.opts.verifyToken(this.opts.pairingToken, frame.token)) {
+        if (conn.trusted || this.opts.verifyToken(this.opts.pairingToken, frame.token)) {
           conn.authed = true
           this.sendTo(conn, { kind: 'auth-ok' })
           return 'authed'

@@ -4,7 +4,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { RootParamList } from './navigationRef';
 
 import { AuthScreen, AuthMode } from '../screens/AuthScreens';
-import { HomeScreen } from '../screens/HomeScreen';
+import { HomeShellScreen } from '../features/workers/HomeShellScreen';
+import { PairWorkerScreen } from '../features/onboarding/PairWorkerScreen';
 import { OnboardingScreen, SplashScreen } from '../screens/LaunchScreens';
 import { EditProfileScreen, ProfileScreen } from '../screens/ProfileScreens';
 import { MembershipScreen } from '../screens/MembershipScreen';
@@ -73,7 +74,8 @@ export function RootNavigator() {
     >
       <Stack.Screen name="launch.splash" component={SplashScreen} />
       <Stack.Screen name="launch.onboarding" component={OnboardingScreen} />
-      <Stack.Screen name="home" component={HomeScreen} />
+      <Stack.Screen name="home" component={HomeShellScreen} />
+      <Stack.Screen name="dsh.pair" component={PairWorkerScreen} />
 
       <Stack.Screen name="auth.signIn" component={AuthRoute} />
       <Stack.Screen name="auth.signUp" component={AuthRoute} />

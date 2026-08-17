@@ -112,11 +112,14 @@ export function startUplink(ctx: Context, opts: UplinkOptions): () => void {
   // 经 gateway 的手机下行承载：单一伪连接（MVP 每 Worker 单活跃手机，gateway 负责替换旧手机）。
   // 手机的 auth 帧作为 inner 抵达 → handleFrame 完成 Hub 认证；此后 broadcast 的
   // 事件/快照/审批都经此连接以 phone-frame 发回 gateway，由其转发给当前活跃手机。
-  const uplinkConnId = opts.hub.attach({
-    send: (text) => {
-      send({ kind: 'phone-frame', inner: text })
+  const uplinkConnId = opts.hub.attach(
+    {
+      send: (text) => {
+        send({ kind: 'phone-frame', inner: text })
+      },
     },
-  })
+    { trusted: true },
+  )
 
   connect()
 

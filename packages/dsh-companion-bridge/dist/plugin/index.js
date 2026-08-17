@@ -150,6 +150,15 @@ function createAdapter(ctx) {
       });
       return handle.agent.id.toString();
     },
+    async forkSession(sessionId, route, boundary) {
+      const child = ctx.sessions.fork(sessionId, boundary);
+      const childId = child.id.toString();
+      const registry = agents();
+      if (registry !== void 0) {
+        await registry.resume({ resumeSessionId: childId, agentOptions: { provider: route.provider, model: route.model } });
+      }
+      return childId;
+    },
     async readSlice(id, fromSeq) {
       const live = ctx.sessions.get(id);
       if (live) {
@@ -565,6 +574,24 @@ var BridgeHub = class {
         const model = typeof req.args["model"] === "string" ? req.args["model"] : this.opts.defaultModel.model;
         const sessionId = await this.adapter.createSession(cwd, { provider, model });
         return rpcSuccess(req.id, { sessionId });
+      }
+      case "sessions.fork": {
+        const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const sessionId = req.args["sessionId"];
+        if (typeof sessionId !== "string" || sessionId.length === 0) {
+          return fail("bad-request", "sessionId required");
+        }
+        const boundaryRaw = req.args["boundary"];
+        const boundary = typeof boundaryRaw === "number" && Number.isInteger(boundaryRaw) && boundaryRaw >= 0 ? boundaryRaw : void 0;
+        const provider = typeof req.args["provider"] === "string" ? req.args["provider"] : this.opts.defaultModel.provider;
+        const model = typeof req.args["model"] === "string" ? req.args["model"] : this.opts.defaultModel.model;
+        try {
+          const childId = await this.adapter.forkSession(sessionId, { provider, model }, boundary);
+          return rpcSuccess(req.id, { sessionId: childId });
+        } catch (error) {
+          return fail("bad-request", error instanceof Error ? error.message : "fork failed");
+        }
       }
       case "messages.send": {
         const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");

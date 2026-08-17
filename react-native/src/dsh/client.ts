@@ -156,6 +156,15 @@ export class DshClient {
     return (response.result as { workspace: { id: string; path: string; title: string } }).workspace
   }
 
+  async forkSession(sessionId: string, boundary?: number): Promise<string> {
+    const response = await this.rpc('sessions', 'fork', {
+      sessionId,
+      ...(boundary !== undefined ? { boundary } : {}),
+    })
+    if (!response.ok) throw new Error(response.error.message)
+    return (response.result as { sessionId: string }).sessionId
+  }
+
   async createSession(cwd: string): Promise<string> {
     const response = await this.rpc('sessions', 'create', { cwd })
     if (!response.ok) throw new Error(response.error.message)

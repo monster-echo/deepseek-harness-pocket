@@ -106,6 +106,8 @@ export interface DshAdapter {
   addWorkspace(path: string): Promise<WorkspaceSummary | null>
   /** 在指定 cwd 创建新会话（M3）；返回 sessionId */
   createSession(cwd: string, route: { provider: string; model: string }): Promise<string>
+  /** 从既有会话分叉（dsh fork：取平衡的已完成回合前缀作种子）并挂 agent；返回新 sessionId */
+  forkSession(sessionId: string, route: { provider: string; model: string }, boundary?: number): Promise<string>
   readSlice(id: string, fromSeq: number): Promise<SessionSlice | null>
   sendUserMessage(id: string, text: string): Promise<void>
   stopTurn(id: string): Promise<void>
@@ -284,6 +286,21 @@ export function createAdapter(ctx: Context): DshAdapter {
         agentOptions: { provider: route.provider, model: route.model },
       })
       return handle.agent.id.toString()
+    },
+
+    async forkSession(sessionId, route, boundary) {
+      // fork 同步复制会话种子；随后 resume 挂上 live agent 才能对话
+      const child = (ctx.sessions as unknown as {
+        fork(source: string, boundary?: number, childSessionId?: string): { id: { toString(): string } }
+      }).fork(sessionId, boundary)
+      const childId = child.id.toString()
+      const registry = agents()
+      if (registry !== undefined) {
+        await (registry as unknown as {
+          resume(options: { resumeSessionId: string; agentOptions: { provider: string; model: string } }): Promise<unknown>
+        }).resume({ resumeSessionId: childId, agentOptions: { provider: route.provider, model: route.model } })
+      }
+      return childId
     },
 
     async readSlice(id, fromSeq) {

@@ -24,6 +24,8 @@ export type ToolStatus = 'running' | 'ok' | 'error' | 'stopped'
 export interface TimelineItem {
   readonly key: string
   readonly kind: 'user' | 'assistant' | 'tool' | 'turnEnd' | 'compaction'
+  /** 产生该条目的事件 seq（分叉 boundary 用） */
+  readonly seq?: number
   // user
   readonly text?: string
   // assistant
@@ -200,7 +202,7 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
   switch (event.type) {
     case 'user/message': {
       const text = pickUserText(data)
-      if (text.length > 0) state.items.push({ key: `u${event.seq}`, kind: 'user', text })
+      if (text.length > 0) state.items.push({ key: `u${event.seq}`, kind: 'user', text, seq: event.seq })
       break
     }
 
@@ -238,9 +240,9 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       }
       if (state.streamingIndex >= 0) {
         const idx = state.streamingIndex
-        state.items[idx] = { ...state.items[idx]!, blocks, streaming: false, usage }
+        state.items[idx] = { ...state.items[idx]!, blocks, streaming: false, usage, seq: event.seq }
       } else if (blocks.length > 0) {
-        state.items.push({ key: `a${event.seq}`, kind: 'assistant', blocks, streaming: false, usage })
+        state.items.push({ key: `a${event.seq}`, kind: 'assistant', blocks, streaming: false, usage, seq: event.seq })
       }
       state.streamingIndex = -1
       break

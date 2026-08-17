@@ -29,6 +29,7 @@ interface DshState {
   fsHome(): Promise<string>
   addWorkspace(path: string): Promise<{ id: string; path: string; title: string } | null>
   createSession(cwd: string): Promise<string | null>
+  forkSession(sessionId: string, boundary?: number): Promise<string | null>
   openSession(sessionId: string): Promise<void>
   sendMessage(text: string): Promise<void>
   stopTurn(): Promise<void>
@@ -168,6 +169,20 @@ export const useDshStore = create<DshState>((set, get) => {
         await get().refreshSessions()
         await get().openSession(sessionId)
         return sessionId
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+        return null
+      }
+    },
+
+    async forkSession(sessionId, boundary) {
+      if (client === null) return null
+      try {
+        const childId = await client.forkSession(sessionId, boundary)
+        await get().refreshSessions()
+        await get().openSession(childId)
+        setNotice(set, '已从该消息分叉新会话')
+        return childId
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
         return null

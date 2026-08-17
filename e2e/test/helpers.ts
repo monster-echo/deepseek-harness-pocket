@@ -119,6 +119,9 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
     async createSession(cwd: string, route: { provider: string; model: string }) {
       return `new-session-${cwd}-${route.model}`
     },
+    async forkSession(sessionId: string, route: { provider: string; model: string }, boundary?: number) {
+      return `fork-of-${sessionId}-at-${boundary ?? 'head'}`
+    },
     async sendUserMessage(id, text) {
       sentMessages.push({ id, text })
     },

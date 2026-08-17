@@ -7,8 +7,9 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
+import * as Clipboard from 'expo-clipboard';
 import { AppIcon, IconName } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useDshStore } from '../../state/dshStore';
@@ -36,6 +37,7 @@ export function ConversationScreen() {
   }
 
   const pending = serverRequests[0]
+  const [actionTarget, setActionTarget] = useState<TimelineItem | null>(null)
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
@@ -50,9 +52,13 @@ export function ConversationScreen() {
         contentContainerStyle={{ padding: spacing.x3, gap: spacing.x2, paddingBottom: spacing.x4 }}
       >
         {view.items.map((item) => (
-          <TimelineRow key={item.key} item={item} />
+          <TimelineRow key={item.key} item={item} onLongPress={setActionTarget} />
         ))}
       </ScrollView>
+      <MessageActionSheet
+        target={actionTarget}
+        onClose={() => setActionTarget(null)}
+      />
       {/* 审批/提问接管输入区上方（dsh ApprovalPanel 模式） */}
       {pending !== undefined ? (
         <ServerRequestCard request={pending} />
@@ -65,29 +71,33 @@ export function ConversationScreen() {
 
 // ---------- 时间线行 ----------
 
-function TimelineRow({ item }: Readonly<{ item: TimelineItem }>) {
-  if (item.kind === 'user') return <UserRow item={item} />
-  if (item.kind === 'assistant') return <AssistantRow item={item} />
+function TimelineRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLongPress: (item: TimelineItem) => void }>) {
+  if (item.kind === 'user') return <UserRow item={item} onLongPress={onLongPress} />
+  if (item.kind === 'assistant') return <AssistantRow item={item} onLongPress={onLongPress} />
   if (item.kind === 'tool') return <ToolRow item={item} />
   if (item.kind === 'compaction') return <CompactionRow item={item} />
   return <TurnEndRow item={item} />
 }
 
-function UserRow({ item }: Readonly<{ item: TimelineItem }>) {
+function UserRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLongPress: (item: TimelineItem) => void }>) {
   const { palette } = usePreferences()
   return (
     <View style={styles.userRow}>
-      <View style={[styles.userBubble, { backgroundColor: palette.brand }]}>
-        <Text style={[styles.userText, { color: '#FFFFFF' }]}>{item.text}</Text>
-      </View>
+      <Pressable onLongPress={() => onLongPress(item)} delayLongPress={350}>
+        <View style={[styles.userBubble, { backgroundColor: palette.brand }]}>
+          <Text style={[styles.userText, { color: '#FFFFFF' }]}>{item.text}</Text>
+        </View>
+      </Pressable>
     </View>
   )
 }
 
-function AssistantRow({ item }: Readonly<{ item: TimelineItem }>) {
+function AssistantRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLongPress: (item: TimelineItem) => void }>) {
   const { palette } = usePreferences()
   const blocks = item.blocks ?? []
+  const fullText = blocks.map((b) => b.text).join('\n\n')
   return (
+    <Pressable onLongPress={() => onLongPress(item)} delayLongPress={350}>
     <View style={[styles.assistantBubble, { backgroundColor: palette.surface }]}>
       {blocks.map((block, i) => (
         <AssistantBlockView key={i} block={block} streaming={item.streaming === true} />
@@ -104,6 +114,7 @@ function AssistantRow({ item }: Readonly<{ item: TimelineItem }>) {
         </Text>
       )}
     </View>
+    </Pressable>
   )
 }
 
@@ -380,6 +391,58 @@ function Composer() {
     </View>
   )
 }
+
+/** 长按消息菜单（hover 等价）：复制全文 / 从这里分支。 */
+function MessageActionSheet(props: Readonly<{ target: TimelineItem | null; onClose: () => void }>) {
+  const { palette } = usePreferences()
+  const activeSessionId = useDshStore((s) => s.activeSessionId)
+  const forkSession = useDshStore((s) => s.forkSession)
+  const [copied, setNoticeCopied] = useState(false)
+  const target = props.target
+  if (target === null || activeSessionId === null) return null
+  const text = (target.blocks ?? []).map((b) => b.text).join('\n\n') || target.text || ''
+
+  const copy = (): void => {
+    void Clipboard.setStringAsync(text).then(() => setNoticeCopied(true))
+  }
+
+  const fork = (): void => {
+    props.onClose()
+    void forkSession(activeSessionId, target.seq)
+  }
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={props.onClose}>
+      <Pressable style={[sheetStyles.scrim, { backgroundColor: palette.scrim }]} onPress={props.onClose}>
+        <View style={[sheetStyles.sheet, { backgroundColor: palette.surface }]}>
+          <Text style={[sheetStyles.title, { color: palette.text }]} numberOfLines={2}>
+            {text.slice(0, 80)}
+          </Text>
+          <SheetAction label={copied ? '已复制 ✓' : '复制全文'} onPress={copy} />
+          <SheetAction label="从这里分支（fork 新会话）" onPress={fork} />
+          <SheetAction label="取消" onPress={props.onClose} muted />
+        </View>
+      </Pressable>
+    </Modal>
+  )
+}
+
+function SheetAction({ label, onPress, muted }: Readonly<{ label: string; onPress: () => void; muted?: boolean }>) {
+  const { palette } = usePreferences()
+  return (
+    <Pressable style={({ pressed }) => [sheetStyles.action, pressed && { backgroundColor: palette.surfaceMuted }]} onPress={onPress}>
+      <Text style={[sheetStyles.actionText, { color: muted === true ? palette.textSecondary : palette.text }]}>{label}</Text>
+    </Pressable>
+  )
+}
+
+const sheetStyles = StyleSheet.create({
+  scrim: { flex: 1, justifyContent: 'center', padding: spacing.x6 },
+  sheet: { borderRadius: radii.card, padding: spacing.x2 },
+  title: { fontSize: 13, lineHeight: 18, padding: spacing.x2, opacity: 0.7 },
+  action: { paddingVertical: spacing.x3, paddingHorizontal: spacing.x3, borderRadius: radii.control },
+  actionText: { fontSize: 15 },
+});
 
 const styles = StyleSheet.create({
   container: { flex: 1 },

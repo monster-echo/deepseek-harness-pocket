@@ -255,6 +255,27 @@ export class BridgeHub {
         return rpcSuccess(req.id, { sessionId })
       }
 
+      case 'sessions.fork': {
+        const denied =
+          denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const sessionId = req.args['sessionId']
+        if (typeof sessionId !== 'string' || sessionId.length === 0) {
+          return fail('bad-request', 'sessionId required')
+        }
+        const boundaryRaw = req.args['boundary']
+        const boundary = typeof boundaryRaw === 'number' && Number.isInteger(boundaryRaw) && boundaryRaw >= 0 ? boundaryRaw : undefined
+        const provider = typeof req.args['provider'] === 'string' ? req.args['provider'] : this.opts.defaultModel.provider
+        const model = typeof req.args['model'] === 'string' ? req.args['model'] : this.opts.defaultModel.model
+        try {
+          const childId = await this.adapter.forkSession(sessionId, { provider, model }, boundary)
+          return rpcSuccess(req.id, { sessionId: childId })
+        } catch (error) {
+          return fail('bad-request', error instanceof Error ? error.message : 'fork failed')
+        }
+      }
+
       case 'messages.send': {
         const denied =
           denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled') ??

@@ -1,0 +1,20 @@
+{
+  "name": "@dsh-companion/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@dsh-companion/bridge-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0",
+    "ws": "^8.21.0"
+  }
+}

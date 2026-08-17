@@ -8,6 +8,28 @@ importers:
 
   .: {}
 
+  e2e:
+    dependencies:
+      '@dsh-companion/bridge-protocol':
+        specifier: workspace:*
+        version: link:../packages/dsh-bridge-protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^22
+        version: 22.20.1
+      '@types/ws':
+        specifier: ^8.5.10
+        version: 8.18.1
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)(tsx@4.23.12)
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.3
+
   gateway:
     dependencies:
       '@dsh-companion/bridge-protocol':

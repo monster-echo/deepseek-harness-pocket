@@ -55,6 +55,10 @@ export function parseGatewayToPhoneFrame(value) {
             return typeof v.reason === 'string' ? { kind: 'auth-rejected', reason: v.reason } : null;
         case 'ping':
             return typeof v.nonce === 'number' ? { kind: 'ping', nonce: v.nonce } : null;
+        case 'worker-open-result':
+            return typeof v.workerId === 'string' && typeof v.ok === 'boolean'
+                ? { kind: 'worker-open-result', workerId: v.workerId, ok: v.ok }
+                : null;
         case 'worker-frame':
             return typeof v.workerId === 'string' && typeof v.inner === 'string'
                 ? { kind: 'worker-frame', workerId: v.workerId, inner: v.inner }

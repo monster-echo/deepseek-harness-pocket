@@ -38,6 +38,7 @@ export function startUplink(ctx, opts) {
                 name: opts.workerName,
                 hostFingerprint: opts.fingerprint,
                 dshVersion: opts.dshVersion,
+                pairingCode: opts.pairingCode,
             });
             pingTimer = setInterval(() => {
                 send({ kind: 'pong', nonce: Date.now() });

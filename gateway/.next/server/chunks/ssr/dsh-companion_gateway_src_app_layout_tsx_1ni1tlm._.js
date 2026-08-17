@@ -1,0 +1,3 @@
+module.exports=[86466,a=>{"use strict";var b=a.i(40605);a.s(["default",0,function({children:a}){return(0,b.jsx)("html",{lang:"zh-CN",children:(0,b.jsx)("body",{style:{margin:0,fontFamily:"system-ui, sans-serif"},children:a})})},"metadata",0,{title:"DSH Companion Gateway",description:"手机上的 DeepSeek Harness 客户端 — 中转服务"}])},67416,function(a){a.n(a.i(86466))}];
+
+//# sourceMappingURL=dsh-companion_gateway_src_app_layout_tsx_1ni1tlm._.js.map

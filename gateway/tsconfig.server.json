@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist-server",
+    "rootDir": ".",
+    "types": ["node"],
+    "jsx": "preserve",
+    "noEmit": false
+  },
+  "include": ["server.ts", "src/server/**/*.ts", "scripts/**/*.ts", "next.config.ts"]
+}

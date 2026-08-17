@@ -12,6 +12,8 @@ export interface WorkerRegisterFrame {
     readonly name: string;
     readonly hostFingerprint: string;
     readonly dshVersion: string | null;
+    /** 当前 6 位配对码（手动绑定路径：gateway 按码找 worker） */
+    readonly pairingCode: string;
 }
 export interface PairingAnswerFrame {
     readonly kind: 'pairing-answer';
@@ -108,6 +110,11 @@ export type GatewayToPhoneFrame = GatewayToPhoneFrame$Presence | {
 } | {
     readonly kind: 'ping';
     readonly nonce: number;
+} | {
+    readonly kind: 'worker-open-result';
+    readonly workerId: string;
+    readonly ok: boolean;
+    readonly reason?: string;
 } | {
     readonly kind: 'worker-frame';
     readonly workerId: string;

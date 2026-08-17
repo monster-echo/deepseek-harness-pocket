@@ -16,6 +16,8 @@ export interface WorkerRegisterFrame {
   readonly name: string
   readonly hostFingerprint: string
   readonly dshVersion: string | null
+  /** 当前 6 位配对码（手动绑定路径：gateway 按码找 worker） */
+  readonly pairingCode: string
 }
 
 export interface PairingAnswerFrame {
@@ -97,6 +99,7 @@ export type GatewayToPhoneFrame =
   | { readonly kind: 'auth-ok'; readonly userId: string }
   | { readonly kind: 'auth-rejected'; readonly reason: string }
   | { readonly kind: 'ping'; readonly nonce: number }
+  | { readonly kind: 'worker-open-result'; readonly workerId: string; readonly ok: boolean; readonly reason?: string }
   | { readonly kind: 'worker-frame'; readonly workerId: string; readonly inner: string }
   | { readonly kind: 'push'; readonly title: string; readonly body: string; readonly sessionId?: string }
 
@@ -148,6 +151,10 @@ export function parseGatewayToPhoneFrame(value: unknown): GatewayToPhoneFrame | 
       return typeof v.reason === 'string' ? { kind: 'auth-rejected', reason: v.reason } : null
     case 'ping':
       return typeof v.nonce === 'number' ? { kind: 'ping', nonce: v.nonce } : null
+    case 'worker-open-result':
+      return typeof v.workerId === 'string' && typeof v.ok === 'boolean'
+        ? { kind: 'worker-open-result', workerId: v.workerId, ok: v.ok }
+        : null
     case 'worker-frame':
       return typeof v.workerId === 'string' && typeof v.inner === 'string'
         ? { kind: 'worker-frame', workerId: v.workerId, inner: v.inner }

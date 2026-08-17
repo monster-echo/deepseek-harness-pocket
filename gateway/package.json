@@ -1,0 +1,33 @@
+{
+  "name": "@dsh-companion/gateway",
+  "version": "0.1.0",
+  "description": "dsh-companion Gateway：手机↔Worker 中转（Next.js 管理面 + 自定义 server 承载 WebSocket）",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "next build && tsc -p tsconfig.server.json",
+    "start": "node dist-server/server.js",
+    "migrate": "tsx scripts/migrate.ts",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dsh-companion/bridge-protocol": "workspace:*",
+    "next": "^16.2.0",
+    "pg": "^8.13.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/pg": "^8.11.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.8.0",
+    "tsx": "^4.19.0",
+    "vitest": "^3.0.0"
+  }
+}

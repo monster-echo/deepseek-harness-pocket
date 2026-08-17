@@ -196,7 +196,8 @@ export class DshClient {
     })
   }
 
-  dispose(): void {
+  /** silent=true：主动切换/清理，不触发 onDisconnect（避免误报"连接已断开"）。 */
+  dispose(silent = false): void {
     if (this.authTimer !== null) clearTimeout(this.authTimer)
     if (this.pingTimer !== null) clearInterval(this.pingTimer)
     for (const pending of this.pending.values()) {
@@ -204,7 +205,7 @@ export class DshClient {
     }
     this.pending.clear()
     this.channel.close()
-    this.handlers.onDisconnect()
+    if (!silent) this.handlers.onDisconnect()
   }
 
   private resolveRpc(response: WireResponse): void {

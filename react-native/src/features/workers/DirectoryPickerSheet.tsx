@@ -26,11 +26,14 @@ export function DirectoryPickerSheet(
   const listDir = useDshStore((s) => s.listDir);
   const fsHome = useDshStore((s) => s.fsHome);
 
+  const listRef = React.useRef<ScrollView>(null);
   const load = useCallback((path: string) => {
     setLoading(true);
     void listDir(path).then((entries) => {
       setDirs(entries);
       setLoading(false);
+      // iOS 滚动条仅滚动时可见：加载后闪烁提示可滚动
+      setTimeout(() => listRef.current?.flashScrollIndicators(), 120);
     });
   }, [listDir]);
 
@@ -106,10 +109,17 @@ export function DirectoryPickerSheet(
 
         {/* 目录列表 */}
         <ScrollView
+          ref={listRef}
           style={styles.list}
           showsVerticalScrollIndicator
+          scrollIndicatorInsets={{ right: 1 }}
           contentContainerStyle={{ paddingBottom: spacing.x6 }}
         >
+          {!loading && dirs.length > 0 && (
+            <Text style={[styles.count, { color: palette.textSecondary }]}>
+              共 {dirs.length} 个子目录（上下滚动查看）
+            </Text>
+          )}
           {history.length > 0 && (
             <Row name=".." detail="返回上级" onPress={back} />
           )}
@@ -175,7 +185,8 @@ const styles = StyleSheet.create({
   title: { fontSize: 16, flex: 1 },
   pickButton: { paddingHorizontal: spacing.x4, paddingVertical: spacing.x2, borderRadius: radii.round },
   pickText: { color: '#FFFFFF', fontSize: 13 },
-  crumbs: { flexDirection: 'row', paddingHorizontal: spacing.x3, paddingVertical: spacing.x2, gap: spacing.x1, flexWrap: 'wrap' },
+  crumbs: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: spacing.x3, paddingVertical: spacing.x2, gap: spacing.x1 },
+  count: { fontSize: 12, paddingBottom: spacing.x2 },
   crumb: { paddingHorizontal: spacing.x2, paddingVertical: spacing.x1, borderRadius: radii.small },
   crumbText: { fontSize: 12, maxWidth: 140 },
   cancelText: { fontSize: 15 },

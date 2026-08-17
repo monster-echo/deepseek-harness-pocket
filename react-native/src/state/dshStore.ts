@@ -40,6 +40,14 @@ interface DshState {
 let gateway: GatewayConnection | null = null
 let client: DshClient | null = null
 
+/** 通知条：写入后 8 秒自动清除，避免残留误导。 */
+let noticeTimer: ReturnType<typeof setTimeout> | null = null
+function setNotice(set: (partial: Partial<DshState>) => void, message: string): void {
+  set({ notice: message })
+  if (noticeTimer !== null) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => set({ notice: null }), 8000)
+}
+
 export const useDshStore = create<DshState>((set, get) => {
   const ensureGateway = (): GatewayConnection => {
     if (gateway !== null) return gateway
@@ -91,14 +99,14 @@ export const useDshStore = create<DshState>((set, get) => {
     disconnectGateway() {
       gateway?.disconnect()
       gateway = null
-      client?.dispose()
+      client?.dispose(true)
       client = null
       set({ gatewayStatus: 'idle', activeWorkerId: null, sessions: [], activeSessionId: null, sessionView: emptySessionView })
     },
 
     openWorker(workerId) {
       const g = ensureGateway()
-      client?.dispose()
+      client?.dispose(true)
       client = null
       set({ activeWorkerId: workerId, sessions: [], activeSessionId: null, sessionView: emptySessionView, serverRequests: [] })
       g.openWorker(workerId)
@@ -110,7 +118,7 @@ export const useDshStore = create<DshState>((set, get) => {
         const raw = await client.listSessions()
         set({ sessions: projectSessionList(raw) })
       } catch (error) {
-        set({ notice: error instanceof Error ? error.message : String(error) })
+        setNotice(set, error instanceof Error ? error.message : String(error))
       }
     },
 
@@ -119,7 +127,7 @@ export const useDshStore = create<DshState>((set, get) => {
       try {
         return await client.listWorkspaces()
       } catch (error) {
-        set({ notice: error instanceof Error ? error.message : String(error) })
+        setNotice(set, error instanceof Error ? error.message : String(error))
         return []
       }
     },
@@ -129,7 +137,7 @@ export const useDshStore = create<DshState>((set, get) => {
       try {
         return await client.fsList(path)
       } catch (error) {
-        set({ notice: error instanceof Error ? error.message : String(error) })
+        setNotice(set, error instanceof Error ? error.message : String(error))
         return []
       }
     },
@@ -148,7 +156,7 @@ export const useDshStore = create<DshState>((set, get) => {
       try {
         return await client.addWorkspace(path)
       } catch (error) {
-        set({ notice: error instanceof Error ? error.message : String(error) })
+        setNotice(set, error instanceof Error ? error.message : String(error))
         return null
       }
     },
@@ -161,7 +169,7 @@ export const useDshStore = create<DshState>((set, get) => {
         await get().openSession(sessionId)
         return sessionId
       } catch (error) {
-        set({ notice: error instanceof Error ? error.message : String(error) })
+        setNotice(set, error instanceof Error ? error.message : String(error))
         return null
       }
     },
@@ -172,7 +180,7 @@ export const useDshStore = create<DshState>((set, get) => {
       try {
         await client.openSession(sessionId)
       } catch (error) {
-        set({ notice: error instanceof Error ? error.message : String(error) })
+        setNotice(set, error instanceof Error ? error.message : String(error))
       }
     },
 
@@ -182,7 +190,7 @@ export const useDshStore = create<DshState>((set, get) => {
       try {
         await client.sendMessage(sessionId, text)
       } catch (error) {
-        set({ notice: error instanceof Error ? error.message : String(error) })
+        setNotice(set, error instanceof Error ? error.message : String(error))
       }
     },
 
@@ -192,7 +200,7 @@ export const useDshStore = create<DshState>((set, get) => {
       try {
         await client.stopTurn(sessionId)
       } catch (error) {
-        set({ notice: error instanceof Error ? error.message : String(error) })
+        setNotice(set, error instanceof Error ? error.message : String(error))
       }
     },
 
@@ -202,7 +210,7 @@ export const useDshStore = create<DshState>((set, get) => {
         await client.respondPermission(requestId, decision)
         set({ serverRequests: get().serverRequests.filter((r) => r.body.requestId !== requestId) })
       } catch (error) {
-        set({ notice: error instanceof Error ? error.message : String(error) })
+        setNotice(set, error instanceof Error ? error.message : String(error))
       }
     },
 
@@ -212,7 +220,7 @@ export const useDshStore = create<DshState>((set, get) => {
         await client.respondQuestion(requestId, answer)
         set({ serverRequests: get().serverRequests.filter((r) => r.body.requestId !== requestId) })
       } catch (error) {
-        set({ notice: error instanceof Error ? error.message : String(error) })
+        setNotice(set, error instanceof Error ? error.message : String(error))
       }
     },
   }
@@ -249,7 +257,9 @@ async function startClient(workerId: string, set: Set, get: Get): Promise<void> 
         if (!ok) set({ notice: 'Worker 鉴权失败', activeWorkerId: null })
       },
       onDisconnect: () => {
-        set({ notice: 'Worker 连接断开' })
+        setNotice(set, 'Worker 连接断开（正在自动恢复…）')
+        // 真实断线：触发网关侧重连（presence 会带回自动 openWorker）
+        get().connectGateway()
       },
     },
   )
@@ -262,6 +272,6 @@ async function startClient(workerId: string, set: Set, get: Get): Promise<void> 
     const first = projectSessionList(raw)[0]
     if (first !== undefined) await get().openSession(first.id)
   } catch (error) {
-    set({ notice: error instanceof Error ? error.message : String(error) })
+    setNotice(set, error instanceof Error ? error.message : String(error))
   }
 }

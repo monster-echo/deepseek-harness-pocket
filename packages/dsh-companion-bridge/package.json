@@ -20,7 +20,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "esbuild src/plugin/index.ts --bundle --platform=node --format=esm --external:@deepseek-ai/* --external:ws --outfile=dist/plugin/index.js && esbuild src/cli/index.ts --bundle --platform=node --format=esm --external:@deepseek-ai/* --external:ws --external:qrcode-terminal --outfile=dist/cli/index.js && node -e \"const fs=require('fs');const f='dist/cli/index.js';fs.writeFileSync(f,'#!/usr/bin/env node\\n'+fs.readFileSync(f))\"",
+    "build": "esbuild src/plugin/index.ts --bundle --platform=node --format=esm --external:@deepseek-ai/* --external:ws --outfile=dist/plugin/index.js && esbuild src/cli/index.ts --bundle --platform=node --format=esm --external:@deepseek-ai/* --external:ws --external:qrcode-terminal --banner:js=\"#!/usr/bin/env node\" --outfile=dist/cli/index.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

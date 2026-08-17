@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * dshc — DSH Companion Worker CLI。
  *

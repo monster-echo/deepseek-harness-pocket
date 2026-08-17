@@ -17,6 +17,7 @@ import {
 } from '@dsh-companion/bridge-protocol'
 import { makeRpcId, methodKey, parseWireRequest, rpcFailure, rpcSuccess } from '@dsh-companion/bridge-protocol'
 import type { ApprovalAsk, DshAdapter, QuestionAsk } from './adapter-dsh.js'
+import type { DirEntry } from './adapter-dsh.js'
 
 export interface PhoneSender {
   send(text: string): void
@@ -208,6 +209,23 @@ export class BridgeHub {
         const denied = denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled')
         if (denied) return denied
         return rpcSuccess(req.id, { workspaces: await this.adapter.listWorkspaces() })
+      }
+
+      case 'fs.list': {
+        const denied = denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled')
+        if (denied) return denied
+        const path = req.args['path']
+        if (typeof path !== 'string' || !path.startsWith('/')) {
+          return fail('bad-request', 'absolute path required')
+        }
+        const dirs: readonly DirEntry[] = await this.adapter.listDir(path)
+        return rpcSuccess(req.id, { path, dirs })
+      }
+
+      case 'fs.home': {
+        const denied = denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled')
+        if (denied) return denied
+        return rpcSuccess(req.id, { home: this.adapter.homePath() })
       }
 
       case 'workspaces.add': {

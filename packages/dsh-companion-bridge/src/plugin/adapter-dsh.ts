@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import type { DshSessionEvent } from '@dsh-companion/bridge-protocol'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -22,6 +23,11 @@ export interface WorkspaceSummary {
   readonly id: string
   readonly path: string
   readonly title: string
+}
+
+export interface DirEntry {
+  readonly name: string
+  readonly path: string
 }
 
 /**
@@ -92,6 +98,10 @@ export interface DshAdapter {
   dshVersion(): string | null
   listSessions(): Promise<readonly SessionSummary[]>
   listWorkspaces(): Promise<readonly WorkspaceSummary[]>
+  /** 列目录（仅目录，隐藏目录排后）；供手机端目录树浏览 */
+  listDir(path: string): Promise<readonly DirEntry[]>
+  /** Worker 端用户 home（目录树起点） */
+  homePath(): string
   /** 添加 workspace（按绝对路径）；已存在时幂等返回既有记录 */
   addWorkspace(path: string): Promise<WorkspaceSummary | null>
   /** 在指定 cwd 创建新会话（M3）；返回 sessionId */
@@ -207,6 +217,36 @@ export function createAdapter(ctx: Context): DshAdapter {
       } catch {
         return []
       }
+    },
+
+    async listDir(path) {
+      const fs = ctx.get('fs') as
+        | {
+            resolve(p: string, opts?: { signal?: AbortSignal }): Promise<unknown>
+            listDir(target: unknown, signal?: AbortSignal): Promise<readonly { name: string; type: 'file' | 'directory' | 'other'; target: unknown }[]>
+            processPath(target: unknown): string
+          }
+        | undefined
+      if (fs === undefined) return []
+      try {
+        const target = await fs.resolve(path)
+        const entries = await fs.listDir(target)
+        return entries
+          .filter((e) => e.type === 'directory')
+          .map((e) => ({ name: e.name, path: fs.processPath(e.target) }))
+          .sort((a, b) => {
+            const ah = a.name.startsWith('.')
+            const bh = b.name.startsWith('.')
+            if (ah !== bh) return ah ? 1 : -1
+            return a.name.localeCompare(b.name)
+          })
+      } catch {
+        return []
+      }
+    },
+
+    homePath() {
+      return homedir()
     },
 
     async addWorkspace(path) {

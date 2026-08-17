@@ -41,6 +41,7 @@ var pluginConfig = z.object({
 
 // src/plugin/adapter-dsh.ts
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 function toEvent(raw) {
   return raw;
@@ -104,6 +105,25 @@ function createAdapter(ctx) {
       } catch {
         return [];
       }
+    },
+    async listDir(path) {
+      const fs = ctx.get("fs");
+      if (fs === void 0) return [];
+      try {
+        const target = await fs.resolve(path);
+        const entries = await fs.listDir(target);
+        return entries.filter((e) => e.type === "directory").map((e) => ({ name: e.name, path: fs.processPath(e.target) })).sort((a, b) => {
+          const ah = a.name.startsWith(".");
+          const bh = b.name.startsWith(".");
+          if (ah !== bh) return ah ? 1 : -1;
+          return a.name.localeCompare(b.name);
+        });
+      } catch {
+        return [];
+      }
+    },
+    homePath() {
+      return homedir();
     },
     async addWorkspace(path) {
       const registry = ctx.get("workspaceRegistry");
@@ -507,6 +527,21 @@ var BridgeHub = class {
         if (denied) return denied;
         return rpcSuccess(req.id, { workspaces: await this.adapter.listWorkspaces() });
       }
+      case "fs.list": {
+        const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled");
+        if (denied) return denied;
+        const path = req.args["path"];
+        if (typeof path !== "string" || !path.startsWith("/")) {
+          return fail("bad-request", "absolute path required");
+        }
+        const dirs = await this.adapter.listDir(path);
+        return rpcSuccess(req.id, { path, dirs });
+      }
+      case "fs.home": {
+        const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled");
+        if (denied) return denied;
+        return rpcSuccess(req.id, { home: this.adapter.homePath() });
+      }
       case "workspaces.add": {
         const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled");
         if (denied) return denied;
@@ -634,13 +669,13 @@ function permissionRequestOf(ask) {
 // src/plugin/state.ts
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir as homedir2 } from "node:os";
 import { dirname, join, resolve } from "node:path";
 function b64url(bytes) {
   return bytes.toString("base64url");
 }
 function makeFingerprint() {
-  const seed = `${homedir()}|${process.platform}|${process.arch}|${randomBytes(8).toString("hex")}`;
+  const seed = `${homedir2()}|${process.platform}|${process.arch}|${randomBytes(8).toString("hex")}`;
   return createHash("sha256").update(seed).digest("hex").slice(0, 16);
 }
 function generateBridgeState(now = Date.now()) {
@@ -655,7 +690,7 @@ function generateBridgeState(now = Date.now()) {
   };
 }
 function loadBridgeState(file, allowCreate = true) {
-  const path = resolve(file.replace(/^~(?=\/|$)/, homedir()));
+  const path = resolve(file.replace(/^~(?=\/|$)/, homedir2()));
   if (existsSync(path)) {
     try {
       const parsed = JSON.parse(readFileSync(path, "utf8"));

@@ -10,11 +10,13 @@ import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useApp } from '../../state/AppStore';
 import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
+import { DirectoryPickerSheet } from './DirectoryPickerSheet';
 
 export function SessionSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const { palette } = usePreferences();
   const { navigate } = useApp();
   const [newSheet, setNewSheet] = useState(false);
+  const [picker, setPicker] = useState(false);
   const workers = useDshStore((s) => s.workers);
   const activeWorkerId = useDshStore((s) => s.activeWorkerId);
   const sessions = useDshStore((s) => s.sessions);
@@ -124,6 +126,8 @@ function NewSessionSheet({ visible, onClose, onCreated }: Readonly<{ visible: bo
     })
   }
 
+  const [picker, setPicker] = useState(false)
+
   const load = (): void => {
     setBusy(true)
     setError(null)
@@ -150,6 +154,15 @@ function NewSessionSheet({ visible, onClose, onCreated }: Readonly<{ visible: bo
           <Text style={[sheetStyles.title, { color: palette.text }]}>选择 Workspace 创建会话</Text>
           {busy && <Text style={[sheetStyles.hint, { color: palette.textSecondary }]}>加载中…</Text>}
           {error !== null && <Text style={[sheetStyles.hint, { color: palette.error }]}>{error}</Text>}
+          <Pressable style={[sheetStyles.browseButton, { borderColor: palette.brand }]} onPress={() => setPicker(true)}>
+            <AppIcon name="chevron-right" color={palette.brand} size={14} />
+            <Text style={[sheetStyles.browseText, { color: palette.brand }]}>浏览电脑目录…</Text>
+          </Pressable>
+          <DirectoryPickerSheet
+            visible={picker}
+            onClose={() => setPicker(false)}
+            onPicked={(path) => { setPicker(false); setNewPath(path) }}
+          />
           <View style={[sheetStyles.addRow, { borderColor: palette.border }]}>
             <TextInput
               style={[sheetStyles.addInput, { color: palette.text }]}
@@ -194,6 +207,8 @@ const sheetStyles = StyleSheet.create({
   title: { fontSize: 16, marginBottom: spacing.x2 },
   hint: { fontSize: 13, marginBottom: spacing.x2 },
   list: {},
+  browseButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.x1, borderWidth: 1, borderRadius: radii.control, paddingVertical: spacing.x2, marginBottom: spacing.x2 },
+  browseText: { fontSize: 14 },
   addRow: { flexDirection: 'row', borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, marginBottom: spacing.x2 },
   addInput: { flex: 1, padding: spacing.x2, fontSize: 13, fontFamily: 'Menlo' },
   addBtn: { paddingHorizontal: spacing.x3, justifyContent: 'center', borderRadius: radii.small, margin: spacing.x1 },

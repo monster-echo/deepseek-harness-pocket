@@ -108,6 +108,14 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
     async listWorkspaces() {
       return [{ id: 'ws-1', path: '/tmp/proj', title: 'proj' }]
     },
+    async listDir(path: string) {
+      return path === '/'
+        ? [{ name: 'Users', path: '/Users' }, { name: 'tmp', path: '/tmp' }]
+        : [{ name: 'proj', path: `${path}/proj` }]
+    },
+    homePath() {
+      return '/Users/e2e'
+    },
     async createSession(cwd: string, route: { provider: string; model: string }) {
       return `new-session-${cwd}-${route.model}`
     },

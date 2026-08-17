@@ -138,6 +138,18 @@ export class DshClient {
     return (response.result as { workspaces: { id: string; path: string; title: string }[] }).workspaces
   }
 
+  async fsList(path: string): Promise<readonly { name: string; path: string }[]> {
+    const response = await this.rpc('fs', 'list', { path })
+    if (!response.ok) throw new Error(response.error.message)
+    return (response.result as { dirs: { name: string; path: string }[] }).dirs
+  }
+
+  async fsHome(): Promise<string> {
+    const response = await this.rpc('fs', 'home', {})
+    if (!response.ok) throw new Error(response.error.message)
+    return (response.result as { home: string }).home
+  }
+
   async addWorkspace(path: string): Promise<{ id: string; path: string; title: string } | null> {
     const response = await this.rpc('workspaces', 'add', { path })
     if (!response.ok) return null

@@ -177,7 +177,7 @@ export async function startTestGateway(): Promise<RunningGateway> {
     async () => {},
   )
   const server = createServer()
-  const wss = new WebSocketServer({ noServer: true })
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 })
   server.on('upgrade', (req, socket, head) => {
     const path = (req.url ?? '').split('?')[0]
     if (path !== '/gw/worker' && path !== '/gw/phone') {

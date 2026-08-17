@@ -54,7 +54,7 @@ async function main(): Promise<void> {
     })
   })
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 })
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 })
   server.on('upgrade', (req: IncomingMessage, socket, head) => {
     const path = (req.url ?? '').split('?')[0]
     if (path === '/gw/worker' || path === '/gw/phone') {

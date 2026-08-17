@@ -24,9 +24,6 @@
         }
       ],
       "expo-web-browser",
-      "@react-native-firebase/app",
-      "@react-native-firebase/analytics",
-      "@react-native-firebase/crashlytics",
       "expo-apple-authentication",
       "./plugins/withModularHeaders",
       "expo-video"
@@ -34,7 +31,6 @@
     "ios": {
       "usesAppleSignIn": true,
       "bundleIdentifier": "top.rwecho.dshcompanion",
-      "googleServicesFile": "./GoogleService-Info.plist",
       "associatedDomains": [
         "applinks:auth.zhongbei.tech"
       ]
@@ -45,7 +41,6 @@
         "foregroundImage": "./assets/splash-icon.png",
         "backgroundColor": "#A84444"
       },
-      "googleServicesFile": "./google-services.json",
       "intentFilters": [
         {
           "action": "VIEW",

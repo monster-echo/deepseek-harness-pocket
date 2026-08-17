@@ -42,7 +42,18 @@ export const useDshStore = create<DshState>((set, get) => {
     if (gateway !== null) return gateway
     gateway = new GatewayConnection({
       onStatus: (status) => set({ gatewayStatus: status }),
-      onPresence: (workers) => set({ workers }),
+      onPresence: (workers) => {
+        set({ workers })
+        // gateway 重启/断线恢复后：自动恢复此前活跃 Worker 的隧道
+        const state = get()
+        if (
+          state.activeWorkerId !== null
+          && state.workerHandshake !== null
+          && workers.some((w) => w.workerId === state.activeWorkerId && w.online)
+        ) {
+          gateway!.openWorker(state.activeWorkerId)
+        }
+      },
       onPush: (title) => set({ notice: title }),
       onTunnelFrame: (workerId, inner) => {
         if (client !== null && workerId === get().activeWorkerId) client.handleInner(inner)

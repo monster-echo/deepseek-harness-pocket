@@ -108,8 +108,8 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
     async listWorkspaces() {
       return [{ id: 'ws-1', path: '/tmp/proj', title: 'proj' }]
     },
-    async createSession(cwd: string) {
-      return `new-session-${cwd}`
+    async createSession(cwd: string, route: { provider: string; model: string }) {
+      return `new-session-${cwd}-${route.model}`
     },
     async sendUserMessage(id, text) {
       sentMessages.push({ id, text })

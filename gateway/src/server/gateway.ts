@@ -78,6 +78,9 @@ export class Gateway {
     }
     const id = `wk${++this.seq}`
     this.workers.set(id, conn)
+    ws.on('error', (error: Error) => {
+      console.warn(`[gw] worker ws error (${id}): ${(error as Error & { code?: string }).code ?? ''} ${error.message}`)
+    })
     const authTimer = setTimeout(() => {
       if (conn.workerId === '') this.dropWorker(id)
     }, 10_000)
@@ -194,6 +197,9 @@ export class Gateway {
     }
     const id = `ph${++this.seq}`
     this.phones.set(id, conn)
+    ws.on('error', (error: Error) => {
+      console.warn(`[gw] phone ws error (${id}): ${(error as Error & { code?: string }).code ?? ''} ${error.message}`)
+    })
     const authTimer = setTimeout(() => {
       if (!conn.authed) this.dropPhone(id)
     }, 10_000)

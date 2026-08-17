@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AppIcon } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useApp } from '../../state/AppStore';
@@ -103,8 +103,26 @@ function NewSessionSheet({ visible, onClose, onCreated }: Readonly<{ visible: bo
   const [workspaces, setWorkspaces] = useState<readonly { id: string; path: string; title: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [newPath, setNewPath] = useState('');
   const listWorkspaces = useDshStore((s) => s.listWorkspaces);
   const createSession = useDshStore((s) => s.createSession);
+  const addWorkspace = useDshStore((s) => s.addWorkspace);
+
+  const add = (): void => {
+    const path = newPath.trim()
+    if (path.length === 0) return
+    setBusy(true)
+    void addWorkspace(path).then((w) => {
+      setBusy(false)
+      if (w !== null) {
+        setNewPath('')
+        setWorkspaces((prev) => [...prev.filter((x) => x.id !== w.id), w])
+        setError(null)
+      } else {
+        setError('添加失败：目录需是电脑上的绝对路径且存在')
+      }
+    })
+  }
 
   const load = (): void => {
     setBusy(true)
@@ -132,6 +150,20 @@ function NewSessionSheet({ visible, onClose, onCreated }: Readonly<{ visible: bo
           <Text style={[sheetStyles.title, { color: palette.text }]}>选择 Workspace 创建会话</Text>
           {busy && <Text style={[sheetStyles.hint, { color: palette.textSecondary }]}>加载中…</Text>}
           {error !== null && <Text style={[sheetStyles.hint, { color: palette.error }]}>{error}</Text>}
+          <View style={[sheetStyles.addRow, { borderColor: palette.border }]}>
+            <TextInput
+              style={[sheetStyles.addInput, { color: palette.text }]}
+              placeholder="/绝对/路径（电脑上的项目目录）"
+              placeholderTextColor={palette.textSecondary}
+              value={newPath}
+              onChangeText={setNewPath}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Pressable style={[sheetStyles.addBtn, { backgroundColor: palette.brand }]} onPress={add} disabled={busy}>
+              <Text style={sheetStyles.addBtnText}>添加</Text>
+            </Pressable>
+          </View>
           <ScrollView style={sheetStyles.list}>
             {workspaces.map((w) => (
               <Pressable key={w.id} style={[sheetStyles.item, { borderColor: palette.border }]} onPress={() => create(w.path)}>
@@ -162,6 +194,10 @@ const sheetStyles = StyleSheet.create({
   title: { fontSize: 16, marginBottom: spacing.x2 },
   hint: { fontSize: 13, marginBottom: spacing.x2 },
   list: {},
+  addRow: { flexDirection: 'row', borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, marginBottom: spacing.x2 },
+  addInput: { flex: 1, padding: spacing.x2, fontSize: 13, fontFamily: 'Menlo' },
+  addBtn: { paddingHorizontal: spacing.x3, justifyContent: 'center', borderRadius: radii.small, margin: spacing.x1 },
+  addBtnText: { color: '#FFFFFF', fontSize: 13 },
   item: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, marginBottom: spacing.x2 },
   itemTitle: { fontSize: 15 },
   itemPath: { fontSize: 12, fontFamily: 'Menlo' },

@@ -22,6 +22,8 @@ export interface TimelineItem {
   readonly toolName?: string
   readonly toolStatus?: ToolStatus
   readonly turnReason?: string
+  /** 流式期间累计的 reasoning 字符数（折叠提示"思考中…"用） */
+  readonly reasoningLength?: number
 }
 
 export interface SessionView {
@@ -51,6 +53,21 @@ function pickText(data: Record<string, unknown>): string {
   return ''
 }
 
+/** 消息里的 reasoning 文本（App 折叠展示用）。 */
+function pickReasoning(data: Record<string, unknown>): string {
+  const content = data['content']
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((block) => {
+      if (typeof block === 'object' && block !== null) {
+        const b = block as Record<string, unknown>
+        if (b['type'] === 'reasoning' && typeof b['text'] === 'string') return b['text']
+      }
+      return ''
+    })
+    .join('')
+}
+
 export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): SessionView {
   const data = event as unknown as Record<string, unknown>
   const items = [...view.items]
@@ -62,21 +79,34 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       break
     }
     case 'assistant/chunk': {
-      const chunkText = pickText(data)
-      if (chunkText.length === 0) break
-      if (lastAssistantIndex >= 0 && items[lastAssistantIndex]?.streaming) {
-        items[lastAssistantIndex] = {
-          ...items[lastAssistantIndex]!,
-          text: `${items[lastAssistantIndex]!.text ?? ''}${chunkText}`,
+      // dsh StreamChunk 协议：data.chunk = block-start | text-delta | reasoning-delta |
+      // tool-call-delta | block-end | usage；reasoning 不展开正文（折叠提示），text 增量追加
+      const chunk = data['chunk'] as Record<string, unknown> | undefined
+      if (chunk === undefined) break
+      if (chunk['type'] === 'text-delta' && typeof chunk['text'] === 'string' && (chunk['text'] as string).length > 0) {
+        const delta = chunk['text'] as string
+        if (lastAssistantIndex >= 0 && items[lastAssistantIndex]?.streaming) {
+          items[lastAssistantIndex] = { ...items[lastAssistantIndex]!, text: `${items[lastAssistantIndex]!.text ?? ''}${delta}` }
+        } else {
+          items.push({ key: `a${event.seq}`, kind: 'assistant', text: delta, streaming: true })
+          lastAssistantIndex = items.length - 1
         }
-      } else {
-        items.push({ key: `a${event.seq}`, kind: 'assistant', text: chunkText, streaming: true })
-        lastAssistantIndex = items.length - 1
+      } else if (chunk['type'] === 'reasoning-delta') {
+        if (lastAssistantIndex < 0 || items[lastAssistantIndex]?.kind !== 'assistant') {
+          items.push({ key: `a${event.seq}`, kind: 'assistant', text: '', streaming: true })
+          lastAssistantIndex = items.length - 1
+        }
+        const cur = items[lastAssistantIndex]!
+        items[lastAssistantIndex] = { ...cur, reasoningLength: (cur.reasoningLength ?? 0) + (typeof chunk['text'] === 'string' ? (chunk['text'] as string).length : 0) }
+      } else if (chunk['type'] === 'tool-call-delta' && typeof chunk['name'] === 'string') {
+        items.push({ key: `t${event.seq}`, kind: 'tool', toolName: chunk['name'], toolStatus: 'running' })
+        lastAssistantIndex = -1
       }
       break
     }
     case 'assistant/message': {
-      const finalText = pickText(data)
+      const message = data['message'] as Record<string, unknown> | undefined
+      const finalText = message !== undefined ? pickText(message) : pickText(data)
       if (lastAssistantIndex >= 0 && items[lastAssistantIndex]?.streaming) {
         items[lastAssistantIndex] = {
           ...items[lastAssistantIndex]!,

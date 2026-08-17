@@ -65,7 +65,7 @@ function TimelineRow({ item }: Readonly<{ item: TimelineItem }>) {
       <View style={styles.assistantRow}>
         <View style={[styles.assistantBubble, { backgroundColor: palette.surface }]}>
           <Text style={[styles.assistantText, { color: palette.text }]}>
-            {item.text}
+            {(item.text ?? '').length > 0 ? item.text : item.reasoningLength !== undefined && item.reasoningLength > 0 ? `思考中…（已推理 ${item.reasoningLength} 字）` : ''}
             {item.streaming === true ? ' ▍' : ''}
           </Text>
         </View>

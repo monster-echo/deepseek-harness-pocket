@@ -92,8 +92,10 @@ export interface DshAdapter {
   dshVersion(): string | null
   listSessions(): Promise<readonly SessionSummary[]>
   listWorkspaces(): Promise<readonly WorkspaceSummary[]>
+  /** 添加 workspace（按绝对路径）；已存在时幂等返回既有记录 */
+  addWorkspace(path: string): Promise<WorkspaceSummary | null>
   /** 在指定 cwd 创建新会话（M3）；返回 sessionId */
-  createSession(cwd: string): Promise<string>
+  createSession(cwd: string, route: { provider: string; model: string }): Promise<string>
   readSlice(id: string, fromSeq: number): Promise<SessionSlice | null>
   sendUserMessage(id: string, text: string): Promise<void>
   stopTurn(id: string): Promise<void>
@@ -207,13 +209,38 @@ export function createAdapter(ctx: Context): DshAdapter {
       }
     },
 
-    async createSession(cwd) {
+    async addWorkspace(path) {
+      const registry = ctx.get('workspaceRegistry') as
+        | { list(): readonly { id: { toString(): string }; path: string; title: string }[]; create(path: string, title?: string): Promise<{ id: { toString(): string }; path: string; title: string }> }
+        | undefined
+      if (registry === undefined) return null
+      try {
+        const existing = registry.list().find((w) => w.path === path)
+        if (existing !== undefined) {
+          return { id: existing.id.toString(), path: existing.path, title: existing.title }
+        }
+        const created = await registry.create(path)
+        return { id: created.id.toString(), path: created.path, title: created.title }
+      } catch {
+        return null
+      }
+    },
+
+    async createSession(cwd, route) {
       const registry = agents()
       if (registry === undefined) throw new Error('no agent factory (dsh 未运行 agent loop)')
       const handle = await (registry as unknown as {
-        create(options: { sessionId: string; meta: { cwd: string } }): Promise<{ id: { toString(): string } }>
-      }).create({ sessionId: randomUUID(), meta: { cwd } })
-      return handle.id.toString()
+        create(options: {
+          sessionId: string
+          meta: { cwd: string }
+          agentOptions: { provider: string; model: string }
+        }): Promise<{ agent: { id: { toString(): string } } }>
+      }).create({
+        sessionId: randomUUID(),
+        meta: { cwd },
+        agentOptions: { provider: route.provider, model: route.model },
+      })
+      return handle.agent.id.toString()
     },
 
     async readSlice(id, fromSeq) {

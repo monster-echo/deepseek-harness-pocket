@@ -32,7 +32,22 @@ export function profileDir(profile = COMPANION_PROFILE): string {
 function ensureProfileManifest(dir: string): void {
   mkdirSync(dir, { recursive: true })
   const manifestPath = join(dir, 'package.json')
-  if (existsSync(manifestPath)) return
+  if (existsSync(manifestPath)) {
+    // 已初始化的 manifest：确保 bundle 集完整（升级补齐 web-app）
+    try {
+      const existing = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+        dsh?: { profile?: { bundles?: string[] } }
+      }
+      const bundles = existing.dsh?.profile?.bundles ?? []
+      if (!bundles.includes('@deepseek-ai/dsh-web-app')) {
+        bundles.push('@deepseek-ai/dsh-web-app')
+        writeFileSync(manifestPath, `${JSON.stringify(existing, undefined, 2)}\n`)
+      }
+    } catch {
+      // 损坏 manifest：保持原行为，交给 dsh 报错
+    }
+    return
+  }
   writeFileSync(
     manifestPath,
     `${JSON.stringify(

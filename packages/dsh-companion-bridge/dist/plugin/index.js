@@ -25,7 +25,18 @@ var pluginConfig = z.object({
   /** Worker 显示名（默认取 hostname） */
   name: z.string().default(""),
   /** 禁用一切写操作（只读模式开关） */
-  readOnly: z.boolean().default(false)
+  readOnly: z.boolean().default(false),
+  /**
+   * 注册 user-questions provider（默认 false）：dsh 的 provider 槽唯一，
+   * web-app bundle 的 api-gateway 已占用；仅 headless/自定义 profile 开启。
+   * 审批走 approval/request 瀑布流，多应答器共存，不受此限制。
+   */
+  userQuestions: z.boolean().default(false),
+  /** 新会话默认模型路由（sessions.create 可按次覆盖） */
+  model: z.object({
+    provider: z.string().default("deepseek-official"),
+    model: z.string().default("deepseek-v4-flash")
+  }).default({ provider: "deepseek-official", model: "deepseek-v4-flash" })
 });
 
 // src/plugin/adapter-dsh.ts
@@ -94,11 +105,29 @@ function createAdapter(ctx) {
         return [];
       }
     },
-    async createSession(cwd) {
+    async addWorkspace(path) {
+      const registry = ctx.get("workspaceRegistry");
+      if (registry === void 0) return null;
+      try {
+        const existing = registry.list().find((w) => w.path === path);
+        if (existing !== void 0) {
+          return { id: existing.id.toString(), path: existing.path, title: existing.title };
+        }
+        const created = await registry.create(path);
+        return { id: created.id.toString(), path: created.path, title: created.title };
+      } catch {
+        return null;
+      }
+    },
+    async createSession(cwd, route) {
       const registry = agents();
       if (registry === void 0) throw new Error("no agent factory (dsh \u672A\u8FD0\u884C agent loop)");
-      const handle = await registry.create({ sessionId: randomUUID(), meta: { cwd } });
-      return handle.id.toString();
+      const handle = await registry.create({
+        sessionId: randomUUID(),
+        meta: { cwd },
+        agentOptions: { provider: route.provider, model: route.model }
+      });
+      return handle.agent.id.toString();
     },
     async readSlice(id, fromSeq) {
       const live = ctx.sessions.get(id);
@@ -478,6 +507,17 @@ var BridgeHub = class {
         if (denied) return denied;
         return rpcSuccess(req.id, { workspaces: await this.adapter.listWorkspaces() });
       }
+      case "workspaces.add": {
+        const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled");
+        if (denied) return denied;
+        const path = req.args["path"];
+        if (typeof path !== "string" || !path.startsWith("/")) {
+          return fail("bad-request", "absolute path required");
+        }
+        const added = await this.adapter.addWorkspace(path);
+        if (added === null) return fail("bad-request", "\u65E0\u6CD5\u6DFB\u52A0\u8BE5\u76EE\u5F55\uFF08\u4E0D\u5B58\u5728\u6216\u4E0D\u53EF\u8BBF\u95EE\uFF09");
+        return rpcSuccess(req.id, { workspace: added });
+      }
       case "sessions.create": {
         const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
         if (denied) return denied;
@@ -485,7 +525,9 @@ var BridgeHub = class {
         if (typeof cwd !== "string" || cwd.length === 0 || !cwd.startsWith("/")) {
           return fail("bad-request", "absolute cwd required");
         }
-        const sessionId = await this.adapter.createSession(cwd);
+        const provider = typeof req.args["provider"] === "string" ? req.args["provider"] : this.opts.defaultModel.provider;
+        const model = typeof req.args["model"] === "string" ? req.args["model"] : this.opts.defaultModel.model;
+        const sessionId = await this.adapter.createSession(cwd, { provider, model });
         return rpcSuccess(req.id, { sessionId });
       }
       case "messages.send": {
@@ -845,11 +887,14 @@ function apply(ctx, config) {
     capsLevel: config.caps,
     readOnly: config.readOnly,
     pairingToken: state.pairingToken,
-    verifyToken
+    verifyToken,
+    defaultModel: config.model
   });
   if (hub.capabilities.approvals) {
     adapter.registerApprovalAsker((ask) => hub.registerApproval(ask));
-    adapter.registerQuestionAsker((ask) => hub.registerQuestion(ask));
+    if (config.userQuestions) {
+      adapter.registerQuestionAsker((ask) => hub.registerQuestion(ask));
+    }
   }
   if (config.listen.enabled) {
     let disposeServer;

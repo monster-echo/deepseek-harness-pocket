@@ -39,6 +39,8 @@ export interface HubOptions {
   readonly pairingToken: string
   readonly verifyToken: (expected: string, actual: string) => boolean
   readonly now?: () => number
+  /** 新会话默认模型路由 */
+  readonly defaultModel: { provider: string; model: string }
 }
 
 export function capsForLevel(level: 'm1' | 'm2' | 'm3'): BridgeCapabilities {
@@ -208,6 +210,18 @@ export class BridgeHub {
         return rpcSuccess(req.id, { workspaces: await this.adapter.listWorkspaces() })
       }
 
+      case 'workspaces.add': {
+        const denied = denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled')
+        if (denied) return denied
+        const path = req.args['path']
+        if (typeof path !== 'string' || !path.startsWith('/')) {
+          return fail('bad-request', 'absolute path required')
+        }
+        const added = await this.adapter.addWorkspace(path)
+        if (added === null) return fail('bad-request', '无法添加该目录（不存在或不可访问）')
+        return rpcSuccess(req.id, { workspace: added })
+      }
+
       case 'sessions.create': {
         const denied =
           denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled') ??
@@ -217,7 +231,9 @@ export class BridgeHub {
         if (typeof cwd !== 'string' || cwd.length === 0 || !cwd.startsWith('/')) {
           return fail('bad-request', 'absolute cwd required')
         }
-        const sessionId = await this.adapter.createSession(cwd)
+        const provider = typeof req.args['provider'] === 'string' ? req.args['provider'] : this.opts.defaultModel.provider
+        const model = typeof req.args['model'] === 'string' ? req.args['model'] : this.opts.defaultModel.model
+        const sessionId = await this.adapter.createSession(cwd, { provider, model })
         return rpcSuccess(req.id, { sessionId })
       }
 

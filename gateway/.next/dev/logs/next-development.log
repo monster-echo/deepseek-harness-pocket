@@ -1,4 +1,1 @@
-{"timestamp":"00:00:01.729","source":"Server","level":"LOG","message":"dsh-companion gateway on http://127.0.0.1:3781 (ws: /gw/worker, /gw/phone)"}
-{"timestamp":"00:02:30.309","source":"Server","level":"ERROR","message":"RangeError: Max payload size exceeded"}
-{"timestamp":"00:02:30.310","source":"Server","level":"ERROR","message":"⨯ \"uncaughtException:\" RangeError: Max payload size exceeded"}
-{"timestamp":"00:02:30.311","source":"Server","level":"ERROR","message":"⨯ \"uncaughtException: \" RangeError: Max payload size exceeded"}
+{"timestamp":"00:00:02.050","source":"Server","level":"LOG","message":"dsh-companion gateway on http://127.0.0.1:3781 (ws: /gw/worker, /gw/phone)"}

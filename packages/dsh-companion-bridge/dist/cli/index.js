@@ -120,7 +120,19 @@ function profileDir(profile = COMPANION_PROFILE) {
 function ensureProfileManifest(dir) {
   mkdirSync2(dir, { recursive: true });
   const manifestPath = join2(dir, "package.json");
-  if (existsSync3(manifestPath)) return;
+  if (existsSync3(manifestPath)) {
+    try {
+      const existing = JSON.parse(readFileSync2(manifestPath, "utf8"));
+      const bundles = existing.dsh?.profile?.bundles ?? [];
+      if (!bundles.includes("@deepseek-ai/dsh-web-app")) {
+        bundles.push("@deepseek-ai/dsh-web-app");
+        writeFileSync2(manifestPath, `${JSON.stringify(existing, void 0, 2)}
+`);
+      }
+    } catch {
+    }
+    return;
+  }
   writeFileSync2(
     manifestPath,
     `${JSON.stringify(

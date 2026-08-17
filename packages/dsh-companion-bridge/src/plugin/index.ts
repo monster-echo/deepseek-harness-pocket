@@ -39,12 +39,16 @@ export function apply(ctx: Context, config: PluginConfig): void {
     readOnly: config.readOnly,
     pairingToken: state.pairingToken,
     verifyToken,
+    defaultModel: config.model,
   })
 
   // M2：审批与用户问题应答（无对应服务时 register 返回 null，自动跳过）
   if (hub.capabilities.approvals) {
     adapter.registerApprovalAsker((ask) => hub.registerApproval(ask))
-    adapter.registerQuestionAsker((ask) => hub.registerQuestion(ask))
+    // user-questions provider 槽唯一：默认关闭（web-app 下 apiproxy 已占用）
+    if (config.userQuestions) {
+      adapter.registerQuestionAsker((ask) => hub.registerQuestion(ask))
+    }
   }
 
   if (config.listen.enabled) {

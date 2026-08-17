@@ -37,6 +37,17 @@ export const pluginConfig = z.object({
   name: z.string().default(''),
   /** 禁用一切写操作（只读模式开关） */
   readOnly: z.boolean().default(false),
+  /**
+   * 注册 user-questions provider（默认 false）：dsh 的 provider 槽唯一，
+   * web-app bundle 的 api-gateway 已占用；仅 headless/自定义 profile 开启。
+   * 审批走 approval/request 瀑布流，多应答器共存，不受此限制。
+   */
+  userQuestions: z.boolean().default(false),
+  /** 新会话默认模型路由（sessions.create 可按次覆盖） */
+  model: z.object({
+    provider: z.string().default('deepseek-official'),
+    model: z.string().default('deepseek-v4-flash'),
+  }).default({ provider: 'deepseek-official', model: 'deepseek-v4-flash' }),
 })
 
 /** 与 schema 对应的手写类型（schemastery 无 infer 辅助）。 */
@@ -47,4 +58,6 @@ export interface PluginConfig {
   stateFile: string
   name: string
   readOnly: boolean
+  userQuestions: boolean
+  model: { provider: string; model: string }
 }

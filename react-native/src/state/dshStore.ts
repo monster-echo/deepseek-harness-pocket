@@ -25,6 +25,7 @@ interface DshState {
   openWorker(workerId: string): void
   refreshSessions(): Promise<void>
   listWorkspaces(): Promise<readonly { id: string; path: string; title: string }[]>
+  addWorkspace(path: string): Promise<{ id: string; path: string; title: string } | null>
   createSession(cwd: string): Promise<string | null>
   openSession(sessionId: string): Promise<void>
   sendMessage(text: string): Promise<void>
@@ -118,6 +119,16 @@ export const useDshStore = create<DshState>((set, get) => {
       } catch (error) {
         set({ notice: error instanceof Error ? error.message : String(error) })
         return []
+      }
+    },
+
+    async addWorkspace(path) {
+      if (client === null) return null
+      try {
+        return await client.addWorkspace(path)
+      } catch (error) {
+        set({ notice: error instanceof Error ? error.message : String(error) })
+        return null
       }
     },
 

@@ -1,0 +1,47 @@
+{
+  "name": "@dsh-companion/bridge",
+  "version": "0.1.0",
+  "description": "dsh-companion 电脑端：DeepSeek Harness 桥接插件（mobile/v1 协议服务端）+ dshc Worker CLI",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/plugin/index.js",
+  "types": "./dist/plugin/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/plugin/index.d.ts",
+      "default": "./dist/plugin/index.js"
+    },
+    "./cli": "./dist/cli/index.js"
+  },
+  "bin": {
+    "dshc": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@dsh-companion/bridge-protocol": "workspace:*",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.21.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0",
+    "@deepseek-ai/dsh-llm": ">=0.0.1-rc.1",
+    "@deepseek-ai/schemastery": ">=3.18.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-llm": "0.0.1-rc.1",
+    "@deepseek-ai/schemastery": "3.18.1",
+    "@types/node": "^22",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

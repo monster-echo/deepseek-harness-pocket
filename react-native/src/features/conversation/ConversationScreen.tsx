@@ -1,33 +1,40 @@
 /**
- * 会话时间线：消息/工具卡片/审批卡片 + 输入区（主体界面，最大化）。
+ * 会话时间线（展示模型对齐 dsh Web GUI）：
+ *   - 用户右对齐气泡；assistant blocks 混排（text 正文 + Think 折叠行）
+ *   - 工具行：状态点 + 变体名 · 单行摘要，点按展开 IN/OUT
+ *   - 回合尾：completed 细线 / error 红 / max-tokens 琥珀 / stopped 标记
+ *   - 审批与提问接管 composer 上方（对齐 dsh ApprovalPanel 行为：仅允许一次/拒绝）
  */
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { AppIcon } from '../../design-system/AppIcon';
+import { AppIcon, IconName } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
-import type { TimelineItem } from './reducer';
+import type { AssistantBlock, TimelineItem, ToolStatus } from './reducer';
 
 export function ConversationScreen() {
   const { palette } = usePreferences();
   const view = useDshStore((s) => s.sessionView);
-  const serverRequests = useDshStore((s) => s.serverRequests);
   const notice = useDshStore((s) => s.notice);
+  const activeSessionId = useDshStore((s) => s.activeSessionId);
+  const serverRequests = useDshStore((s) => s.serverRequests);
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true })
   }, [view.items.length])
 
-  if (useDshStore((s) => s.activeSessionId) === null) {
+  if (activeSessionId === null) {
     return (
       <View style={[styles.empty, { backgroundColor: palette.background }]}>
         <Text style={[styles.emptyTitle, { color: palette.textSecondary }]}>从侧边栏选择一个会话</Text>
       </View>
     )
   }
+
+  const pending = serverRequests[0]
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
@@ -36,63 +43,170 @@ export function ConversationScreen() {
           <Text style={[styles.noticeText, { color: palette.warning }]}>{notice}</Text>
         </View>
       )}
-      <ScrollView ref={scrollRef} contentContainerStyle={styles.timeline}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.timeline}
+        contentContainerStyle={{ padding: spacing.x3, gap: spacing.x2, paddingBottom: spacing.x4 }}
+      >
         {view.items.map((item) => (
           <TimelineRow key={item.key} item={item} />
         ))}
-        {serverRequests.map((request) => (
-          <ServerRequestCard key={request.body.requestId} request={request} />
-        ))}
       </ScrollView>
-      <Composer />
+      {/* 审批/提问接管输入区上方（dsh ApprovalPanel 模式） */}
+      {pending !== undefined ? (
+        <ServerRequestCard request={pending} />
+      ) : (
+        <Composer />
+      )}
     </View>
   )
 }
 
+// ---------- 时间线行 ----------
+
 function TimelineRow({ item }: Readonly<{ item: TimelineItem }>) {
+  if (item.kind === 'user') return <UserRow item={item} />
+  if (item.kind === 'assistant') return <AssistantRow item={item} />
+  if (item.kind === 'tool') return <ToolRow item={item} />
+  return <TurnEndRow item={item} />
+}
+
+function UserRow({ item }: Readonly<{ item: TimelineItem }>) {
   const { palette } = usePreferences()
-  if (item.kind === 'user') {
-    return (
-      <View style={styles.userRow}>
-        <View style={[styles.userBubble, { backgroundColor: palette.brand }]}>
-          <Text style={[styles.userText, { color: '#FFFFFF' }]}>{item.text}</Text>
-        </View>
-      </View>
-    )
-  }
-  if (item.kind === 'assistant') {
-    return (
-      <View style={styles.assistantRow}>
-        <View style={[styles.assistantBubble, { backgroundColor: palette.surface }]}>
-          <Text style={[styles.assistantText, { color: palette.text }]}>
-            {(item.text ?? '').length > 0 ? item.text : item.reasoningLength !== undefined && item.reasoningLength > 0 ? `思考中…（已推理 ${item.reasoningLength} 字）` : ''}
-            {item.streaming === true ? ' ▍' : ''}
-          </Text>
-        </View>
-      </View>
-    )
-  }
-  if (item.kind === 'tool') {
-    const statusColor =
-      item.toolStatus === 'error' ? palette.error : item.toolStatus === 'ok' ? palette.success : palette.warning
-    return (
-      <View style={[styles.toolCard, { borderColor: palette.border, backgroundColor: palette.surfaceMuted }]}>
-        <View style={styles.toolHead}>
-          <AppIcon name="check" color={statusColor} size={14} />
-          <Text style={[styles.toolName, { color: palette.text }]} numberOfLines={1}>
-            {item.toolName}
-          </Text>
-          <Text style={[styles.toolStatus, { color: statusColor }]}>
-            {item.toolStatus === 'running' ? '执行中' : item.toolStatus === 'error' ? '失败' : '完成'}
-          </Text>
-        </View>
-      </View>
-    )
-  }
   return (
-    <Text style={[styles.turnEnd, { color: palette.textSecondary }]}>— 回合结束{item.turnReason ? `（${item.turnReason}）` : ''} —</Text>
+    <View style={styles.userRow}>
+      <View style={[styles.userBubble, { backgroundColor: palette.brand }]}>
+        <Text style={[styles.userText, { color: '#FFFFFF' }]}>{item.text}</Text>
+      </View>
+    </View>
   )
 }
+
+function AssistantRow({ item }: Readonly<{ item: TimelineItem }>) {
+  const { palette } = usePreferences()
+  const blocks = item.blocks ?? []
+  return (
+    <View style={[styles.assistantBubble, { backgroundColor: palette.surface }]}>
+      {blocks.map((block, i) => (
+        <AssistantBlockView key={i} block={block} streaming={item.streaming === true} />
+      ))}
+      {blocks.length === 0 && item.streaming === true && (
+        <Text style={[styles.thinkSummary, { color: palette.textSecondary }]}>思考中…</Text>
+      )}
+      {item.stopped === true && (
+        <Text style={[styles.stoppedMark, { color: palette.warning }]}>已停止</Text>
+      )}
+      {item.usage !== undefined && (
+        <Text style={[styles.usageLine, { color: palette.textSecondary }]}>
+          {item.usage.input} in · {item.usage.output} out
+        </Text>
+      )}
+    </View>
+  )
+}
+
+/** text → 正文；reasoning → Think 折叠行（默认折叠，摘要单行）。 */
+function AssistantBlockView({ block, streaming }: Readonly<{ block: AssistantBlock; streaming: boolean }>) {
+  const { palette } = usePreferences()
+  const [open, setOpen] = useState(false)
+  if (block.type === 'text') {
+    return (
+      <Text style={[styles.assistantText, { color: palette.text }]}>
+        {block.text}
+        {streaming ? ' ▍' : ''}
+      </Text>
+    )
+  }
+  const lines = block.text.split('\n').filter((l) => l.trim().length > 0)
+  const summary = streaming ? lines[lines.length - 1] ?? '' : lines[0] ?? ''
+  return (
+    <Pressable style={[styles.thinkRow, { borderColor: palette.border }]} onPress={() => setOpen(!open)}>
+      <Text style={[styles.thinkLabel, { color: palette.textSecondary }]}>
+        思考 {open ? '▾' : '▸'} · {lines.length > 0 ? '' : '…'}
+      </Text>
+      <Text style={[styles.thinkSummary, { color: palette.textSecondary }]} numberOfLines={open ? undefined : 1}>
+        {summary.length > 0 ? summary : `${block.text.length} 字`}
+      </Text>
+      {open && (
+        <Text style={[styles.thinkBody, { color: palette.textSecondary }]}>{block.text}</Text>
+      )}
+    </Pressable>
+  )
+}
+
+const TOOL_STATUS_COLOR: Record<ToolStatus, 'success' | 'error' | 'warning' | 'textSecondary'> = {
+  ok: 'success', error: 'error', running: 'warning', stopped: 'warning',
+}
+const TOOL_STATUS_LABEL: Record<ToolStatus, string> = {
+  ok: '完成', error: '失败', running: '执行中', stopped: '已停止',
+}
+const TOOL_ICON: Record<string, IconName> = {
+  Bash: 'globe', Read: 'check', Write: 'plus', Edit: 'palette', Search: 'globe', Code: 'palette', Tool: 'settings',
+}
+
+function ToolRow({ item }: Readonly<{ item: TimelineItem }>) {
+  const { palette } = usePreferences()
+  const [open, setOpen] = useState(false)
+  const status = item.toolStatus ?? 'running'
+  const colorKey = TOOL_STATUS_COLOR[status]
+  const color = palette[colorKey]
+  return (
+    <View style={[styles.toolCard, { borderColor: palette.border, backgroundColor: palette.surfaceMuted }]}>
+      <Pressable style={styles.toolHead} onPress={() => setOpen(!open)}>
+        <AppIcon name={TOOL_ICON[item.variant ?? 'Tool'] ?? 'settings'} color={color} size={14} />
+        <Text style={[styles.toolVariant, { color: palette.text }]}>{item.variant}</Text>
+        <Text style={[styles.toolSummary, { color: status === 'error' ? palette.error : palette.textSecondary }]} numberOfLines={1}>
+          {status === 'error' && (item.errorLine ?? '').length > 0 ? item.errorLine : item.summary}
+        </Text>
+        <Text style={[styles.toolStatus, { color }]}>{open ? '▾' : '▸'} {TOOL_STATUS_LABEL[status]}</Text>
+      </Pressable>
+      {open && (
+        <View style={styles.toolBody}>
+          {item.argsPretty !== undefined && item.argsPretty.length > 0 && (
+            <>
+              <Text style={[styles.toolBodyLabel, { color: palette.textSecondary }]}>输入</Text>
+              <Text style={[styles.mono, { color: palette.text }]}>{item.argsPretty}</Text>
+            </>
+          )}
+          {item.outputPreview !== undefined && item.outputPreview.length > 0 && (
+            <>
+              <Text style={[styles.toolBodyLabel, { color: palette.textSecondary }]}>输出</Text>
+              <Text style={[styles.mono, { color: palette.text }]}>{item.outputPreview}</Text>
+            </>
+          )}
+        </View>
+      )}
+    </View>
+  )
+}
+
+function TurnEndRow({ item }: Readonly<{ item: TimelineItem }>) {
+  const { palette } = usePreferences()
+  if (item.turnReason === 'completed') {
+    return <Text style={[styles.turnEnd, { color: palette.textSecondary }]}>— 回合完成 —</Text>
+  }
+  if (item.turnReason === 'error') {
+    return (
+      <View style={[styles.turnEndCard, { borderColor: palette.error }]}>
+        <View style={[styles.stateDot, { backgroundColor: palette.error }]} />
+        <Text style={[styles.turnEndText, { color: palette.error }]} numberOfLines={2}>
+          回合错误：{item.reasonMessage}
+        </Text>
+      </View>
+    )
+  }
+  if (item.turnReason === 'max-tokens') {
+    return (
+      <View style={[styles.turnEndCard, { borderColor: palette.warning }]}>
+        <View style={[styles.stateDot, { backgroundColor: palette.warning }]} />
+        <Text style={[styles.turnEndText, { color: palette.warning }]}>达到输出上限（max-tokens）</Text>
+      </View>
+    )
+  }
+  return <Text style={[styles.turnEnd, { color: palette.textSecondary }]}>— 已停止 —</Text>
+}
+
+// ---------- 审批 / 提问（接管输入区，对齐 dsh ApprovalPanel） ----------
 
 function ServerRequestCard({ request }: Readonly<{ request: import('@dsh-companion/bridge-protocol').ServerRequest }>) {
   const { palette } = usePreferences()
@@ -102,24 +216,40 @@ function ServerRequestCard({ request }: Readonly<{ request: import('@dsh-compani
 
   if (request.kind === 'permission') {
     return (
-      <View style={[styles.askCard, { borderColor: palette.warning, backgroundColor: palette.surface }]}>
-        <Text style={[styles.askTitle, { color: palette.warning }]}>需要审批</Text>
-        <Text style={[styles.askBody, { color: palette.text }]}>{request.body.summary}</Text>
+      <View style={[styles.composerCard, { borderTopColor: palette.warning, backgroundColor: palette.surface }]}>
+        <Text style={[styles.askTitle, { color: palette.warning }]}>等待审批</Text>
+        <Text style={[styles.askBody, { color: palette.text }]} numberOfLines={3}>{request.body.summary}</Text>
         <View style={styles.askActions}>
-          <AskButton label="拒绝" tone="deny" onPress={() => void respondPermission(request.body.requestId, 'deny')} />
-          <AskButton label="允许" tone="allow" onPress={() => void respondPermission(request.body.requestId, 'allow')} />
+          <Pressable
+            style={[styles.askButton, { borderColor: palette.textSecondary, borderWidth: 1 }]}
+            onPress={() => void respondPermission(request.body.requestId, 'deny')}
+          >
+            <Text style={[styles.askButtonText, { color: palette.textSecondary }]}>拒绝</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.askButton, { backgroundColor: palette.brand }]}
+            onPress={() => void respondPermission(request.body.requestId, 'allow')}
+          >
+            <Text style={[styles.askButtonText, { color: '#FFFFFF' }]}>允许一次</Text>
+          </Pressable>
         </View>
       </View>
     )
   }
   return (
-    <View style={[styles.askCard, { borderColor: palette.info, backgroundColor: palette.surface }]}>
+    <View style={[styles.composerCard, { borderTopColor: palette.info, backgroundColor: palette.surface }]}>
       <Text style={[styles.askTitle, { color: palette.info }]}>Agent 提问</Text>
       <Text style={[styles.askBody, { color: palette.text }]}>{request.body.question}</Text>
       {request.body.options !== undefined && (
         <View style={styles.askActions}>
           {request.body.options.map((option) => (
-            <AskButton key={option} label={option} tone="allow" onPress={() => void respondQuestion(request.body.requestId, option)} />
+            <Pressable
+              key={option}
+              style={[styles.askButton, { backgroundColor: palette.brand }]}
+              onPress={() => void respondQuestion(request.body.requestId, option)}
+            >
+              <Text style={[styles.askButtonText, { color: '#FFFFFF' }]}>{option}</Text>
+            </Pressable>
           ))}
         </View>
       )}
@@ -136,17 +266,6 @@ function ServerRequestCard({ request }: Readonly<{ request: import('@dsh-compani
         </Pressable>
       </View>
     </View>
-  )
-}
-
-function AskButton({ label, tone, onPress }: Readonly<{ label: string; tone: 'allow' | 'deny'; onPress: () => void }>) {
-  const { palette } = usePreferences()
-  const bg = tone === 'allow' ? palette.brand : palette.surfaceMuted
-  const fg = tone === 'allow' ? '#FFFFFF' : palette.textSecondary
-  return (
-    <Pressable style={[styles.askButton, { backgroundColor: bg }]} onPress={onPress}>
-      <Text style={[styles.askButtonText, { color: fg }]}>{label}</Text>
-    </Pressable>
   )
 }
 
@@ -168,6 +287,7 @@ function Composer() {
     <View style={[styles.composer, { borderTopColor: palette.border, backgroundColor: palette.surface }]}>
       {running && (
         <Pressable style={[styles.stopButton, { borderColor: palette.error }]} onPress={() => void stopTurn()}>
+          <View style={[styles.stateDot, { backgroundColor: palette.error }]} />
           <Text style={[styles.stopText, { color: palette.error }]}>停止</Text>
         </Pressable>
       )}
@@ -196,19 +316,31 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 15 },
   notice: { padding: spacing.x2, margin: spacing.x2, borderRadius: radii.control },
   noticeText: { fontSize: 13 },
-  timeline: { padding: spacing.x3, gap: spacing.x2, paddingBottom: spacing.x4 },
+  timeline: { flex: 1 },
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },
   userBubble: { maxWidth: '80%', borderRadius: radii.card, padding: spacing.x3, borderBottomRightRadius: radii.small },
   userText: { fontSize: 15, lineHeight: 22 },
-  assistantRow: { flexDirection: 'row', justifyContent: 'flex-start' },
-  assistantBubble: { maxWidth: '85%', borderRadius: radii.card, padding: spacing.x3, borderBottomLeftRadius: radii.small },
+  assistantBubble: { alignSelf: 'flex-start', maxWidth: '90%', borderRadius: radii.card, padding: spacing.x3, borderBottomLeftRadius: radii.small, gap: spacing.x2 },
   assistantText: { fontSize: 15, lineHeight: 22 },
-  toolCard: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'flex-start' },
-  toolHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2 },
-  toolName: { fontSize: 13, fontFamily: 'Menlo' },
+  thinkRow: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, gap: spacing.x1 },
+  thinkLabel: { fontSize: 12 },
+  thinkSummary: { fontSize: 13 },
+  thinkBody: { fontSize: 12, lineHeight: 18, paddingTop: spacing.x1 },
+  stoppedMark: { fontSize: 12, alignSelf: 'flex-end' },
+  usageLine: { fontSize: 11, alignSelf: 'flex-end' },
+  toolCard: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, alignSelf: 'stretch' },
+  toolHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, padding: spacing.x2 },
+  toolVariant: { fontSize: 13 },
+  toolSummary: { flex: 1, fontSize: 12, fontFamily: 'Menlo' },
   toolStatus: { fontSize: 12 },
+  toolBody: { padding: spacing.x2, borderTopWidth: StyleSheet.hairlineWidth, gap: spacing.x1 },
+  toolBodyLabel: { fontSize: 11 },
+  mono: { fontSize: 11, fontFamily: 'Menlo', lineHeight: 16 },
   turnEnd: { fontSize: 12, textAlign: 'center', paddingVertical: spacing.x1 },
-  askCard: { borderWidth: 1, borderRadius: radii.card, padding: spacing.x3, gap: spacing.x2 },
+  turnEndCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: 1, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'center' },
+  turnEndText: { fontSize: 13, flexShrink: 1 },
+  stateDot: { width: 8, height: 8, borderRadius: 4 },
+  composerCard: { borderTopWidth: 2, padding: spacing.x3, gap: spacing.x2 },
   askTitle: { fontSize: 13 },
   askBody: { fontSize: 14, lineHeight: 20 },
   askActions: { flexDirection: 'row', gap: spacing.x2, flexWrap: 'wrap' },
@@ -219,7 +351,7 @@ const styles = StyleSheet.create({
   answerSend: { padding: spacing.x2, borderRadius: radii.small },
   answerSendText: { color: '#FFFFFF', fontSize: 13 },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.x2, padding: spacing.x2, borderTopWidth: StyleSheet.hairlineWidth },
-  stopButton: { borderWidth: 1, borderRadius: radii.round, paddingHorizontal: spacing.x3, paddingVertical: spacing.x2 },
+  stopButton: { flexDirection: 'row', alignItems: 'center', gap: spacing.x1, borderWidth: 1, borderRadius: radii.round, paddingHorizontal: spacing.x3, paddingVertical: spacing.x2 },
   stopText: { fontSize: 13 },
   input: { flex: 1, minHeight: 40, maxHeight: 120, padding: spacing.x2, fontSize: 15 },
   send: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },

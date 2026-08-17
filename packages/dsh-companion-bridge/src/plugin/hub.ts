@@ -357,13 +357,56 @@ export class BridgeHub {
   }
 }
 
+/** 快照瘦身：UI 无关/可由定稿事件重建的事件不回放（长会话可达数十 MB）。 */
+const SNAPSHOT_SKIP_TYPES = new Set([
+  'assistant/chunk', // 回放由 assistant/message 定稿块重建；流式增量只在 live 推送
+  'request/context', 'request/header', // 模型请求上下文快照，UI 不渲染
+  'agent/inbox/spliced', // 收件箱投递记录
+  'permission/preset', 'sandbox/mode', 'approval/policy', // 会话策略初始化
+])
+const SNAPSHOT_TEXT_LIMIT = 4000
+
+function truncateTexts(event: DshSessionEvent): DshSessionEvent {
+  if (event.type !== 'tool/result') return event
+  try {
+    const message = (event as { data?: { message?: { content?: unknown[] } } }).data?.message
+    if (message === undefined) return event
+    const blocks = message.content
+    if (!Array.isArray(blocks)) return event
+    let mutated = false
+    const cloned = blocks.map((block) => {
+      if (typeof block !== 'object' || block === null) return block
+      const b = block as Record<string, unknown>
+      const inner = b['content']
+      if (!Array.isArray(inner)) return block
+      const innerCloned = inner.map((leaf) => {
+        if (typeof leaf !== 'object' || leaf === null) return leaf
+        const l = leaf as Record<string, unknown>
+        if (typeof l['text'] === 'string' && (l['text'] as string).length > SNAPSHOT_TEXT_LIMIT) {
+          mutated = true
+          return { ...l, text: `${(l['text'] as string).slice(0, SNAPSHOT_TEXT_LIMIT)}\n…（快照截断，完整内容见电脑）` }
+        }
+        return leaf
+      })
+      return { ...b, content: innerCloned }
+    })
+    if (!mutated) return event
+    return { ...event, data: { ...(event as unknown as { data: Record<string, unknown> }).data, message: { ...message, content: cloned } } } as DshSessionEvent
+  } catch {
+    return event
+  }
+}
+
 function snapshotFrame(slice: { id: string; fromSeq: number; toSeq: number; events: readonly DshSessionEvent[] }): {
   kind: 'snapshot'
   snapshot: { sessionId: string; fromSeq: number; toSeq: number; events: readonly DshSessionEvent[] }
 } {
+  const events = slice.events
+    .filter((e) => !SNAPSHOT_SKIP_TYPES.has(e.type))
+    .map(truncateTexts)
   return {
     kind: 'snapshot',
-    snapshot: { sessionId: slice.id, fromSeq: slice.fromSeq, toSeq: slice.toSeq, events: slice.events },
+    snapshot: { sessionId: slice.id, fromSeq: slice.fromSeq, toSeq: slice.toSeq, events },
   }
 }
 

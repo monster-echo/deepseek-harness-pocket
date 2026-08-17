@@ -654,10 +654,56 @@ var BridgeHub = class {
     conn.sender.send(JSON.stringify(frame));
   }
 };
+var SNAPSHOT_SKIP_TYPES = /* @__PURE__ */ new Set([
+  "assistant/chunk",
+  // 回放由 assistant/message 定稿块重建；流式增量只在 live 推送
+  "request/context",
+  "request/header",
+  // 模型请求上下文快照，UI 不渲染
+  "agent/inbox/spliced",
+  // 收件箱投递记录
+  "permission/preset",
+  "sandbox/mode",
+  "approval/policy"
+  // 会话策略初始化
+]);
+var SNAPSHOT_TEXT_LIMIT = 4e3;
+function truncateTexts(event) {
+  if (event.type !== "tool/result") return event;
+  try {
+    const message = event.data?.message;
+    if (message === void 0) return event;
+    const blocks = message.content;
+    if (!Array.isArray(blocks)) return event;
+    let mutated = false;
+    const cloned = blocks.map((block) => {
+      if (typeof block !== "object" || block === null) return block;
+      const b = block;
+      const inner = b["content"];
+      if (!Array.isArray(inner)) return block;
+      const innerCloned = inner.map((leaf) => {
+        if (typeof leaf !== "object" || leaf === null) return leaf;
+        const l = leaf;
+        if (typeof l["text"] === "string" && l["text"].length > SNAPSHOT_TEXT_LIMIT) {
+          mutated = true;
+          return { ...l, text: `${l["text"].slice(0, SNAPSHOT_TEXT_LIMIT)}
+\u2026\uFF08\u5FEB\u7167\u622A\u65AD\uFF0C\u5B8C\u6574\u5185\u5BB9\u89C1\u7535\u8111\uFF09` };
+        }
+        return leaf;
+      });
+      return { ...b, content: innerCloned };
+    });
+    if (!mutated) return event;
+    return { ...event, data: { ...event.data, message: { ...message, content: cloned } } };
+  } catch {
+    return event;
+  }
+}
 function snapshotFrame(slice) {
+  const events = slice.events.filter((e) => !SNAPSHOT_SKIP_TYPES.has(e.type)).map(truncateTexts);
   return {
     kind: "snapshot",
-    snapshot: { sessionId: slice.id, fromSeq: slice.fromSeq, toSeq: slice.toSeq, events: slice.events }
+    snapshot: { sessionId: slice.id, fromSeq: slice.fromSeq, toSeq: slice.toSeq, events }
   };
 }
 function permissionRequestOf(ask) {

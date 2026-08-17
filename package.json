@@ -1,0 +1,15 @@
+{
+  "name": "dsh-companion",
+  "private": true,
+  "version": "0.1.0",
+  "description": "手机上的 DeepSeek Harness 客户端：多 Worker、Gateway 中转、终北认证",
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "app": "pnpm --dir react-native start"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

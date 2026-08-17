@@ -69,7 +69,8 @@ function pickReasoning(data: Record<string, unknown>): string {
 }
 
 export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): SessionView {
-  const data = event as unknown as Record<string, unknown>
+  // dsh SessionEvent 的负载全部在 event.data 下（content/chunk/message/reason…）
+  const data = ((event as unknown as { data?: Record<string, unknown> }).data ?? {}) as Record<string, unknown>
   const items = [...view.items]
   let lastAssistantIndex = view.lastAssistantIndex
 
@@ -120,7 +121,8 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       break
     }
     case 'tool/call': {
-      const name = data['name'] ?? data['tool'] ?? data['toolName']
+      const call = data['call'] as Record<string, unknown> | undefined
+      const name = data['name'] ?? data['toolName'] ?? data['tool'] ?? call?.['name']
       items.push({
         key: `t${event.seq}`,
         kind: 'tool',

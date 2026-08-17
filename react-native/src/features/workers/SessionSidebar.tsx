@@ -3,7 +3,7 @@
  * 手机默认收起（左上角按钮/遮罩打开）；内容由 HomeShellScreen 控制。
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AppIcon } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
@@ -161,7 +161,20 @@ function NewSessionSheet({ visible, onClose, onCreated }: Readonly<{ visible: bo
           <DirectoryPickerSheet
             visible={picker}
             onClose={() => setPicker(false)}
-            onPicked={(path) => { setPicker(false); setNewPath(path) }}
+            onPicked={(path) => {
+              setPicker(false)
+              setBusy(true)
+              void addWorkspace(path).then((w) => {
+                setBusy(false)
+                if (w !== null) {
+                  setNewPath('')
+                  setWorkspaces((prev) => [...prev.filter((x) => x.id !== w.id), w])
+                  setError(null)
+                } else {
+                  setError('添加失败：无法在电脑上创建该 workspace（目录不存在或无权限）')
+                }
+              })
+            }}
           />
           <View style={[sheetStyles.addRow, { borderColor: palette.border }]}>
             <TextInput

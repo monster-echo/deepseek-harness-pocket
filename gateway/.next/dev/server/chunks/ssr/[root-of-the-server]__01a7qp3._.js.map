@@ -1,6 +1,0 @@
-{
-  "version": 3,
-  "sources": [],
-  "sections": [
-    {"offset": {"line": 10, "column": 0}, "map": {"version":3,"sources":["file:///Volumes/MacMiniDisk/workspace/dsh-companion/gateway/src/app/page.tsx"],"sourcesContent":["export default function Home() {\n  return (\n    <main style={{ padding: 48, color: '#111' }}>\n      <h1>DSH Companion Gateway</h1>\n      <p>手机上的 DeepSeek Harness 客户端 — 中转服务运行中。</p>\n      <ul style={{ lineHeight: 1.8 }}>\n        <li>Worker uplink: <code>wss://…/gw/worker</code></li>\n        <li>手机接入: <code>wss://…/gw/phone</code></li>\n        <li>健康检查: <code>/api/v1/health</code></li>\n      </ul>\n    </main>\n  )\n}\n"],"names":["Home","style","padding","color","lineHeight"],"mappings":";;;;;;AAAe,SAASA;IACtB,qBACE,oaAAC;QAAKC,OAAO;YAAEC,SAAS;YAAIC,OAAO;QAAO;;0BACxC,oaAAC;0BAAG;;;;;;0BACJ,oaAAC;0BAAE;;;;;;0BACH,oaAAC;gBAAGF,OAAO;oBAAEG,YAAY;gBAAI;;kCAC3B,oaAAC;;4BAAG;0CAAe,oaAAC;0CAAK;;;;;;;;;;;;kCACzB,oaAAC;;4BAAG;0CAAM,oaAAC;0CAAK;;;;;;;;;;;;kCAChB,oaAAC;;4BAAG;0CAAM,oaAAC;0CAAK;;;;;;;;;;;;;;;;;;;;;;;;AAIxB"}}]
-}

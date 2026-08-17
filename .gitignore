@@ -7,3 +7,10 @@ node_modules/
 .vscode/
 **/local.properties
 **/signing-config.json
+# gateway 构建产物
+gateway/.next/
+gateway/dist-server/
+# app 原生构建产物
+react-native/ios/
+react-native/android/
+react-native/.env

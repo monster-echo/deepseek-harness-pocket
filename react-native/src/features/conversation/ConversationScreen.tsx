@@ -8,6 +8,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import Markdown from 'react-native-markdown-display';
 import { AppIcon, IconName } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useDshStore } from '../../state/dshStore';
@@ -68,6 +69,7 @@ function TimelineRow({ item }: Readonly<{ item: TimelineItem }>) {
   if (item.kind === 'user') return <UserRow item={item} />
   if (item.kind === 'assistant') return <AssistantRow item={item} />
   if (item.kind === 'tool') return <ToolRow item={item} />
+  if (item.kind === 'compaction') return <CompactionRow item={item} />
   return <TurnEndRow item={item} />
 }
 
@@ -105,16 +107,39 @@ function AssistantRow({ item }: Readonly<{ item: TimelineItem }>) {
   )
 }
 
-/** text → 正文；reasoning → Think 折叠行（默认折叠，摘要单行）。 */
+/** text → 正文（流式纯文本，定稿 Markdown）；reasoning → Think 折叠行。 */
 function AssistantBlockView({ block, streaming }: Readonly<{ block: AssistantBlock; streaming: boolean }>) {
   const { palette } = usePreferences()
   const [open, setOpen] = useState(false)
   if (block.type === 'text') {
+    if (streaming) {
+      return (
+        <Text style={[styles.assistantText, { color: palette.text }]}>
+          {block.text}
+          {' ▍'}
+        </Text>
+      )
+    }
     return (
-      <Text style={[styles.assistantText, { color: palette.text }]}>
+      <Markdown
+        style={{
+          body: { color: palette.text, fontSize: 15, lineHeight: 22 },
+          strong: { color: palette.text },
+          link: { color: palette.brand },
+          code_inline: {
+            backgroundColor: palette.surfaceMuted, color: palette.text,
+            fontFamily: 'Menlo', fontSize: 13,
+          },
+          fence: {
+            backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderWidth: StyleSheet.hairlineWidth,
+            fontFamily: 'Menlo', fontSize: 12, color: palette.text, borderRadius: 8, padding: 8,
+          },
+          bullet_list_icon: { color: palette.textSecondary },
+          blockquote: { backgroundColor: palette.surfaceMuted, borderRadius: 8, paddingLeft: 8 },
+        }}
+      >
         {block.text}
-        {streaming ? ' ▍' : ''}
-      </Text>
+      </Markdown>
     )
   }
   const lines = block.text.split('\n').filter((l) => l.trim().length > 0)
@@ -180,17 +205,62 @@ function ToolRow({ item }: Readonly<{ item: TimelineItem }>) {
   )
 }
 
+/** dsh StatsLine 紧凑数字：517 / 12.2K / 1.2M。 */
+function compactTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
+/** turn-tail 时钟行（对齐 dsh TurnTailNodeView：耗时 · tokens · 速率）。 */
+function tailStats(item: TimelineItem): string {
+  const parts: string[] = []
+  if (item.ranMs !== undefined) {
+    const s = item.ranMs / 1000
+    parts.push(s >= 60 ? `${Math.floor(s / 60)}m${Math.round(s % 60)}s` : `${s < 10 ? s.toFixed(1) : Math.round(s)}s`)
+  }
+  if (item.turnTokens !== undefined && (item.turnTokens.input > 0 || item.turnTokens.output > 0)) {
+    parts.push(`${compactTokens(item.turnTokens.input)} in · ${compactTokens(item.turnTokens.output)} out`)
+    if (item.ranMs !== undefined && item.ranMs > 1000 && item.turnTokens.output > 0) {
+      parts.push(`${Math.round(item.turnTokens.output / (item.ranMs / 1000))} tok/s`)
+    }
+  }
+  return parts.join(' · ')
+}
+
+function CompactionRow({ item }: Readonly<{ item: TimelineItem }>) {
+  const { palette } = usePreferences()
+  const [open, setOpen] = useState(false)
+  const info = item.compaction
+  if (info === undefined) return null
+  return (
+    <Pressable style={[styles.compactionRow, { borderColor: palette.border }]} onPress={() => setOpen(!open)}>
+      <Text style={[styles.compactionLabel, { color: palette.info }]}>
+        上下文压缩 {open ? '▾' : '▸'} · {info.items} 条 · {compactTokens(info.tokens)} tokens
+      </Text>
+      {open && (
+        <Text style={[styles.compactionBody, { color: palette.textSecondary }]}>{info.summaryText}</Text>
+      )}
+    </Pressable>
+  )
+}
+
 function TurnEndRow({ item }: Readonly<{ item: TimelineItem }>) {
   const { palette } = usePreferences()
+  const stats = tailStats(item)
   if (item.turnReason === 'completed') {
-    return <Text style={[styles.turnEnd, { color: palette.textSecondary }]}>— 回合完成 —</Text>
+    return (
+      <Text style={[styles.turnEnd, { color: palette.textSecondary }]}>
+        — 回合完成{stats.length > 0 ? ` · ${stats}` : ''} —
+      </Text>
+    )
   }
   if (item.turnReason === 'error') {
     return (
       <View style={[styles.turnEndCard, { borderColor: palette.error }]}>
         <View style={[styles.stateDot, { backgroundColor: palette.error }]} />
         <Text style={[styles.turnEndText, { color: palette.error }]} numberOfLines={2}>
-          回合错误：{item.reasonMessage}
+          回合错误：{item.reasonMessage}{stats.length > 0 ? `（${stats}）` : ''}
         </Text>
       </View>
     )
@@ -337,6 +407,9 @@ const styles = StyleSheet.create({
   toolBodyLabel: { fontSize: 11 },
   mono: { fontSize: 11, fontFamily: 'Menlo', lineHeight: 16 },
   turnEnd: { fontSize: 12, textAlign: 'center', paddingVertical: spacing.x1 },
+  compactionRow: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'center' },
+  compactionLabel: { fontSize: 12 },
+  compactionBody: { fontSize: 12, lineHeight: 18, paddingTop: spacing.x1 },
   turnEndCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: 1, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'center' },
   turnEndText: { fontSize: 13, flexShrink: 1 },
   stateDot: { width: 8, height: 8, borderRadius: 4 },

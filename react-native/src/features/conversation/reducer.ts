@@ -23,7 +23,7 @@ export type ToolStatus = 'running' | 'ok' | 'error' | 'stopped'
 
 export interface TimelineItem {
   readonly key: string
-  readonly kind: 'user' | 'assistant' | 'tool' | 'turnEnd'
+  readonly kind: 'user' | 'assistant' | 'tool' | 'turnEnd' | 'compaction'
   // user
   readonly text?: string
   // assistant
@@ -39,9 +39,13 @@ export interface TimelineItem {
   readonly argsPretty?: string
   readonly outputPreview?: string
   readonly errorLine?: string
-  // turnEnd
+  // turnEnd（turn-tail 统计，对齐 dsh TurnTailNodeView 时钟行）
   readonly turnReason?: 'completed' | 'error' | 'max-tokens' | 'aborted'
   readonly reasonMessage?: string
+  readonly ranMs?: number
+  readonly turnTokens?: { input: number; output: number }
+  // compaction 标记行（对齐 dsh CompactionItem）
+  readonly compaction?: { items: number; tokens: number; summaryText: string }
 }
 
 export interface SessionView {
@@ -49,9 +53,15 @@ export interface SessionView {
   /** 当前流式 assistant 条目下标（-1 无） */
   readonly streamingIndex: number
   readonly agentStatus: 'idle' | 'running' | 'unknown'
+  /** 当前回合起点时间戳（turn/start 的 event.time；-1 无） */
+  readonly turnStartAt: number
+  /** 回合内各 step usage 聚合（turn/end 写入统计行后清零） */
+  readonly turnUsage: { input: number; output: number }
 }
 
-export const emptySessionView: SessionView = { items: [], streamingIndex: -1, agentStatus: 'unknown' }
+export const emptySessionView: SessionView = {
+  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 },
+}
 
 // ---------- dsh 事件负载工具 ----------
 
@@ -143,6 +153,8 @@ interface MutableState {
   items: TimelineItem[]
   streamingIndex: number
   agentStatus: SessionView['agentStatus']
+  turnStartAt: number
+  turnUsage: { input: number; output: number }
 }
 
 function ensureStreamingAssistant(state: MutableState, key: string): number {
@@ -181,6 +193,8 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     items: [...view.items],
     streamingIndex: view.streamingIndex,
     agentStatus: view.agentStatus,
+    turnStartAt: view.turnStartAt,
+    turnUsage: { ...view.turnUsage },
   }
 
   switch (event.type) {
@@ -219,6 +233,9 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       const usage = usageRaw !== undefined && typeof usageRaw['inputTokens'] === 'number' && typeof usageRaw['outputTokens'] === 'number'
         ? { input: usageRaw['inputTokens'] as number, output: usageRaw['outputTokens'] as number }
         : undefined
+      if (usage !== undefined) {
+        state.turnUsage = { input: state.turnUsage.input + usage.input, output: state.turnUsage.output + usage.output }
+      }
       if (state.streamingIndex >= 0) {
         const idx = state.streamingIndex
         state.items[idx] = { ...state.items[idx]!, blocks, streaming: false, usage }
@@ -289,6 +306,9 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     case 'turn/start': {
       state.agentStatus = 'running'
       state.streamingIndex = -1
+      const startedAt = (event as unknown as { time?: unknown }).time
+      state.turnStartAt = typeof startedAt === 'number' ? startedAt : -1
+      state.turnUsage = { input: 0, output: 0 }
       break
     }
 
@@ -309,15 +329,54 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
           }
         }
       }
-      state.items.push({ key: `e${event.seq}`, kind: 'turnEnd', turnReason: kind, reasonMessage: message })
+      const endedAt = (event as unknown as { time?: unknown }).time
+      const ranMs = state.turnStartAt > 0 && typeof endedAt === 'number' ? Math.max(0, endedAt - state.turnStartAt) : undefined
+      state.items.push({
+        key: `e${event.seq}`,
+        kind: 'turnEnd',
+        turnReason: kind,
+        reasonMessage: message,
+        ranMs,
+        turnTokens: { ...state.turnUsage },
+      })
       state.agentStatus = 'idle'
+      break
+    }
+
+    case 'compaction/summary': {
+      // 对齐 dsh CompactionItem：折叠行「压缩 · N 条 · M tokens」，展开为摘要正文
+      const shadowed = data['shadowedSeqs']
+      const tokenCount = data['shadowedTokenCount']
+      const items = Array.isArray(shadowed) ? shadowed.length : 0
+      const tokens = typeof tokenCount === 'number' ? tokenCount : 0
+      const summaryBlocks = Array.isArray(data['summary']) ? (data['summary'] as unknown[]) : []
+      const summaryText = summaryBlocks
+        .map((raw) => {
+          if (typeof raw === 'object' && raw !== null) {
+            const b = raw as Record<string, unknown>
+            if (typeof b['text'] === 'string') return b['text']
+          }
+          return ''
+        })
+        .join('\n')
+      state.items.push({
+        key: `c${event.seq}`,
+        kind: 'compaction',
+        compaction: { items, tokens, summaryText: summaryText.slice(0, 2000) },
+      })
       break
     }
 
     default:
       return view
   }
-  return { items: state.items, streamingIndex: state.streamingIndex, agentStatus: state.agentStatus }
+  return {
+    items: state.items,
+    streamingIndex: state.streamingIndex,
+    agentStatus: state.agentStatus,
+    turnStartAt: state.turnStartAt,
+    turnUsage: state.turnUsage,
+  }
 }
 
 export function reduceSessionEvents(events: readonly DshSessionEvent[]): SessionView {

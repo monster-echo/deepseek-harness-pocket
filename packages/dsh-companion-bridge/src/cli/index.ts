@@ -125,7 +125,15 @@ async function main(): Promise<void> {
       })
       printPairing(qrPayload(options.gateway, options.port))
       if (options.detached) {
-        const pid = detachSpawn(['--gateway', options.gateway, '--port', String(options.port), '--caps', options.caps])
+        const args = [
+          '--gateway', options.gateway,
+          '--port', String(options.port),
+          '--host', options.host,
+          '--caps', options.caps,
+        ]
+        if (options.name.length > 0) args.push('--name', options.name)
+        if (options.dsh !== undefined) args.push('--dsh', options.dsh)
+        const pid = detachSpawn(args)
         process.stdout.write(`[dshc] 后台运行中 (pid ${pid})，日志: ${logFile()}\n`)
         process.exit(0)
       }

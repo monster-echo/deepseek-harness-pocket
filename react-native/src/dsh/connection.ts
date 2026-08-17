@@ -25,6 +25,20 @@ function httpToWs(url: string): string {
   return url.replace(/^http/, 'ws').replace(/\/$/, '')
 }
 
+/**
+ * 会话 token：优先终北真实 session；开发环境可用
+ * EXPO_PUBLIC_DEV_SESSION_TOKEN（形如 dev:<userId>）走 gateway 的 dev 验票。
+ */
+async function readAuthSessionToken(): Promise<string | null> {
+  const token = await readSessionToken()
+  if (token !== null && token.length > 0) return token
+  if (process.env.EXPO_PUBLIC_APP_ENVIRONMENT !== 'production') {
+    const dev = process.env.EXPO_PUBLIC_DEV_SESSION_TOKEN
+    if (dev !== undefined && dev.length > 0) return dev
+  }
+  return null
+}
+
 export function gatewayHttpBase(): string {
   const ws = process.env.EXPO_PUBLIC_GATEWAY_URL ?? 'ws://127.0.0.1:3781'
   return ws.replace(/^ws/, 'http').replace(/\/$/, '')
@@ -73,7 +87,7 @@ export class GatewayConnection {
   }
 
   private async authenticate(): Promise<void> {
-    const token = await readSessionToken()
+    const token = await readAuthSessionToken()
     if (token === null || token.length === 0) {
       this.callbacks.onStatus('offline')
       return
@@ -175,7 +189,7 @@ export class GatewayConnection {
 // ---------- REST（配对 / push token） ----------
 
 export async function restPost(path: string, body: unknown): Promise<unknown> {
-  const token = await readSessionToken()
+  const token = await readAuthSessionToken()
   if (token === null) throw new Error('未登录')
   const response = await fetch(`${gatewayHttpBase()}${path}`, {
     method: 'POST',

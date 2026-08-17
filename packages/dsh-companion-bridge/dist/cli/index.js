@@ -465,7 +465,19 @@ async function main() {
       });
       printPairing(qrPayload(options.gateway, options.port));
       if (options.detached) {
-        const pid = detachSpawn(["--gateway", options.gateway, "--port", String(options.port), "--caps", options.caps]);
+        const args = [
+          "--gateway",
+          options.gateway,
+          "--port",
+          String(options.port),
+          "--host",
+          options.host,
+          "--caps",
+          options.caps
+        ];
+        if (options.name.length > 0) args.push("--name", options.name);
+        if (options.dsh !== void 0) args.push("--dsh", options.dsh);
+        const pid = detachSpawn(args);
         process.stdout.write(`[dshc] \u540E\u53F0\u8FD0\u884C\u4E2D (pid ${pid})\uFF0C\u65E5\u5FD7: ${logFile()}
 `);
         process.exit(0);

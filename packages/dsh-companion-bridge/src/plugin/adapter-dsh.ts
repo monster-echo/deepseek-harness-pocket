@@ -6,6 +6,7 @@
  * Hub 与路由只依赖本文件导出的窄接口，可脱离 dsh 单测。
  */
 
+import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { DshSessionEvent } from '@dsh-companion/bridge-protocol'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -16,6 +17,12 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
  */
 type SessionId = string
 type AgentStatusValue = 'idle' | 'running'
+
+export interface WorkspaceSummary {
+  readonly id: string
+  readonly path: string
+  readonly title: string
+}
 
 /**
  * 最小事件声明合并：只声明本插件监听的事件键（dsh 类型包未全部发布 npm）。
@@ -84,6 +91,9 @@ export interface DshAdapter {
   readonly caps: AdapterCaps
   dshVersion(): string | null
   listSessions(): Promise<readonly SessionSummary[]>
+  listWorkspaces(): Promise<readonly WorkspaceSummary[]>
+  /** 在指定 cwd 创建新会话（M3）；返回 sessionId */
+  createSession(cwd: string): Promise<string>
   readSlice(id: string, fromSeq: number): Promise<SessionSlice | null>
   sendUserMessage(id: string, text: string): Promise<void>
   stopTurn(id: string): Promise<void>
@@ -183,6 +193,27 @@ export function createAdapter(ctx: Context): DshAdapter {
         summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1))
       }
       return [...summaries.values()].sort((a, b) => b.createdAt - a.createdAt)
+    },
+
+    async listWorkspaces() {
+      const registry = ctx.get('workspaceRegistry') as
+        | { list(): readonly { id: { toString(): string }; path: string; title: string }[] }
+        | undefined
+      if (registry === undefined) return []
+      try {
+        return registry.list().map((w) => ({ id: w.id.toString(), path: w.path, title: w.title }))
+      } catch {
+        return []
+      }
+    },
+
+    async createSession(cwd) {
+      const registry = agents()
+      if (registry === undefined) throw new Error('no agent factory (dsh 未运行 agent loop)')
+      const handle = await (registry as unknown as {
+        create(options: { sessionId: string; meta: { cwd: string } }): Promise<{ id: { toString(): string } }>
+      }).create({ sessionId: randomUUID(), meta: { cwd } })
+      return handle.id.toString()
     },
 
     async readSlice(id, fromSeq) {

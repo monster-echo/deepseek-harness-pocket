@@ -202,6 +202,25 @@ export class BridgeHub {
         return rpcSuccess(req.id, { fromSeq: slice.fromSeq, toSeq: slice.toSeq, count: slice.events.length })
       }
 
+      case 'workspaces.list': {
+        const denied = denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled')
+        if (denied) return denied
+        return rpcSuccess(req.id, { workspaces: await this.adapter.listWorkspaces() })
+      }
+
+      case 'sessions.create': {
+        const denied =
+          denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const cwd = req.args['cwd']
+        if (typeof cwd !== 'string' || cwd.length === 0 || !cwd.startsWith('/')) {
+          return fail('bad-request', 'absolute cwd required')
+        }
+        const sessionId = await this.adapter.createSession(cwd)
+        return rpcSuccess(req.id, { sessionId })
+      }
+
       case 'messages.send': {
         const denied =
           denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled') ??

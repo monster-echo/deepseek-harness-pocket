@@ -3,8 +3,8 @@
  * 手机默认收起（左上角按钮/遮罩打开）；内容由 HomeShellScreen 控制。
  */
 
-import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { AppIcon } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useApp } from '../../state/AppStore';
@@ -14,6 +14,7 @@ import { spacing, radii } from '../../theme/tokens';
 export function SessionSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const { palette } = usePreferences();
   const { navigate } = useApp();
+  const [newSheet, setNewSheet] = useState(false);
   const workers = useDshStore((s) => s.workers);
   const activeWorkerId = useDshStore((s) => s.activeWorkerId);
   const sessions = useDshStore((s) => s.sessions);
@@ -52,9 +53,13 @@ export function SessionSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
       {/* 会话列表 */}
       {activeWorkerId !== null && (
         <>
-          <Text style={[styles.sectionTitle, { color: palette.textSecondary, marginTop: spacing.x4 }]}>
-            会话
-          </Text>
+          <View style={styles.sectionRow}>
+            <Text style={[styles.sectionTitle, { color: palette.textSecondary, flex: 1 }]}>会话</Text>
+            <Pressable style={styles.newButton} onPress={() => setNewSheet(true)} hitSlop={8}>
+              <AppIcon name="plus" color={palette.brand} size={16} />
+              <Text style={[styles.newButtonText, { color: palette.brand }]}>新会话</Text>
+            </Pressable>
+          </View>
           <ScrollView style={styles.sessionList}>
             {sessions.length === 0 && (
               <Text style={[styles.emptyText, { color: palette.textSecondary }]}>暂无会话</Text>
@@ -77,6 +82,12 @@ export function SessionSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
         </>
       )}
 
+      <NewSessionSheet
+        visible={newSheet}
+        onClose={() => setNewSheet(false)}
+        onCreated={() => { setNewSheet(false); onClose(); }}
+      />
+
       {/* 底部入口 */}
       <View style={[styles.footer, { borderTopColor: palette.border }]}>
         <SidebarEntry icon="user" label="我的" onPress={() => { onClose(); navigate('profile.home'); }} />
@@ -84,6 +95,55 @@ export function SessionSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
       </View>
     </View>
   );
+}
+
+/** 新会话：选 workspace → sessions.create（M3）。 */
+function NewSessionSheet({ visible, onClose, onCreated }: Readonly<{ visible: boolean; onClose: () => void; onCreated: () => void }>) {
+  const { palette } = usePreferences();
+  const [workspaces, setWorkspaces] = useState<readonly { id: string; path: string; title: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const listWorkspaces = useDshStore((s) => s.listWorkspaces);
+  const createSession = useDshStore((s) => s.createSession);
+
+  const load = (): void => {
+    setBusy(true)
+    setError(null)
+    void listWorkspaces().then((list) => {
+      setWorkspaces(list)
+      setBusy(false)
+      if (list.length === 0) setError('Worker 上还没有 workspace（在电脑 dsh Web UI 里添加项目目录后重试）')
+    })
+  }
+
+  const create = (cwd: string): void => {
+    setBusy(true)
+    void createSession(cwd).then((id) => {
+      setBusy(false)
+      if (id !== null) onCreated()
+      else setError('创建失败（Worker 需以 --caps m3 运行）')
+    })
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={[sheetStyles.scrim, { backgroundColor: palette.scrim }]} onPress={onClose}>
+        <Pressable style={[sheetStyles.sheet, { backgroundColor: palette.surface }]} onPress={(e) => e.stopPropagation()}>
+          <Text style={[sheetStyles.title, { color: palette.text }]}>选择 Workspace 创建会话</Text>
+          {busy && <Text style={[sheetStyles.hint, { color: palette.textSecondary }]}>加载中…</Text>}
+          {error !== null && <Text style={[sheetStyles.hint, { color: palette.error }]}>{error}</Text>}
+          <ScrollView style={sheetStyles.list}>
+            {workspaces.map((w) => (
+              <Pressable key={w.id} style={[sheetStyles.item, { borderColor: palette.border }]} onPress={() => create(w.path)}>
+                <Text style={[sheetStyles.itemTitle, { color: palette.text }]}>{w.title}</Text>
+                <Text style={[sheetStyles.itemPath, { color: palette.textSecondary }]} numberOfLines={1}>{w.path}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  )
 }
 
 function SidebarEntry({ icon, label, onPress }: Readonly<{ icon: 'user' | 'settings'; label: string; onPress: () => void }>) {
@@ -96,6 +156,17 @@ function SidebarEntry({ icon, label, onPress }: Readonly<{ icon: 'user' | 'setti
   );
 }
 
+const sheetStyles = StyleSheet.create({
+  scrim: { flex: 1, justifyContent: 'center', padding: spacing.x6 },
+  sheet: { borderRadius: radii.card, padding: spacing.x4, maxHeight: 420 },
+  title: { fontSize: 16, marginBottom: spacing.x2 },
+  hint: { fontSize: 13, marginBottom: spacing.x2 },
+  list: {},
+  item: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, marginBottom: spacing.x2 },
+  itemTitle: { fontSize: 15 },
+  itemPath: { fontSize: 12, fontFamily: 'Menlo' },
+});
+
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: spacing.x8, paddingHorizontal: spacing.x3 },
   sectionTitle: { fontSize: 12, marginBottom: spacing.x2, paddingHorizontal: spacing.x2 },
@@ -107,6 +178,9 @@ const styles = StyleSheet.create({
   workerName: { fontSize: 15 },
   workerStatus: { fontSize: 12 },
   sessionList: { flex: 1 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.x2, marginBottom: spacing.x2 },
+  newButton: { flexDirection: 'row', alignItems: 'center', gap: spacing.x1 },
+  newButtonText: { fontSize: 12 },
   emptyText: { fontSize: 13, padding: spacing.x2 },
   sessionRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.x2,

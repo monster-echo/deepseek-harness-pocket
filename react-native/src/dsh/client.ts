@@ -132,6 +132,18 @@ export class DshClient {
     if (!response.ok) throw new Error(response.error.message)
   }
 
+  async listWorkspaces(): Promise<readonly { id: string; path: string; title: string }[]> {
+    const response = await this.rpc('workspaces', 'list', {})
+    if (!response.ok) throw new Error(response.error.message)
+    return (response.result as { workspaces: { id: string; path: string; title: string }[] }).workspaces
+  }
+
+  async createSession(cwd: string): Promise<string> {
+    const response = await this.rpc('sessions', 'create', { cwd })
+    if (!response.ok) throw new Error(response.error.message)
+    return (response.result as { sessionId: string }).sessionId
+  }
+
   async sendMessage(sessionId: string, text: string): Promise<void> {
     const response = await this.rpc('messages', 'send', { sessionId, text })
     if (!response.ok) throw new Error(response.error.message)

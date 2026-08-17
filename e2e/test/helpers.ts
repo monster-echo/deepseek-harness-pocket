@@ -105,6 +105,12 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
       const slice = s.events.filter((e) => e.seq >= fromSeq)
       return { id, fromSeq, toSeq: slice.length > 0 ? slice[slice.length - 1]!.seq : fromSeq - 1, events: slice }
     },
+    async listWorkspaces() {
+      return [{ id: 'ws-1', path: '/tmp/proj', title: 'proj' }]
+    },
+    async createSession(cwd: string) {
+      return `new-session-${cwd}`
+    },
     async sendUserMessage(id, text) {
       sentMessages.push({ id, text })
     },
@@ -232,14 +238,17 @@ export async function startFakeWorker(dsh: FakeDsh, gatewayPort: number, pairing
 export class TestPhone {
   private ws: WebSocket
   private emitter = new EventEmitter()
+  /** 已到达未消费的帧（消除 wait 注册前的丢帧竞态） */
+  private buffer: Record<string, unknown>[] = []
 
   constructor(url: string) {
     this.ws = new WebSocket(url)
     this.ws.on('message', (data: unknown) => {
       const text = typeof data === 'string' ? data : String(data)
-      const frame = JSON.parse(text) as { kind: string }
+      const frame = JSON.parse(text) as Record<string, unknown>
+      this.buffer.push(frame)
       this.emitter.emit('frame', frame)
-      this.emitter.emit(frame.kind, frame)
+      this.emitter.emit(String(frame['kind']), frame)
     })
   }
 
@@ -254,12 +263,19 @@ export class TestPhone {
     this.ws.send(JSON.stringify(frame))
   }
 
-  /** 等待下一帧满足谓词。 */
+  /** 等待满足谓词的帧；先查已到达未消费的缓冲（匹配即消费，不重复匹配）。 */
   wait(kind: string, predicate: (frame: Record<string, unknown>) => boolean = () => true): Promise<Record<string, unknown>> {
+    const idx = this.buffer.findIndex((f) => f['kind'] === kind && predicate(f))
+    if (idx >= 0) {
+      const [hit] = this.buffer.splice(idx, 1)
+      return Promise.resolve(hit as Record<string, unknown>)
+    }
     return new Promise((resolve) => {
       const onFrame = (f: Record<string, unknown>): void => {
         if (f['kind'] === kind && predicate(f)) {
           this.emitter.off('frame', onFrame)
+          const i = this.buffer.indexOf(f)
+          if (i >= 0) this.buffer.splice(i, 1)
           resolve(f)
         }
       }

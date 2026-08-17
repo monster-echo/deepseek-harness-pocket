@@ -29,6 +29,7 @@ var pluginConfig = z.object({
 });
 
 // src/plugin/adapter-dsh.ts
+import { randomUUID } from "node:crypto";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 function toEvent(raw) {
   return raw;
@@ -83,6 +84,21 @@ function createAdapter(ctx) {
         summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1));
       }
       return [...summaries.values()].sort((a, b) => b.createdAt - a.createdAt);
+    },
+    async listWorkspaces() {
+      const registry = ctx.get("workspaceRegistry");
+      if (registry === void 0) return [];
+      try {
+        return registry.list().map((w) => ({ id: w.id.toString(), path: w.path, title: w.title }));
+      } catch {
+        return [];
+      }
+    },
+    async createSession(cwd) {
+      const registry = agents();
+      if (registry === void 0) throw new Error("no agent factory (dsh \u672A\u8FD0\u884C agent loop)");
+      const handle = await registry.create({ sessionId: randomUUID(), meta: { cwd } });
+      return handle.id.toString();
     },
     async readSlice(id, fromSeq) {
       const live = ctx.sessions.get(id);
@@ -456,6 +472,21 @@ var BridgeHub = class {
         if (slice === null) return fail("not-found", `unknown session ${sessionId}`);
         this.broadcast(snapshotFrame(slice));
         return rpcSuccess(req.id, { fromSeq: slice.fromSeq, toSeq: slice.toSeq, count: slice.events.length });
+      }
+      case "workspaces.list": {
+        const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled");
+        if (denied) return denied;
+        return rpcSuccess(req.id, { workspaces: await this.adapter.listWorkspaces() });
+      }
+      case "sessions.create": {
+        const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const cwd = req.args["cwd"];
+        if (typeof cwd !== "string" || cwd.length === 0 || !cwd.startsWith("/")) {
+          return fail("bad-request", "absolute cwd required");
+        }
+        const sessionId = await this.adapter.createSession(cwd);
+        return rpcSuccess(req.id, { sessionId });
       }
       case "messages.send": {
         const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");

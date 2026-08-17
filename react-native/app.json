@@ -33,14 +33,14 @@
     ],
     "ios": {
       "usesAppleSignIn": true,
-      "bundleIdentifier": "com.rwecho.dshcompanion.dsh_companion",
+      "bundleIdentifier": "top.rwecho.dshcompanion",
       "googleServicesFile": "./GoogleService-Info.plist",
       "associatedDomains": [
         "applinks:auth.zhongbei.tech"
       ]
     },
     "android": {
-      "package": "com.rwecho.dshcompanion.dsh_companion",
+      "package": "top.rwecho.dshcompanion",
       "adaptiveIcon": {
         "foregroundImage": "./assets/splash-icon.png",
         "backgroundColor": "#A84444"

@@ -24,6 +24,8 @@ interface DshState {
   disconnectGateway(): void
   openWorker(workerId: string): void
   refreshSessions(): Promise<void>
+  listWorkspaces(): Promise<readonly { id: string; path: string; title: string }[]>
+  createSession(cwd: string): Promise<string | null>
   openSession(sessionId: string): Promise<void>
   sendMessage(text: string): Promise<void>
   stopTurn(): Promise<void>
@@ -95,6 +97,29 @@ export const useDshStore = create<DshState>((set, get) => {
         set({ sessions: projectSessionList(raw) })
       } catch (error) {
         set({ notice: error instanceof Error ? error.message : String(error) })
+      }
+    },
+
+    async listWorkspaces() {
+      if (client === null) return []
+      try {
+        return await client.listWorkspaces()
+      } catch (error) {
+        set({ notice: error instanceof Error ? error.message : String(error) })
+        return []
+      }
+    },
+
+    async createSession(cwd) {
+      if (client === null) return null
+      try {
+        const sessionId = await client.createSession(cwd)
+        await get().refreshSessions()
+        await get().openSession(sessionId)
+        return sessionId
+      } catch (error) {
+        set({ notice: error instanceof Error ? error.message : String(error) })
+        return null
       }
     },
 

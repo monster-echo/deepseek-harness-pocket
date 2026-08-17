@@ -91,7 +91,7 @@ describe('Gateway 全链路', () => {
       let bind: Awaited<ReturnType<typeof gw.gateway.bindByCode>> | undefined
       for (let i = 0; i < 20; i += 1) {
         bind = await gw.gateway.bindByCode('user_e2e', '654321', '我的 Mac')
-        if (bind.ok) break
+          if (bind.ok) break
         await sleep(100)
       }
       expect(bind?.ok).toBe(true)
@@ -109,7 +109,8 @@ describe('Gateway 全链路', () => {
       // 3. 打开 worker（经配对校验）→ 隧道内跑 /mobile
       const workerId = presence[0]!.workerId
       phone.send({ kind: 'worker-open', workerId })
-      expect(((await phone.wait('worker-open-result'))['ok'])).toBe(true)
+      const openResult = await phone.wait('worker-open-result')
+      expect(((openResult)['ok'])).toBe(true)
 
       // worker 端 hub 的 uplink 伪连接是 trusted：auth 帧应通过
       phone.send({ kind: 'worker-frame', workerId, inner: JSON.stringify({ kind: 'auth', token: 'any' }) })

@@ -64,6 +64,8 @@ export function ConversationScreen() {
         target={actionTarget}
         onClose={() => setActionTarget(null)}
       />
+      {/* 底部累计统计行（对齐 dsh Web stats 行） */}
+      <StatsLine />
       {/* 审批/提问接管输入区（dsh ApprovalPanel 模式）；否则升级版输入区 */}
       {pending !== undefined ? (
         <ServerRequestCard request={pending} />
@@ -81,7 +83,40 @@ function TimelineRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLon
   if (item.kind === 'assistant') return <AssistantRow item={item} onLongPress={onLongPress} />
   if (item.kind === 'tool') return <ToolRow item={item} />
   if (item.kind === 'compaction') return <CompactionRow item={item} />
+  if (item.kind === 'contextInjection') return <ContextInjectionRow item={item} />
   return <TurnEndRow item={item} />
+}
+
+/** 底部累计统计行（对齐 dsh Web stats：轮/步/LLM/工具/首token/tok/s/缓存/输入输出）。 */
+function StatsLine() {
+  const { palette } = usePreferences()
+  const stats = useDshStore((s) => s.sessionView.stats)
+  const totalUsage = useDshStore((s) => s.sessionView.totalUsage)
+  if (stats.turns === 0 && stats.steps === 0) return null
+  const fmtMs = (n: number): string => {
+    if (n <= 0) return '—'
+    const s = n / 1000
+    return s >= 60 ? `${Math.floor(s / 60)}m${Math.round(s % 60)}s` : `${s < 10 ? s.toFixed(1) : Math.round(s)}s`
+  }
+  const fmtTok = (n: number): string => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+    if (n >= 10_000) return `${Math.round(n / 1_000)}K`
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+    return String(n)
+  }
+  const avgTtft = stats.ttftSteps > 0 ? stats.ttftMs / stats.ttftSteps : 0
+  const tokPerSec = stats.decodeMs > 0 ? Math.round((stats.decodeTokens / stats.decodeMs) * 1000) : 0
+  const parts: string[] = []
+  parts.push(`${stats.turns} 轮 · ${stats.steps} 步`)
+  parts.push(`LLM ${fmtMs(stats.llmMs)}${stats.toolMs > 0 ? ` · 工具 ${fmtMs(stats.toolMs)}` : ''}`)
+  parts.push(`首 token ${fmtMs(avgTtft)} · ${tokPerSec > 0 ? `${tokPerSec}` : '—'} tok/s`)
+  if (Number.isFinite(stats.cacheHitPct)) parts.push(`缓存命中 ${Math.round(stats.cacheHitPct)}%`)
+  parts.push(`输入 ${fmtTok(totalUsage.input)} · 输出 ${fmtTok(totalUsage.output)}`)
+  return (
+    <Text style={[styles.statsBar, { color: palette.textSecondary }]} numberOfLines={2}>
+      {parts.join('  ·  ')}
+    </Text>
+  )
 }
 
 function UserRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLongPress: (item: TimelineItem) => void }>) {
@@ -94,6 +129,31 @@ function UserRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLongPre
         </View>
       </Pressable>
     </View>
+  )
+}
+
+/** 上下文注入（对齐 dsh ContextInjectionRow）：非 user 来源的折叠行，标题 + 来源 + 摘要 + 展开 body。 */
+function ContextInjectionRow({ item }: Readonly<{ item: TimelineItem }>) {
+  const { palette } = usePreferences()
+  const [open, setOpen] = useState(false)
+  const label = item.contextForm === 'recall' ? '上下文召回' : '上下文注入'
+  return (
+    <Pressable style={[styles.ciRow, { borderColor: palette.border, backgroundColor: palette.surfaceMuted }]} onPress={() => setOpen(!open)}>
+      <AppIcon name="globe" color={palette.textSecondary} size={14} />
+      <View style={{ flex: 1 }}>
+        <View style={styles.ciHeader}>
+          <Text style={[styles.ciTitle, { color: palette.text }]}>{label}</Text>
+          {item.producer !== undefined && <Text style={[styles.ciProducer, { color: palette.textSecondary }]} numberOfLines={1}>{item.producer}</Text>}
+        </View>
+        {item.summary !== undefined && item.summary.length > 0 && (
+          <Text style={[styles.ciSummary, { color: palette.textSecondary }]} numberOfLines={open ? undefined : 1}>{item.summary}</Text>
+        )}
+        {open && item.text !== undefined && item.text.length > 0 && (
+          <Text style={[styles.ciBody, { color: palette.textSecondary }]}>{item.text}</Text>
+        )}
+      </View>
+      <AppIcon name="chevron-right" color={palette.textSecondary} size={14} />
+    </Pressable>
   )
 }
 
@@ -445,6 +505,7 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { fontSize: 15 },
   notice: { padding: spacing.x2, margin: spacing.x2, borderRadius: radii.control },
+  statsBar: { fontSize: 11, lineHeight: 15, textAlign: 'center', paddingHorizontal: spacing.x3, paddingVertical: spacing.x1 },
   noticeText: { fontSize: 13 },
   timeline: { flex: 1 },
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },
@@ -471,6 +532,12 @@ const styles = StyleSheet.create({
   dsmlHint: { fontSize: 11, lineHeight: 15 },
   compactionRow: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'center' },
   compactionLabel: { fontSize: 12 },
+  ciRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'stretch' },
+  ciHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2 },
+  ciTitle: { fontSize: 12, fontWeight: '600' },
+  ciProducer: { flex: 1, fontSize: 11, fontFamily: 'Menlo' },
+  ciSummary: { fontSize: 12, marginTop: 2 },
+  ciBody: { fontSize: 12, lineHeight: 17, marginTop: spacing.x1 },
   compactionBody: { fontSize: 12, lineHeight: 18, paddingTop: spacing.x1 },
   turnEndCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: 1, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'center' },
   turnEndText: { fontSize: 13, flexShrink: 1 },

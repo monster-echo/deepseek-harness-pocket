@@ -35,12 +35,15 @@ export function SessionInfoSheet(props: Readonly<{ visible: boolean; onClose: ()
   const stats = useDshStore((s) => s.sessionView.stats)
   const totalUsage = useDshStore((s) => s.sessionView.totalUsage)
 
+  const avgTtft = stats.ttftSteps > 0 ? stats.ttftMs / stats.ttftSteps : 0
+  const tokPerSec = stats.decodeMs > 0 ? Math.round((stats.decodeTokens / stats.decodeMs) * 1000) : 0
   const rows: ReadonlyArray<{ label: string; value: string }> = [
     { label: '轮数', value: dash(stats.turns) },
     { label: '步数', value: dash(stats.steps) },
-    { label: 'LLM 耗时', value: ms(stats.lastTurnMs) },
-    { label: '首 token 平均', value: ms(stats.firstTokenMs) },
-    { label: '输出速率', value: dash(stats.tokPerSec, ' tok/s') },
+    { label: 'LLM 耗时', value: ms(stats.llmMs) },
+    { label: '工具调用', value: ms(stats.toolMs) },
+    { label: '首 token 平均', value: ms(avgTtft) },
+    { label: '输出速率', value: tokPerSec > 0 ? `${compact(tokPerSec)} tok/s` : '—' },
     { label: '缓存命中', value: Number.isFinite(stats.cacheHitPct) ? `${Math.round(stats.cacheHitPct)}%` : '—' },
     { label: '回合输入', value: compact(stats.turnInput) + ' tok' },
     { label: '回合输出', value: compact(stats.turnOutput) + ' tok' },
@@ -59,7 +62,7 @@ export function SessionInfoSheet(props: Readonly<{ visible: boolean; onClose: ()
         ))}
       </View>
       <Text style={[styles.hint, { color: palette.textSecondary }]}>
-        统计来自当前会话最近一回合（缺失字段因 dsh 事件未下发显示 —）。
+        累计统计（缺失字段因 dsh 事件未下发显示 —）。
       </Text>
     </Sheet>
   )

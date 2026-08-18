@@ -23,7 +23,7 @@ export type ToolStatus = 'running' | 'ok' | 'error' | 'stopped'
 
 export interface TimelineItem {
   readonly key: string
-  readonly kind: 'user' | 'assistant' | 'tool' | 'turnEnd' | 'compaction'
+  readonly kind: 'user' | 'assistant' | 'tool' | 'turnEnd' | 'compaction' | 'contextInjection'
   /** 产生该条目的事件 seq（分叉 boundary 用） */
   readonly seq?: number
   // user
@@ -48,19 +48,28 @@ export interface TimelineItem {
   readonly turnTokens?: { input: number; output: number }
   // compaction 标记行（对齐 dsh CompactionItem）
   readonly compaction?: { items: number; tokens: number; summaryText: string }
+  // contextInjection（对齐 dsh ContextInjectionRow：非 user 来源的上下文注入）
+  readonly producer?: string
+  readonly contextForm?: string
 }
 
 /** 会话统计（对齐 dsh Web 顶栏 stats 行；缺失字段为 0/NaN，展示侧用「—」）。 */
 export interface SessionStats {
   readonly turns: number
   readonly steps: number
-  /** 最近一回合 LLM 耗时（ms） */
-  readonly lastTurnMs: number
-  /** 最近一回合首 token 延迟（ms） */
-  readonly firstTokenMs: number
-  /** 最近一回合输出速率（tok/s） */
-  readonly tokPerSec: number
-  /** 最近一回合缓存命中率（0-100；无缓存数据时 NaN） */
+  /** 累计 LLM 耗时（ms）：step/start → assistant/message */
+  readonly llmMs: number
+  /** 累计工具调用耗时（ms）：tool/call → tool/result */
+  readonly toolMs: number
+  /** 累计首 token 延迟（ms） */
+  readonly ttftMs: number
+  /** 有首 token 的步数（用于平均） */
+  readonly ttftSteps: number
+  /** 累计解码耗时（ms）：首 token → assistant/message */
+  readonly decodeMs: number
+  /** 累计解码输出 tokens */
+  readonly decodeTokens: number
+  /** 累计缓存命中率（0-100；无缓存数据时 NaN） */
   readonly cacheHitPct: number
   /** 最近一回合输入/输出 tokens */
   readonly turnInput: number
@@ -85,7 +94,7 @@ export interface SessionView {
 }
 
 export const emptyStats: SessionStats = {
-  turns: 0, steps: 0, lastTurnMs: 0, firstTokenMs: 0, tokPerSec: 0, cacheHitPct: NaN, turnInput: 0, turnOutput: 0,
+  turns: 0, steps: 0, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, cacheHitPct: NaN, turnInput: 0, turnOutput: 0,
 }
 
 export const emptySessionView: SessionView = {
@@ -209,6 +218,10 @@ interface MutableState {
   /** 当前回合缓存命中/总 token（assistant/message usage 聚合） */
   turnCacheHit: number
   turnCacheTotal: number
+  /** 当前 open step（用于 llmMs/ttftMs/decodeMs 累计） */
+  openStep: { startTime: number; firstTokenTime: number } | null
+  /** tool/call 派发时间（callId → time，用于 toolMs 累计） */
+  pendingCalls: Record<string, number>
 }
 
 function ensureStreamingAssistant(state: MutableState, key: string): number {
@@ -255,11 +268,27 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     turnFirstTokenAt: -1,
     turnCacheHit: 0,
     turnCacheTotal: 0,
+    openStep: null,
+    pendingCalls: {},
   }
 
   switch (event.type) {
     case 'user/message': {
       const text = pickUserText(data)
+      const source = data['source'] as { kind?: string; plugin?: string; form?: string; summary?: string } | undefined
+      // 上下文注入：非 user 来源（dsh 里 plugin 注入 skill 目录/workspace 指令等）
+      if (source !== undefined && source.kind !== undefined && source.kind !== 'user') {
+        state.items.push({
+          key: `ci${event.seq}`,
+          kind: 'contextInjection',
+          text,
+          producer: source.plugin ?? source.kind,
+          contextForm: source.form,
+          summary: typeof source.summary === 'string' ? source.summary : undefined,
+          seq: event.seq,
+        })
+        break
+      }
       if (text.length > 0) state.items.push({ key: `u${event.seq}`, kind: 'user', text, seq: event.seq })
       break
     }
@@ -272,6 +301,10 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
         if (state.turnFirstTokenAt < 0) {
           const t = (event as unknown as { time?: unknown }).time
           if (typeof t === 'number') state.turnFirstTokenAt = t
+        }
+        if (state.openStep !== null && state.openStep.firstTokenTime < 0) {
+          const t = (event as unknown as { time?: unknown }).time
+          if (typeof t === 'number') state.openStep = { ...state.openStep, firstTokenTime: t }
         }
         ensureStreamingAssistant(state, `a${event.seq}`)
         appendDelta(state, 'text', chunk['text'])
@@ -306,6 +339,24 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
         state.turnCacheHit += cache.hit
         state.turnCacheTotal += cache.total
       }
+      // 累计统计（对齐 dsh session-stats）：llmMs / ttftMs / decodeMs / decodeTokens
+      if (state.openStep !== null) {
+        const t = (event as unknown as { time?: unknown }).time
+        if (typeof t === 'number') {
+          state.stats = { ...state.stats, llmMs: state.stats.llmMs + Math.max(0, t - state.openStep.startTime) }
+          if (state.openStep.firstTokenTime >= 0) {
+            const output = usage !== undefined ? usage.output : 0
+            state.stats = {
+              ...state.stats,
+              ttftMs: state.stats.ttftMs + Math.max(0, state.openStep.firstTokenTime - state.openStep.startTime),
+              ttftSteps: state.stats.ttftSteps + 1,
+              decodeMs: state.stats.decodeMs + Math.max(0, t - state.openStep.firstTokenTime),
+              decodeTokens: state.stats.decodeTokens + output,
+            }
+          }
+        }
+        state.openStep = null
+      }
       if (state.streamingIndex >= 0) {
         const idx = state.streamingIndex
         state.items[idx] = { ...state.items[idx]!, blocks, streaming: false, usage, seq: event.seq }
@@ -334,6 +385,8 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       } else {
         state.items.push({ key: `t${event.seq}`, kind: 'tool', callId, variant, summary, toolStatus: 'running', argsPretty })
       }
+      const t = (event as unknown as { time?: unknown }).time
+      if (typeof t === 'number') state.pendingCalls[callId] = t
       break
     }
 
@@ -369,6 +422,15 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
         state.items[idx] = isError
           ? { ...next, errorLine: output.split('\n')[0] ?? '' }
           : next
+      }
+      // 工具耗时累计（tool/call 派发 → tool/result 落回）
+      const dispatched = Object.prototype.hasOwnProperty.call(state.pendingCalls, callId) ? state.pendingCalls[callId] : undefined
+      if (dispatched !== undefined) {
+        const t = (event as unknown as { time?: unknown }).time
+        if (typeof t === 'number') {
+          state.stats = { ...state.stats, toolMs: state.stats.toolMs + Math.max(0, t - dispatched) }
+        }
+        delete state.pendingCalls[callId]
       }
       break
     }
@@ -406,23 +468,18 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       const endedAt = (event as unknown as { time?: unknown }).time
       const ranMs = state.turnStartAt > 0 && typeof endedAt === 'number' ? Math.max(0, endedAt - state.turnStartAt) : undefined
       const turnTokens = { ...state.turnUsage }
-      const firstTokenMs = state.turnStartAt > 0 && state.turnFirstTokenAt > state.turnStartAt
-        ? state.turnFirstTokenAt - state.turnStartAt
-        : 0
-      const tokPerSec = ranMs !== undefined && ranMs > 0 ? Math.round((turnTokens.output / ranMs) * 1000) : 0
       const cacheHitPct = state.turnCacheTotal > 0
         ? Math.round((state.turnCacheHit / state.turnCacheTotal) * 100)
         : NaN
       state.stats = {
         ...state.stats,
-        steps: state.stats.steps,
-        lastTurnMs: ranMs ?? 0,
-        firstTokenMs,
-        tokPerSec,
         cacheHitPct,
         turnInput: turnTokens.input,
         turnOutput: turnTokens.output,
       }
+      // turn 结束：清掉未落回的 tool 派发记录（对齐 dsh，取消/失败回合的残余调用丢弃）
+      state.pendingCalls = {}
+      state.openStep = null
       state.items.push({
         key: `e${event.seq}`,
         kind: 'turnEnd',
@@ -465,10 +522,20 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       break
     }
 
+    case 'step/start': {
+      const t = (event as unknown as { time?: unknown }).time
+      state.openStep = { startTime: typeof t === 'number' ? t : -1, firstTokenTime: -1 }
+      break
+    }
+
+    case 'step/end': {
+      state.stats = { ...state.stats, steps: state.stats.steps + 1 }
+      break
+    }
+
     default:
-      // step/* 事件（step/start、step/end …）：计数供 stats 行「步」展示
+      // 其它 step/* 事件不单独处理
       if (typeof event.type === 'string' && event.type.startsWith('step/')) {
-        state.stats = { ...state.stats, steps: state.stats.steps + 1 }
         break
       }
       return view

@@ -123,11 +123,11 @@ export function ComposerBar(): React.JSX.Element | null {
         </View>
       )}
 
-      {/* 功能条：命令 / 权限 / 模型 都是直接弹层（#18） */}
+      {/* 功能条：对齐 dsh Web「命令 / 访问模式 / 选择模型」 */}
       <View style={styles.dockRow}>
         <DockButton label="命令" onPress={() => setCommandsOpen(true)} />
-        <DockButton label={`${permissionLabel} ▾`} onPress={() => setPermissionOpen(true)} />
-        <DockButton label={`${modelLabel} ▾`} onPress={() => setModelOpen(true)} />
+        <DockButton label={`访问模式：${permissionLabel}`} onPress={() => setPermissionOpen(true)} />
+        <DockButton label={`模型：${modelLabel}`} onPress={() => setModelOpen(true)} />
       </View>
 
       {/* 输入区（共享 ComposerInput） */}
@@ -221,7 +221,7 @@ function PermissionSheet(props: Readonly<{ visible: boolean; onClose: () => void
     void permissionOptions().then((o) => setNames(o.names))
   }, [props.visible, permissionOptions])
   return (
-    <Sheet visible={props.visible} title="会话权限" onClose={props.onClose} snapPoints={['50%']}>
+    <Sheet visible={props.visible} title="访问模式" onClose={props.onClose} snapPoints={['50%']}>
       <Text style={[styles.sheetHint, { color: palette.textSecondary }]}>立即作用于当前会话（Web 端同步）</Text>
       {names.map((name) => {
         const label = PERMISSION_LABELS[name] ?? name
@@ -259,7 +259,7 @@ function ModelSheet(props: Readonly<{ visible: boolean; onClose: () => void; mod
     void listModels().then((r) => setSessionCurrent(r.current?.model ?? ''))
   }, [props.visible, listModels])
   return (
-    <Sheet visible={props.visible} title="模型（新会话生效）" onClose={props.onClose} scrollable snapPoints={['55%', '85%']}>
+    <Sheet visible={props.visible} title="选择模型" onClose={props.onClose} scrollable snapPoints={['55%', '85%']}>
       {sessionCurrent.length > 0 && (
         <Text style={[styles.sheetHint, { color: palette.textSecondary }]}>当前会话：{sessionCurrent}</Text>
       )}

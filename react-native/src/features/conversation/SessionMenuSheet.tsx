@@ -3,7 +3,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AppIcon } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useDshStore } from '../../state/dshStore';
@@ -254,7 +254,6 @@ function CommandsTab(props: Readonly<{ onClose: () => void }>) {
 
 function ArgInput(props: Readonly<{ arg: string; setArg: (v: string) => void }>) {
   const { palette } = usePreferences()
-  const { TextInput } = require('react-native')
   return (
     <TextInput
       style={[styles.argInput, { color: palette.text, borderColor: palette.border }]}

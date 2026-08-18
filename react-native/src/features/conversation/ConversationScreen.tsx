@@ -101,7 +101,6 @@ function UserRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLongPre
 function AssistantRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLongPress: (item: TimelineItem) => void }>) {
   const { palette } = usePreferences()
   const blocks = item.blocks ?? []
-  const fullText = blocks.map((b) => b.text).join('\n\n')
   return (
     <Pressable onLongPress={() => onLongPress(item)} delayLongPress={350}>
     <View style={[styles.assistantBubble, { backgroundColor: palette.surface }]}>

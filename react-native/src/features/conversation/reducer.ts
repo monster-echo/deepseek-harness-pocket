@@ -155,10 +155,13 @@ function pickNum(raw: Data, ...keys: string[]): number {
 
 function pickCacheTokens(usageRaw: Data | undefined): { hit: number; total: number } | null {
   if (usageRaw === undefined) return null
-  const hit = pickNum(usageRaw, 'cacheReadInputTokens', 'promptCacheHitTokens', 'prompt_cache_hit_tokens')
-  const miss = pickNum(usageRaw, 'cacheCreationInputTokens', 'promptCacheMissTokens', 'prompt_cache_miss_tokens')
-  if (hit < 0 && miss < 0) return null
-  return { hit: Math.max(0, hit), total: Math.max(0, hit) + Math.max(0, miss) }
+  // dsh 的 usage：cacheReadTokens=缓存命中，inputTokens=未缓存输入（miss）
+  const cacheRead = pickNum(usageRaw, 'cacheReadTokens')
+  const inputTokens = pickNum(usageRaw, 'inputTokens')
+  if (cacheRead < 0 && inputTokens < 0) return null
+  const hit = Math.max(0, cacheRead)
+  const miss = Math.max(0, inputTokens)
+  return { hit, total: hit + miss }
 }
 
 /** 工具变体与单行摘要（对齐 dsh Web tool-call-model 的 SUMMARY_KEYS）。 */

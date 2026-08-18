@@ -23,6 +23,7 @@ export function ConversationScreen() {
   const activeSessionId = useDshStore((s) => s.activeSessionId);
   const serverRequests = useDshStore((s) => s.serverRequests);
   const scrollRef = useRef<ScrollView>(null);
+  const [actionTarget, setActionTarget] = useState<TimelineItem | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true })
@@ -37,7 +38,6 @@ export function ConversationScreen() {
   }
 
   const pending = serverRequests[0]
-  const [actionTarget, setActionTarget] = useState<TimelineItem | null>(null)
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>

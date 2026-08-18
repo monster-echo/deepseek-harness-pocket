@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AppIcon } from '../../design-system/AppIcon';
+import { Sheet } from '../../design-system/Sheet';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useApp } from '../../state/AppStore';
 import { useDshStore } from '../../state/dshStore';
@@ -39,36 +40,37 @@ export function PairWorkerScreen() {
         </Pressable>
       </View>
 
-      {showAdd ? (
+      <ScrollView contentContainerStyle={styles.body}>
+        {workers.length === 0 && (
+          <View style={styles.empty}>
+            <Text style={[styles.emptyText, { color: palette.textSecondary }]}>
+              还没有电脑。点右上角「+」安装并配对一台电脑。
+            </Text>
+          </View>
+        )}
+        {workers.map((worker) => {
+          const active = worker.workerId === activeWorkerId
+          return (
+            <Pressable
+              key={worker.workerId}
+              style={[styles.workerRow, { borderColor: palette.border, backgroundColor: palette.surface }, active && { borderColor: palette.brand, backgroundColor: palette.brandSoft }]}
+              onPress={() => { openWorker(worker.workerId); back(); }}
+            >
+              <View style={[styles.dot, { backgroundColor: worker.online ? palette.success : palette.textSecondary }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.workerName, { color: palette.text }]} numberOfLines={1}>{worker.name}</Text>
+                <Text style={[styles.workerStatus, { color: palette.textSecondary }]}>{worker.online ? '在线' : '离线'}</Text>
+              </View>
+              {active && <AppIcon name="check" color={palette.brand} size={18} />}
+            </Pressable>
+          )
+        })}
+      </ScrollView>
+
+      {/* 添加电脑：2/3 底部弹层 */}
+      <Sheet visible={showAdd} title="添加电脑" onClose={() => setShowAdd(false)} scrollable snapPoints={['66%', '92%']}>
         <AddWorkerForm onDone={() => setShowAdd(false)} />
-      ) : (
-        <ScrollView contentContainerStyle={styles.body}>
-          {workers.length === 0 && (
-            <View style={styles.empty}>
-              <Text style={[styles.emptyText, { color: palette.textSecondary }]}>
-                还没有电脑。点右上角「+」安装并配对一台电脑。
-              </Text>
-            </View>
-          )}
-          {workers.map((worker) => {
-            const active = worker.workerId === activeWorkerId
-            return (
-              <Pressable
-                key={worker.workerId}
-                style={[styles.workerRow, { borderColor: palette.border, backgroundColor: palette.surface }, active && { borderColor: palette.brand, backgroundColor: palette.brandSoft }]}
-                onPress={() => { openWorker(worker.workerId); back(); }}
-              >
-                <View style={[styles.dot, { backgroundColor: worker.online ? palette.success : palette.textSecondary }]} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.workerName, { color: palette.text }]} numberOfLines={1}>{worker.name}</Text>
-                  <Text style={[styles.workerStatus, { color: palette.textSecondary }]}>{worker.online ? '在线' : '离线'}</Text>
-                </View>
-                {active && <AppIcon name="check" color={palette.brand} size={18} />}
-              </Pressable>
-            )
-          })}
-        </ScrollView>
-      )}
+      </Sheet>
     </View>
   )
 }
@@ -100,7 +102,7 @@ function AddWorkerForm({ onDone }: Readonly<{ onDone: () => void }>) {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.body}>
+    <View style={styles.formBody}>
       {INSTALL_STEPS.map((step) => (
         <View key={step.command} style={[styles.step, { borderColor: palette.border, backgroundColor: palette.surface }]}>
           <Text style={[styles.stepTitle, { color: palette.text }]}>{step.title}</Text>
@@ -137,7 +139,7 @@ function AddWorkerForm({ onDone }: Readonly<{ onDone: () => void }>) {
           <Text style={styles.bindText}>{busy ? '绑定中…' : '绑定到我的账号'}</Text>
         </Pressable>
       </View>
-    </ScrollView>
+    </View>
   )
 }
 
@@ -150,6 +152,7 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 17 },
   body: { padding: spacing.x4, gap: spacing.x3 },
+  formBody: { gap: spacing.x3 },
   empty: { alignItems: 'center', paddingVertical: spacing.x8 },
   emptyText: { fontSize: 14, textAlign: 'center', lineHeight: 21 },
   workerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x3, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.card, padding: spacing.x3 },

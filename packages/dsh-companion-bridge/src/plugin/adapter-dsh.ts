@@ -114,7 +114,7 @@ export interface DshAdapter {
   /** 添加 workspace（按绝对路径）；已存在时幂等返回既有记录 */
   addWorkspace(path: string): Promise<WorkspaceSummary | null>
   /** 在指定 cwd 创建新会话（M3）；返回 sessionId */
-  createSession(cwd: string, route: { provider: string; model: string }, agentPreset?: string): Promise<string>
+  createSession(cwd: string, route: { provider: string; model: string; reasoningEffort?: string }, agentPreset?: string): Promise<string>
   /** 从既有会话分叉（dsh fork：取平衡的已完成回合前缀作种子）并挂 agent；返回新 sessionId */
   forkSession(sessionId: string, route: { provider: string; model: string }, boundary?: number): Promise<string>
   readSlice(id: string, fromSeq: number): Promise<SessionSlice | null>
@@ -357,12 +357,16 @@ export function createAdapter(ctx: Context): DshAdapter {
         create(options: {
           sessionId: string
           meta: { cwd: string; agentPreset?: string }
-          agentOptions: { provider: string; model: string }
+          agentOptions: { provider: string; model: string; reasoningEffort?: string }
         }): Promise<{ agent: { id: { toString(): string } } }>
       }).create({
         sessionId: randomUUID(),
         meta: agentPreset !== undefined ? { cwd, agentPreset } : { cwd },
-        agentOptions: { provider: route.provider, model: route.model },
+        agentOptions: {
+          provider: route.provider,
+          model: route.model,
+          ...(route.reasoningEffort !== undefined ? { reasoningEffort: route.reasoningEffort } : {}),
+        },
       })
       return handle.agent.id.toString()
     },

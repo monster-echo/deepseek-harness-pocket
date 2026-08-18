@@ -252,7 +252,11 @@ export class BridgeHub {
         const provider = typeof req.args['provider'] === 'string' ? req.args['provider'] : this.opts.defaultModel.provider
         const model = typeof req.args['model'] === 'string' ? req.args['model'] : this.opts.defaultModel.model
         const agentPreset = typeof req.args['agentPreset'] === 'string' ? req.args['agentPreset'] : undefined
-        const sessionId = await this.adapter.createSession(cwd, { provider, model }, agentPreset)
+        const reasoningEffortRaw = req.args['reasoningEffort']
+        const route = typeof reasoningEffortRaw === 'string'
+          ? { provider, model, reasoningEffort: reasoningEffortRaw }
+          : { provider, model }
+        const sessionId = await this.adapter.createSession(cwd, route, agentPreset)
         return rpcSuccess(req.id, { sessionId })
       }
 

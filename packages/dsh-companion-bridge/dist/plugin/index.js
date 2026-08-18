@@ -197,7 +197,11 @@ function createAdapter(ctx) {
       const handle = await registry.create({
         sessionId: randomUUID(),
         meta: agentPreset !== void 0 ? { cwd, agentPreset } : { cwd },
-        agentOptions: { provider: route.provider, model: route.model }
+        agentOptions: {
+          provider: route.provider,
+          model: route.model,
+          ...route.reasoningEffort !== void 0 ? { reasoningEffort: route.reasoningEffort } : {}
+        }
       });
       return handle.agent.id.toString();
     },
@@ -633,7 +637,9 @@ var BridgeHub = class {
         const provider = typeof req.args["provider"] === "string" ? req.args["provider"] : this.opts.defaultModel.provider;
         const model = typeof req.args["model"] === "string" ? req.args["model"] : this.opts.defaultModel.model;
         const agentPreset = typeof req.args["agentPreset"] === "string" ? req.args["agentPreset"] : void 0;
-        const sessionId = await this.adapter.createSession(cwd, { provider, model }, agentPreset);
+        const reasoningEffortRaw = req.args["reasoningEffort"];
+        const route = typeof reasoningEffortRaw === "string" ? { provider, model, reasoningEffort: reasoningEffortRaw } : { provider, model };
+        const sessionId = await this.adapter.createSession(cwd, route, agentPreset);
         return rpcSuccess(req.id, { sessionId });
       }
       case "sessions.fork": {

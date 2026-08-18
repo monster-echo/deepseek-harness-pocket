@@ -19,6 +19,8 @@ interface DshState {
   sessionView: SessionView
   serverRequests: readonly ServerRequest[]
   notice: string | null
+  /** worker 模型目录缓存（NewSessionComposer 的模型列表） */
+  modelCatalog: readonly { id: string; name?: string }[]
 
   connectGateway(): void
   disconnectGateway(): void
@@ -102,6 +104,7 @@ export const useDshStore = create<DshState>((set, get) => {
     sessionView: emptySessionView,
     serverRequests: [],
     notice: null,
+    modelCatalog: [],
     newSessionDefaults: null,
     newSessionPreset: '',
 
@@ -278,7 +281,12 @@ export const useDshStore = create<DshState>((set, get) => {
     async listModels() {
       if (client === null) return { providers: [], current: null }
       try {
-        return await client.listModels(get().activeSessionId ?? '')
+        const result = await client.listModels(get().activeSessionId ?? '')
+        const catalog = result.providers[0]?.models ?? []
+        if (catalog.length > 0 && get().modelCatalog.length === 0) {
+          set({ modelCatalog: catalog })
+        }
+        return result
       } catch {
         return { providers: [], current: null }
       }

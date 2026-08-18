@@ -18,6 +18,7 @@ import type { AssistantBlock, TimelineItem, ToolStatus } from './reducer';
 import { splitDsml, cutAtDsmlStart, type DsmlToolCall } from './dsml';
 import { ComposerBar } from './ComposerBar';
 import { SessionMenuSheet } from './SessionMenuSheet';
+import { NewSessionComposer } from './NewSessionComposer';
 
 export function ConversationScreen() {
   const { palette } = usePreferences();
@@ -28,21 +29,23 @@ export function ConversationScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const [actionTarget, setActionTarget] = useState<TimelineItem | null>(null);
   const [menuTab, setMenuTab] = useState<'permission' | 'model' | 'preset' | 'commands' | null>(null);
+  const openMenu = (tab: 'permission' | 'model' | 'preset' | 'commands'): void => setMenuTab(tab);
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true })
   }, [view.items.length])
 
   if (activeSessionId === null) {
+    // 对齐 dsh Web 新建会话页：选择工作区 + 功能条 + 大输入区（首条消息即建会话）
     return (
-      <View style={[styles.empty, { backgroundColor: palette.background }]}>
-        <Text style={[styles.emptyTitle, { color: palette.textSecondary }]}>从侧边栏选择一个会话</Text>
+      <View style={[styles.container, { backgroundColor: palette.background }]}>
+        <NewSessionComposer onOpenMenu={openMenu} />
+        <SessionMenuSheet visible={menuTab !== null} initialTab={menuTab ?? 'main'} onClose={() => setMenuTab(null)} />
       </View>
     )
   }
 
   const pending = serverRequests[0]
-  const openMenu = (tab: 'permission' | 'model' | 'preset' | 'commands'): void => setMenuTab(tab)
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>

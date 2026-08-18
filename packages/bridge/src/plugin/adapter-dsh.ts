@@ -55,6 +55,8 @@ export interface SessionSummary {
   readonly createdAt: number
   /** 最后活动时间（事件流最近一条 time；缺失回退 createdAt）。手机端「会话时间」排序/展示用 */
   readonly lastActivityAt: number
+  /** 语义化标题（session/title 事件或首条 user/message；缺失为 null，App 端回退 cwd 名） */
+  readonly title: string | null
   readonly cwd: string | null
   readonly lastSeq: number
   readonly live: boolean
@@ -115,6 +117,10 @@ export interface DshAdapter {
   homePath(): string
   /** 添加 workspace（按绝对路径）；已存在时幂等返回既有记录 */
   addWorkspace(path: string): Promise<WorkspaceSummary | null>
+  /** 重命名 workspace（dsh entity.setTitle） */
+  renameWorkspace(id: string, title: string): Promise<boolean>
+  /** 删除 workspace 注册（dsh registry.delete） */
+  deleteWorkspace(id: string): Promise<boolean>
   /** 在指定 cwd 创建新会话（M3）；返回 sessionId */
   createSession(cwd: string, route: { provider: string; model: string; reasoningEffort?: string }, agentPreset?: string): Promise<string>
   /** 从既有会话分叉（dsh fork：取平衡的已完成回合前缀作种子）并挂 agent；返回新 sessionId */
@@ -188,12 +194,37 @@ export function createAdapter(ctx: Context): DshAdapter {
     return typeof t === 'number' && Number.isFinite(t) ? t : undefined
   }
 
-  const toSummary = (id: string, createdAt: number, cwd: string | undefined, lastSeq: number, lastActivityAt?: number): SessionSummary => {
+  /** 从事件流提取语义标题：优先 session/title，回退首个 user/message 的 text。 */
+  const extractTitle = (events: readonly unknown[]): string | null => {
+    const clean = (s: string): string => s.replace(/\s+/g, ' ').trim()
+    for (const raw of events) {
+      const e = raw as { type?: string; data?: { title?: unknown } }
+      if (e.type === 'session/title' && typeof e.data?.title === 'string') {
+        const t = clean(e.data.title)
+        if (t.length > 0) return t.slice(0, 80)
+      }
+    }
+    for (const raw of events) {
+      const e = raw as { type?: string; data?: { content?: unknown } }
+      if (e.type === 'user/message' && Array.isArray(e.data?.content)) {
+        const text = (e.data.content as { type?: string; text?: string }[])
+          .filter((b) => b.type === 'text' && typeof b.text === 'string')
+          .map((b) => b.text)
+          .join(' ')
+        const t = clean(text)
+        if (t.length > 0) return t.slice(0, 80)
+      }
+    }
+    return null
+  }
+
+  const toSummary = (id: string, createdAt: number, cwd: string | undefined, lastSeq: number, lastActivityAt?: number, title?: string | null): SessionSummary => {
     const status = agentStatusById().get(id)
     return {
       id,
       createdAt,
       lastActivityAt: lastActivityAt ?? createdAt,
+      title: title ?? null,
       cwd: cwd ?? null,
       lastSeq,
       live: status !== undefined,
@@ -227,7 +258,7 @@ export function createAdapter(ctx: Context): DshAdapter {
       for (const s of live) {
         const id = s.id.toString()
         const tail = s.events[s.events.length - 1]
-        summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1, lastActivityById.get(id) ?? eventTimeOf(tail)))
+        summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1, lastActivityById.get(id) ?? eventTimeOf(tail), extractTitle(s.events)))
       }
       return [...summaries.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt)
     },
@@ -373,6 +404,33 @@ export function createAdapter(ctx: Context): DshAdapter {
         return { id: created.id.toString(), path: created.path, title: created.title }
       } catch {
         return null
+      }
+    },
+
+    async renameWorkspace(id, title) {
+      const registry = ctx.get('workspaceRegistry') as
+        | { list(): readonly { id: { toString(): string }; setTitle(title: string): Promise<void> }[] }
+        | undefined
+      if (registry === undefined) return false
+      const ws = registry.list().find((w) => w.id.toString() === id)
+      if (ws === undefined) return false
+      try {
+        await ws.setTitle(title)
+        return true
+      } catch {
+        return false
+      }
+    },
+
+    async deleteWorkspace(id) {
+      const registry = ctx.get('workspaceRegistry') as
+        | { delete(id: unknown): Promise<boolean> }
+        | undefined
+      if (registry === undefined) return false
+      try {
+        return await registry.delete(id)
+      } catch {
+        return false
       }
     },
 

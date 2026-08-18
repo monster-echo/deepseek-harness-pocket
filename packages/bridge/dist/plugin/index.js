@@ -66,12 +66,32 @@ function createAdapter(ctx) {
     const t = raw?.time;
     return typeof t === "number" && Number.isFinite(t) ? t : void 0;
   };
-  const toSummary = (id, createdAt, cwd, lastSeq, lastActivityAt) => {
+  const extractTitle = (events) => {
+    const clean = (s) => s.replace(/\s+/g, " ").trim();
+    for (const raw of events) {
+      const e = raw;
+      if (e.type === "session/title" && typeof e.data?.title === "string") {
+        const t = clean(e.data.title);
+        if (t.length > 0) return t.slice(0, 80);
+      }
+    }
+    for (const raw of events) {
+      const e = raw;
+      if (e.type === "user/message" && Array.isArray(e.data?.content)) {
+        const text = e.data.content.filter((b) => b.type === "text" && typeof b.text === "string").map((b) => b.text).join(" ");
+        const t = clean(text);
+        if (t.length > 0) return t.slice(0, 80);
+      }
+    }
+    return null;
+  };
+  const toSummary = (id, createdAt, cwd, lastSeq, lastActivityAt, title) => {
     const status = agentStatusById().get(id);
     return {
       id,
       createdAt,
       lastActivityAt: lastActivityAt ?? createdAt,
+      title: title ?? null,
       cwd: cwd ?? null,
       lastSeq,
       live: status !== void 0,
@@ -100,7 +120,7 @@ function createAdapter(ctx) {
       for (const s of live) {
         const id = s.id.toString();
         const tail = s.events[s.events.length - 1];
-        summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1, lastActivityById.get(id) ?? eventTimeOf(tail)));
+        summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1, lastActivityById.get(id) ?? eventTimeOf(tail), extractTitle(s.events)));
       }
       return [...summaries.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     },
@@ -205,6 +225,27 @@ function createAdapter(ctx) {
         return { id: created.id.toString(), path: created.path, title: created.title };
       } catch {
         return null;
+      }
+    },
+    async renameWorkspace(id, title) {
+      const registry = ctx.get("workspaceRegistry");
+      if (registry === void 0) return false;
+      const ws = registry.list().find((w) => w.id.toString() === id);
+      if (ws === void 0) return false;
+      try {
+        await ws.setTitle(title);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async deleteWorkspace(id) {
+      const registry = ctx.get("workspaceRegistry");
+      if (registry === void 0) return false;
+      try {
+        return await registry.delete(id);
+      } catch {
+        return false;
       }
     },
     async createSession(cwd, route, agentPreset) {
@@ -645,6 +686,27 @@ var BridgeHub = class {
         const added = await this.adapter.addWorkspace(path);
         if (added === null) return fail("bad-request", "\u65E0\u6CD5\u6DFB\u52A0\u8BE5\u76EE\u5F55\uFF08\u4E0D\u5B58\u5728\u6216\u4E0D\u53EF\u8BBF\u95EE\uFF09");
         return rpcSuccess(req.id, { workspace: added });
+      }
+      case "workspaces.rename": {
+        const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const id = req.args["id"];
+        const title = req.args["title"];
+        if (typeof id !== "string" || typeof title !== "string" || title.trim().length === 0) {
+          return fail("bad-request", "id and title required");
+        }
+        const ok = await this.adapter.renameWorkspace(id, title.trim());
+        if (!ok) return fail("not-found", "workspace \u4E0D\u5B58\u5728\u6216\u65E0\u6CD5\u91CD\u547D\u540D");
+        return rpcSuccess(req.id, { ok: true });
+      }
+      case "workspaces.delete": {
+        const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const id = req.args["id"];
+        if (typeof id !== "string") return fail("bad-request", "id required");
+        const ok = await this.adapter.deleteWorkspace(id);
+        if (!ok) return fail("not-found", "workspace \u4E0D\u5B58\u5728\u6216\u65E0\u6CD5\u5220\u9664");
+        return rpcSuccess(req.id, { ok: true });
       }
       case "sessions.create": {
         const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");

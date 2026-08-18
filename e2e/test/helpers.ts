@@ -128,6 +128,15 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
     async listWorkspaces() {
       return [{ id: 'ws-1', path: '/tmp/proj', title: 'proj' }]
     },
+    async addWorkspace(path: string) {
+      return { id: 'ws-1', path, title: path.split('/').pop() ?? path }
+    },
+    async renameWorkspace() {
+      return true
+    },
+    async deleteWorkspace() {
+      return true
+    },
     async listDir(path: string) {
       return path === '/'
         ? [{ name: 'Users', path: '/Users' }, { name: 'tmp', path: '/tmp' }]

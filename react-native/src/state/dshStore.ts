@@ -30,6 +30,8 @@ interface DshState {
   listDir(path: string): Promise<readonly { name: string; path: string }[]>
   fsHome(): Promise<string>
   addWorkspace(path: string): Promise<{ id: string; path: string; title: string } | null>
+  renameWorkspace(id: string, title: string): Promise<boolean>
+  deleteWorkspace(id: string): Promise<boolean>
   createSession(cwd: string, opts?: { reasoningEffort?: string; permission?: string }): Promise<string | null>
   forkSession(sessionId: string, boundary?: number): Promise<string | null>
   openSession(sessionId: string): Promise<void>
@@ -181,6 +183,26 @@ export const useDshStore = create<DshState>((set, get) => {
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
         return null
+      }
+    },
+
+    async renameWorkspace(id, title) {
+      if (client === null) return false
+      try {
+        return await client.renameWorkspace(id, title)
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+        return false
+      }
+    },
+
+    async deleteWorkspace(id) {
+      if (client === null) return false
+      try {
+        return await client.deleteWorkspace(id)
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+        return false
       }
     },
 

@@ -156,6 +156,16 @@ export class DshClient {
     return (response.result as { workspace: { id: string; path: string; title: string } }).workspace
   }
 
+  async renameWorkspace(id: string, title: string): Promise<boolean> {
+    const response = await this.rpc('workspaces', 'rename', { id, title })
+    return response.ok
+  }
+
+  async deleteWorkspace(id: string): Promise<boolean> {
+    const response = await this.rpc('workspaces', 'delete', { id })
+    return response.ok
+  }
+
   async forkSession(sessionId: string, boundary?: number): Promise<string> {
     const response = await this.rpc('sessions', 'fork', {
       sessionId,

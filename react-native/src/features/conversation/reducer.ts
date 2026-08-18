@@ -511,6 +511,7 @@ export function projectSessionList(raw: unknown): readonly SessionListItem[] {
     if (typeof e['id'] !== 'string') continue
     const createdAt = typeof e['createdAt'] === 'number' ? e['createdAt'] : 0
     const cwd = typeof e['cwd'] === 'string' ? e['cwd'] : null
+    const semanticTitle = typeof e['title'] === 'string' && e['title'].length > 0 ? e['title'] : null
     items.push({
       id: e['id'],
       createdAt,
@@ -519,7 +520,7 @@ export function projectSessionList(raw: unknown): readonly SessionListItem[] {
       lastSeq: typeof e['lastSeq'] === 'number' ? e['lastSeq'] : -1,
       live: e['live'] === true,
       agentStatus: typeof e['agentStatus'] === 'string' ? e['agentStatus'] : null,
-      title: cwd !== null ? cwd.split('/').filter(Boolean).pop() ?? cwd : `会话 ${new Date(createdAt).toLocaleString()}`,
+      title: semanticTitle ?? (cwd !== null ? cwd.split('/').filter(Boolean).pop() ?? cwd : `会话 ${new Date(createdAt).toLocaleString()}`),
     })
   }
   return items.sort((a, b) => b.lastActivityAt - a.lastActivityAt)

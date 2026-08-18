@@ -240,6 +240,31 @@ export class BridgeHub {
         return rpcSuccess(req.id, { workspace: added })
       }
 
+      case 'workspaces.rename': {
+        const denied = denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const id = req.args['id']
+        const title = req.args['title']
+        if (typeof id !== 'string' || typeof title !== 'string' || title.trim().length === 0) {
+          return fail('bad-request', 'id and title required')
+        }
+        const ok = await this.adapter.renameWorkspace(id, title.trim())
+        if (!ok) return fail('not-found', 'workspace 不存在或无法重命名')
+        return rpcSuccess(req.id, { ok: true })
+      }
+
+      case 'workspaces.delete': {
+        const denied = denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const id = req.args['id']
+        if (typeof id !== 'string') return fail('bad-request', 'id required')
+        const ok = await this.adapter.deleteWorkspace(id)
+        if (!ok) return fail('not-found', 'workspace 不存在或无法删除')
+        return rpcSuccess(req.id, { ok: true })
+      }
+
       case 'sessions.create': {
         const denied =
           denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled') ??

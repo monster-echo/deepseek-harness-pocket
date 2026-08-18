@@ -17,7 +17,7 @@ import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
 import { ConversationScreen } from '../conversation/ConversationScreen';
 import { SessionInfoSheet } from '../conversation/SessionInfoSheet';
-import { SessionSidebar } from './SessionSidebar';
+import { WorkerSidebar } from './WorkerSidebar';
 
 const SIDEBAR_WIDTH = 300
 const LOGO = require('../../../assets/brand/logo.png') // eslint-disable-line @typescript-eslint/no-require-imports
@@ -125,7 +125,7 @@ export function HomeShellScreen() {
       {open && (
         <Pressable style={[styles.scrim, { backgroundColor: palette.scrim }]} onPress={() => showSidebar(false)}>
           <Animated.View style={[styles.sidebar, { backgroundColor: palette.surface, transform: [{ translateX: translate }] }]}>
-            <SessionSidebar onClose={() => showSidebar(false)} />
+            <WorkerSidebar onClose={() => showSidebar(false)} />
           </Animated.View>
         </Pressable>
       )}

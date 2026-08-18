@@ -293,6 +293,30 @@ function createAdapter(ctx) {
         return null;
       }
     },
+    async openSession(id, route) {
+      const registry = agents();
+      if (registry === void 0) return;
+      if (registry.get(id) !== void 0) return;
+      let cwd;
+      const live = ctx.sessions.get(id);
+      if (live) cwd = live.header.cwd;
+      else {
+        const per = persistence();
+        if (per) {
+          try {
+            const { meta } = await per.readFrom(id, 0);
+            const m = meta;
+            cwd = m?.cwd;
+          } catch {
+          }
+        }
+      }
+      await registry.create({
+        sessionId: id,
+        meta: cwd !== void 0 ? { cwd } : {},
+        agentOptions: { provider: route.provider, model: route.model }
+      });
+    },
     async sendUserMessage(id, text, imageRefs) {
       const agent = agents()?.get(id);
       if (!agent) throw new Error(`no live agent for session ${id}`);
@@ -633,6 +657,10 @@ var BridgeHub = class {
         if (typeof sessionId !== "string") return fail("bad-request", "sessionId required");
         const slice = await this.adapter.readSlice(sessionId, 0);
         if (slice === null) return fail("not-found", `unknown session ${sessionId}`);
+        try {
+          await this.adapter.openSession(sessionId, this.opts.defaultModel);
+        } catch {
+        }
         for (const c of this.conns.values()) {
           if (c.authed) c.subscribed.add(sessionId);
         }

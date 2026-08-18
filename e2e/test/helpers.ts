@@ -107,6 +107,9 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
       const slice = s.events.filter((e) => e.seq >= fromSeq)
       return { id, fromSeq, toSeq: slice.length > 0 ? slice[slice.length - 1]!.seq : fromSeq - 1, events: slice }
     },
+    async openSession() {
+      // 假 dsh：openSession 挂 agent 为 no-op
+    },
     async permissionOptions() {
       return { names: ['workspace-write', 'danger-full-access'], default: 'workspace-write' }
     },

@@ -126,6 +126,8 @@ export interface DshAdapter {
   /** 从既有会话分叉（dsh fork：取平衡的已完成回合前缀作种子）并挂 agent；返回新 sessionId */
   forkSession(sessionId: string, route: { provider: string; model: string }, boundary?: number): Promise<string>
   readSlice(id: string, fromSeq: number): Promise<SessionSlice | null>
+  /** 打开已有会话并挂 live agent（无 agent 时），使命令目录/当前模型可查询 */
+  openSession(id: string, route: { provider: string; model: string }): Promise<void>
   sendUserMessage(id: string, text: string, imageRefs?: readonly unknown[]): Promise<void>
   /** 图片字节入 dsh 附件库（ref 可拼进用户消息 content） */
   uploadImage(dataB64: string, mediaType: string, name?: string): Promise<unknown>
@@ -491,6 +493,37 @@ export function createAdapter(ctx: Context): DshAdapter {
       } catch {
         return null
       }
+    },
+
+    async openSession(id, route) {
+      const registry = agents()
+      if (registry === undefined) return
+      // 已有 live agent 则跳过（命令目录/当前模型可直接查询）
+      if (registry.get(id as SessionId) !== undefined) return
+      // 拿 cwd（live session header 优先，否则持久化 meta）
+      let cwd: string | undefined
+      const live = ctx.sessions.get(id as SessionId) as LiveSessionLike | undefined
+      if (live) cwd = live.header.cwd
+      else {
+        const per = persistence()
+        if (per) {
+          try {
+            const { meta } = await per.readFrom(id, 0)
+            const m = meta as { cwd?: string } | undefined
+            cwd = m?.cwd
+          } catch {
+            // 忽略，无 cwd 也可挂 agent
+          }
+        }
+      }
+      // resume/挂 agent 到已有 session（agents.create 的 prepare 会加载已有 session）
+      await (registry as unknown as {
+        create(options: { sessionId: string; meta: { cwd?: string }; agentOptions: { provider: string; model: string } }): Promise<unknown>
+      }).create({
+        sessionId: id,
+        meta: cwd !== undefined ? { cwd } : {},
+        agentOptions: { provider: route.provider, model: route.model },
+      })
     },
 
     async sendUserMessage(id, text, imageRefs) {

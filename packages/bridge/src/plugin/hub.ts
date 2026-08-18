@@ -179,6 +179,12 @@ export class BridgeHub {
         if (typeof sessionId !== 'string') return fail('bad-request', 'sessionId required')
         const slice = await this.adapter.readSlice(sessionId, 0)
         if (slice === null) return fail('not-found', `unknown session ${sessionId}`)
+        // 挂 live agent（无 agent 时），使命令目录/当前模型可查询
+        try {
+          await this.adapter.openSession(sessionId, this.opts.defaultModel)
+        } catch {
+          // 挂 agent 失败不阻塞打开（只影响命令/模型目录查询）
+        }
         for (const c of this.conns.values()) {
           if (c.authed) c.subscribed.add(sessionId)
         }

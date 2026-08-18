@@ -36,8 +36,9 @@ async function main() {
   const ws = await rpc('workspaces', 'list', {})
   console.log('workspaces.list:', JSON.stringify(ws.response))
 
-  // 用真实 sessionId 查命令（空字符串会因 agent 查不到而返回空）
+  // 用真实 sessionId 查命令（需先 open 挂 agent）
   const firstSessionId = sessionList[0]?.id ?? ''
+  await rpc('sessions', 'open', { sessionId: firstSessionId })
   const cmds = await rpc('commands', 'list', { sessionId: firstSessionId })
   console.log('commands.list(sessionId=%s):', firstSessionId, JSON.stringify(cmds.response))
 

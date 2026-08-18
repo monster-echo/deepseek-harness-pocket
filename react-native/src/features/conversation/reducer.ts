@@ -59,10 +59,12 @@ export interface SessionView {
   readonly turnStartAt: number
   /** 回合内各 step usage 聚合（turn/end 写入统计行后清零） */
   readonly turnUsage: { input: number; output: number }
+  /** 当前权限档位（permission/preset last-wins；null 未知） */
+  readonly permissionCurrent: string | null
 }
 
 export const emptySessionView: SessionView = {
-  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 },
+  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 }, permissionCurrent: null,
 }
 
 // ---------- dsh 事件负载工具 ----------
@@ -157,6 +159,7 @@ interface MutableState {
   agentStatus: SessionView['agentStatus']
   turnStartAt: number
   turnUsage: { input: number; output: number }
+  permissionCurrent: string | null
 }
 
 function ensureStreamingAssistant(state: MutableState, key: string): number {
@@ -197,6 +200,7 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     agentStatus: view.agentStatus,
     turnStartAt: view.turnStartAt,
     turnUsage: { ...view.turnUsage },
+    permissionCurrent: view.permissionCurrent,
   }
 
   switch (event.type) {
@@ -345,6 +349,12 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       break
     }
 
+    case 'permission/preset': {
+      const preset = data['preset']
+      if (typeof preset === 'string') state.permissionCurrent = preset
+      break
+    }
+
     case 'compaction/summary': {
       // 对齐 dsh CompactionItem：折叠行「压缩 · N 条 · M tokens」，展开为摘要正文
       const shadowed = data['shadowedSeqs']
@@ -378,6 +388,7 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     agentStatus: state.agentStatus,
     turnStartAt: state.turnStartAt,
     turnUsage: state.turnUsage,
+    permissionCurrent: state.permissionCurrent,
   }
 }
 

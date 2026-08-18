@@ -97,6 +97,57 @@ function createAdapter(ctx) {
       }
       return [...summaries.values()].sort((a, b) => b.createdAt - a.createdAt);
     },
+    async permissionOptions() {
+      const presets = ctx.get("permissionPresets");
+      if (presets === void 0) return { names: [], default: "" };
+      return { names: presets.names, default: presets.defaultPreset };
+    },
+    async setPermission(sessionId, preset) {
+      const presets = ctx.get("permissionPresets");
+      const session = ctx.sessions.get(sessionId);
+      if (presets === void 0 || session === void 0) {
+        throw new Error("\u6743\u9650\u670D\u52A1\u4E0D\u53EF\u7528\u6216\u4F1A\u8BDD\u4E0D\u5B58\u5728");
+      }
+      presets.set(session, preset);
+    },
+    async listCommands(sessionId) {
+      const commands = ctx.get("commands");
+      const registry = agents();
+      const agent = registry?.get(sessionId);
+      if (commands === void 0 || agent === void 0) return [];
+      try {
+        return commands.list(agent);
+      } catch {
+        return [];
+      }
+    },
+    async listModels(sessionId) {
+      const llm = ctx.get("llm");
+      const registry = agents();
+      const agent = registry?.get(sessionId);
+      const current = agent?.options !== void 0 && typeof agent.options.provider === "string" && typeof agent.options.model === "string" ? { provider: agent.options.provider, model: agent.options.model } : null;
+      if (llm === void 0) return { providers: [], current };
+      try {
+        return { providers: llm.listProviders(), current };
+      } catch {
+        return { providers: [], current };
+      }
+    },
+    async listPresets() {
+      const presets = ctx.get("agentPresets");
+      if (presets === void 0) return [];
+      try {
+        const list = await presets.list();
+        return list.map((entry) => ({
+          id: entry.id,
+          ...entry.name !== void 0 ? { name: entry.name } : {},
+          ...entry.description !== void 0 ? { description: entry.description } : {},
+          isDefault: entry.isDefault === true
+        }));
+      } catch {
+        return [];
+      }
+    },
     async listWorkspaces() {
       const registry = ctx.get("workspaceRegistry");
       if (registry === void 0) return [];
@@ -140,12 +191,12 @@ function createAdapter(ctx) {
         return null;
       }
     },
-    async createSession(cwd, route) {
+    async createSession(cwd, route, agentPreset) {
       const registry = agents();
       if (registry === void 0) throw new Error("no agent factory (dsh \u672A\u8FD0\u884C agent loop)");
       const handle = await registry.create({
         sessionId: randomUUID(),
-        meta: { cwd },
+        meta: agentPreset !== void 0 ? { cwd, agentPreset } : { cwd },
         agentOptions: { provider: route.provider, model: route.model }
       });
       return handle.agent.id.toString();
@@ -574,7 +625,8 @@ var BridgeHub = class {
         }
         const provider = typeof req.args["provider"] === "string" ? req.args["provider"] : this.opts.defaultModel.provider;
         const model = typeof req.args["model"] === "string" ? req.args["model"] : this.opts.defaultModel.model;
-        const sessionId = await this.adapter.createSession(cwd, { provider, model });
+        const agentPreset = typeof req.args["agentPreset"] === "string" ? req.args["agentPreset"] : void 0;
+        const sessionId = await this.adapter.createSession(cwd, { provider, model }, agentPreset);
         return rpcSuccess(req.id, { sessionId });
       }
       case "sessions.fork": {
@@ -594,6 +646,45 @@ var BridgeHub = class {
         } catch (error) {
           return fail("bad-request", error instanceof Error ? error.message : "fork failed");
         }
+      }
+      case "permissions.options": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
+        if (denied) return denied;
+        return rpcSuccess(req.id, await this.adapter.permissionOptions());
+      }
+      case "permissions.set": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const sessionId = req.args["sessionId"];
+        const preset = req.args["preset"];
+        if (typeof sessionId !== "string" || typeof preset !== "string") {
+          return fail("bad-request", "sessionId and preset required");
+        }
+        try {
+          await this.adapter.setPermission(sessionId, preset);
+          return rpcSuccess(req.id, { ok: true });
+        } catch (error) {
+          return fail("bad-request", error instanceof Error ? error.message : "set failed");
+        }
+      }
+      case "commands.list": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
+        if (denied) return denied;
+        const sessionId = req.args["sessionId"];
+        if (typeof sessionId !== "string") return fail("bad-request", "sessionId required");
+        return rpcSuccess(req.id, { commands: await this.adapter.listCommands(sessionId) });
+      }
+      case "models.list": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
+        if (denied) return denied;
+        const sessionIdRaw = req.args["sessionId"];
+        const sessionId = typeof sessionIdRaw === "string" ? sessionIdRaw : "";
+        return rpcSuccess(req.id, await this.adapter.listModels(sessionId));
+      }
+      case "presets.list": {
+        const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled");
+        if (denied) return denied;
+        return rpcSuccess(req.id, { presets: await this.adapter.listPresets() });
       }
       case "messages.send": {
         const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");

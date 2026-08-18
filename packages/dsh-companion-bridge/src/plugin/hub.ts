@@ -251,7 +251,8 @@ export class BridgeHub {
         }
         const provider = typeof req.args['provider'] === 'string' ? req.args['provider'] : this.opts.defaultModel.provider
         const model = typeof req.args['model'] === 'string' ? req.args['model'] : this.opts.defaultModel.model
-        const sessionId = await this.adapter.createSession(cwd, { provider, model })
+        const agentPreset = typeof req.args['agentPreset'] === 'string' ? req.args['agentPreset'] : undefined
+        const sessionId = await this.adapter.createSession(cwd, { provider, model }, agentPreset)
         return rpcSuccess(req.id, { sessionId })
       }
 
@@ -274,6 +275,52 @@ export class BridgeHub {
         } catch (error) {
           return fail('bad-request', error instanceof Error ? error.message : 'fork failed')
         }
+      }
+
+      case 'permissions.options': {
+        const denied = denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled')
+        if (denied) return denied
+        return rpcSuccess(req.id, await this.adapter.permissionOptions())
+      }
+
+      case 'permissions.set': {
+        const denied =
+          denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const sessionId = req.args['sessionId']
+        const preset = req.args['preset']
+        if (typeof sessionId !== 'string' || typeof preset !== 'string') {
+          return fail('bad-request', 'sessionId and preset required')
+        }
+        try {
+          await this.adapter.setPermission(sessionId, preset)
+          return rpcSuccess(req.id, { ok: true })
+        } catch (error) {
+          return fail('bad-request', error instanceof Error ? error.message : 'set failed')
+        }
+      }
+
+      case 'commands.list': {
+        const denied = denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled')
+        if (denied) return denied
+        const sessionId = req.args['sessionId']
+        if (typeof sessionId !== 'string') return fail('bad-request', 'sessionId required')
+        return rpcSuccess(req.id, { commands: await this.adapter.listCommands(sessionId) })
+      }
+
+      case 'models.list': {
+        const denied = denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled')
+        if (denied) return denied
+        const sessionIdRaw = req.args['sessionId']
+        const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw : ''
+        return rpcSuccess(req.id, await this.adapter.listModels(sessionId))
+      }
+
+      case 'presets.list': {
+        const denied = denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled')
+        if (denied) return denied
+        return rpcSuccess(req.id, { presets: await this.adapter.listPresets() })
       }
 
       case 'messages.send': {

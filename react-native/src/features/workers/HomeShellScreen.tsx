@@ -11,6 +11,7 @@ import { useApp } from '../../state/AppStore';
 import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
 import { ConversationScreen } from '../conversation/ConversationScreen';
+import { SessionMenuSheet } from '../conversation/SessionMenuSheet';
 import { SessionSidebar } from './SessionSidebar';
 
 const SIDEBAR_WIDTH = 300
@@ -19,6 +20,7 @@ export function HomeShellScreen() {
   const { palette } = usePreferences();
   const { navigate } = useApp();
   const [open, setOpen] = useState(false);
+  const [menu, setMenu] = useState(false);
   const translate = useState(new Animated.Value(-SIDEBAR_WIDTH))[0];
   const connectGateway = useDshStore((s) => s.connectGateway);
   const workers = useDshStore((s) => s.workers);
@@ -62,6 +64,11 @@ export function HomeShellScreen() {
                 : '网关未连接'}
           </Text>
         </View>
+        {hasWorker && (
+          <Pressable style={styles.menuButton} onPress={() => setMenu(true)} hitSlop={8}>
+            <AppIcon name="settings" color={palette.text} size={20} />
+          </Pressable>
+        )}
         {!hasWorker && (
           <Pressable style={[styles.addPair, { backgroundColor: palette.brand }]} onPress={() => navigate('dsh.pair')}>
             <Text style={styles.addPairText}>配对电脑</Text>
@@ -73,6 +80,8 @@ export function HomeShellScreen() {
       <View style={styles.main}>
         {!hasWorker ? <EmptyWorker /> : <ConversationScreen />}
       </View>
+
+      <SessionMenuSheet visible={menu} onClose={() => setMenu(false)} />
 
       {/* 侧边栏抽屉 */}
       {open && (

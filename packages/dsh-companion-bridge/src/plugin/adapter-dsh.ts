@@ -98,6 +98,15 @@ export interface DshAdapter {
   dshVersion(): string | null
   listSessions(): Promise<readonly SessionSummary[]>
   listWorkspaces(): Promise<readonly WorkspaceSummary[]>
+  /** 权限档位目录与默认值（dsh permissionPresets） */
+  permissionOptions(): Promise<{ names: readonly string[]; default: string }>
+  setPermission(sessionId: string, preset: string): Promise<void>
+  /** 会话可用斜杠命令目录 */
+  listCommands(sessionId: string): Promise<readonly { name: string; description: string }[]>
+  /** 模型目录（provider/模型列表）+ 会话当前选择 */
+  listModels(sessionId: string): Promise<{ providers: readonly { id: string; models: readonly { id: string; name?: string }[] }[]; current: { provider: string; model: string } | null }>
+  /** agent preset 目录（standard/code/minimal/…） */
+  listPresets(): Promise<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]>
   /** 列目录（仅目录，隐藏目录排后）；供手机端目录树浏览 */
   listDir(path: string): Promise<readonly DirEntry[]>
   /** Worker 端用户 home（目录树起点） */
@@ -105,7 +114,7 @@ export interface DshAdapter {
   /** 添加 workspace（按绝对路径）；已存在时幂等返回既有记录 */
   addWorkspace(path: string): Promise<WorkspaceSummary | null>
   /** 在指定 cwd 创建新会话（M3）；返回 sessionId */
-  createSession(cwd: string, route: { provider: string; model: string }): Promise<string>
+  createSession(cwd: string, route: { provider: string; model: string }, agentPreset?: string): Promise<string>
   /** 从既有会话分叉（dsh fork：取平衡的已完成回合前缀作种子）并挂 agent；返回新 sessionId */
   forkSession(sessionId: string, route: { provider: string; model: string }, boundary?: number): Promise<string>
   readSlice(id: string, fromSeq: number): Promise<SessionSlice | null>
@@ -209,6 +218,74 @@ export function createAdapter(ctx: Context): DshAdapter {
       return [...summaries.values()].sort((a, b) => b.createdAt - a.createdAt)
     },
 
+    async permissionOptions() {
+      const presets = ctx.get('permissionPresets') as
+        | { names: readonly string[]; defaultPreset: string }
+        | undefined
+      if (presets === undefined) return { names: [], default: '' }
+      return { names: presets.names, default: presets.defaultPreset }
+    },
+
+    async setPermission(sessionId, preset) {
+      const presets = ctx.get('permissionPresets') as
+        | { set(session: unknown, name: string): void }
+        | undefined
+      const session = ctx.sessions.get(sessionId as SessionId)
+      if (presets === undefined || session === undefined) {
+        throw new Error('权限服务不可用或会话不存在')
+      }
+      presets.set(session, preset)
+    },
+
+    async listCommands(sessionId) {
+      const commands = ctx.get('commands') as
+        | { list(agent: unknown): readonly { name: string; description: string }[] }
+        | undefined
+      const registry = agents()
+      const agent = registry?.get(sessionId as SessionId)
+      if (commands === undefined || agent === undefined) return []
+      try {
+        return commands.list(agent)
+      } catch {
+        return []
+      }
+    },
+
+    async listModels(sessionId) {
+      const llm = ctx.get('llm') as
+        | { listProviders(): readonly { id: string; models: readonly { id: string; name?: string }[] }[] }
+        | undefined
+      const registry = agents()
+      const agent = registry?.get(sessionId as SessionId) as { options?: { provider?: string; model?: string } } | undefined
+      const current = agent?.options !== undefined && typeof agent.options.provider === 'string' && typeof agent.options.model === 'string'
+        ? { provider: agent.options.provider, model: agent.options.model }
+        : null
+      if (llm === undefined) return { providers: [], current }
+      try {
+        return { providers: llm.listProviders(), current }
+      } catch {
+        return { providers: [], current }
+      }
+    },
+
+    async listPresets() {
+      const presets = ctx.get('agentPresets') as
+        | { list(): Promise<readonly { id: string; name?: string; description?: string; isDefault?: boolean }[]> }
+        | undefined
+      if (presets === undefined) return []
+      try {
+        const list = await presets.list()
+        return list.map((entry) => ({
+          id: entry.id,
+          ...(entry.name !== undefined ? { name: entry.name } : {}),
+          ...(entry.description !== undefined ? { description: entry.description } : {}),
+          isDefault: entry.isDefault === true,
+        }))
+      } catch {
+        return []
+      }
+    },
+
     async listWorkspaces() {
       const registry = ctx.get('workspaceRegistry') as
         | { list(): readonly { id: { toString(): string }; path: string; title: string }[] }
@@ -271,18 +348,18 @@ export function createAdapter(ctx: Context): DshAdapter {
       }
     },
 
-    async createSession(cwd, route) {
+    async createSession(cwd, route, agentPreset) {
       const registry = agents()
       if (registry === undefined) throw new Error('no agent factory (dsh 未运行 agent loop)')
       const handle = await (registry as unknown as {
         create(options: {
           sessionId: string
-          meta: { cwd: string }
+          meta: { cwd: string; agentPreset?: string }
           agentOptions: { provider: string; model: string }
         }): Promise<{ agent: { id: { toString(): string } } }>
       }).create({
         sessionId: randomUUID(),
-        meta: { cwd },
+        meta: agentPreset !== undefined ? { cwd, agentPreset } : { cwd },
         agentOptions: { provider: route.provider, model: route.model },
       })
       return handle.agent.id.toString()

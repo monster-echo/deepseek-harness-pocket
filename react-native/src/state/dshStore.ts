@@ -34,6 +34,15 @@ interface DshState {
   sendMessage(text: string): Promise<void>
   stopTurn(): Promise<void>
   respondPermission(requestId: string, decision: 'allow' | 'deny'): Promise<void>
+  permissionOptions(): Promise<{ names: string[]; default: string }>
+  setPermission(preset: string): Promise<void>
+  listCommands(): Promise<readonly { name: string; description: string }[]>
+  listModels(): Promise<{ providers: readonly { id: string; models: readonly { id: string; name?: string }[] }[]; current: { provider: string; model: string } | null }>
+  listPresets(): Promise<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]>
+  /** 新会话默认：模型路由与 agent preset（发起端记录） */
+  newSessionDefaults: { provider: string; model: string } | null
+  newSessionPreset: string
+  setNewSessionDefaults(route: { provider: string; model: string } | null, preset?: string): void
   respondQuestion(requestId: string, answer: string): Promise<void>
 }
 
@@ -92,6 +101,8 @@ export const useDshStore = create<DshState>((set, get) => {
     sessionView: emptySessionView,
     serverRequests: [],
     notice: null,
+    newSessionDefaults: null,
+    newSessionPreset: '',
 
     connectGateway() {
       ensureGateway()
@@ -164,8 +175,11 @@ export const useDshStore = create<DshState>((set, get) => {
 
     async createSession(cwd) {
       if (client === null) return null
+      const state = get()
       try {
-        const sessionId = await client.createSession(cwd)
+        const sessionId = state.newSessionDefaults !== null
+          ? await client.createSessionWithRoute(cwd, state.newSessionDefaults.provider, state.newSessionDefaults.model, state.newSessionPreset.length > 0 ? state.newSessionPreset : undefined)
+          : await client.createSession(cwd)
         await get().refreshSessions()
         await get().openSession(sessionId)
         return sessionId
@@ -217,6 +231,62 @@ export const useDshStore = create<DshState>((set, get) => {
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
       }
+    },
+
+    async permissionOptions() {
+      if (client === null) return { names: [], default: '' }
+      try {
+        return await client.permissionOptions()
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+        return { names: [], default: '' }
+      }
+    },
+
+    async setPermission(preset) {
+      const sessionId = get().activeSessionId
+      if (client === null || sessionId === null) return
+      try {
+        await client.setPermission(sessionId, preset)
+        setNotice(set, `权限已切换为 ${preset}`)
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+      }
+    },
+
+    async listCommands() {
+      const sessionId = get().activeSessionId
+      if (client === null) return []
+      try {
+        return await client.listCommands(sessionId ?? '')
+      } catch {
+        return []
+      }
+    },
+
+    async listModels() {
+      if (client === null) return { providers: [], current: null }
+      try {
+        return await client.listModels(get().activeSessionId ?? '')
+      } catch {
+        return { providers: [], current: null }
+      }
+    },
+
+    async listPresets() {
+      if (client === null) return []
+      try {
+        return await client.listPresets()
+      } catch {
+        return []
+      }
+    },
+
+    setNewSessionDefaults(route, preset) {
+      set({
+        newSessionDefaults: route,
+        ...(preset !== undefined ? { newSessionPreset: preset } : {}),
+      })
     },
 
     async respondPermission(requestId, decision) {

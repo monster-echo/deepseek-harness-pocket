@@ -171,6 +171,46 @@ export class DshClient {
     return (response.result as { sessionId: string }).sessionId
   }
 
+  async createSessionWithRoute(cwd: string, provider: string, model: string, agentPreset?: string): Promise<string> {
+    const response = await this.rpc('sessions', 'create', {
+      cwd,
+      provider,
+      model,
+      ...(agentPreset !== undefined ? { agentPreset } : {}),
+    })
+    if (!response.ok) throw new Error(response.error.message)
+    return (response.result as { sessionId: string }).sessionId
+  }
+
+  async permissionOptions(): Promise<{ names: string[]; default: string }> {
+    const response = await this.rpc('permissions', 'options', {})
+    if (!response.ok) throw new Error(response.error.message)
+    return response.result as { names: string[]; default: string }
+  }
+
+  async setPermission(sessionId: string, preset: string): Promise<void> {
+    const response = await this.rpc('permissions', 'set', { sessionId, preset })
+    if (!response.ok) throw new Error(response.error.message)
+  }
+
+  async listCommands(sessionId: string): Promise<readonly { name: string; description: string }[]> {
+    const response = await this.rpc('commands', 'list', { sessionId })
+    if (!response.ok) throw new Error(response.error.message)
+    return (response.result as { commands: { name: string; description: string }[] }).commands
+  }
+
+  async listModels(sessionId: string): Promise<{ providers: readonly { id: string; models: readonly { id: string; name?: string }[] }[]; current: { provider: string; model: string } | null }> {
+    const response = await this.rpc('models', 'list', sessionId.length > 0 ? { sessionId } : {})
+    if (!response.ok) throw new Error(response.error.message)
+    return response.result as { providers: readonly { id: string; models: readonly { id: string; name?: string }[] }[]; current: { provider: string; model: string } | null }
+  }
+
+  async listPresets(): Promise<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]> {
+    const response = await this.rpc('presets', 'list', {})
+    if (!response.ok) throw new Error(response.error.message)
+    return (response.result as { presets: { id: string; name?: string; description?: string; isDefault: boolean }[] }).presets
+  }
+
   async sendMessage(sessionId: string, text: string): Promise<void> {
     const response = await this.rpc('messages', 'send', { sessionId, text })
     if (!response.ok) throw new Error(response.error.message)

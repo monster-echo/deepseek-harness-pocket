@@ -105,6 +105,24 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
       const slice = s.events.filter((e) => e.seq >= fromSeq)
       return { id, fromSeq, toSeq: slice.length > 0 ? slice[slice.length - 1]!.seq : fromSeq - 1, events: slice }
     },
+    async permissionOptions() {
+      return { names: ['workspace-write', 'danger-full-access'], default: 'workspace-write' }
+    },
+    async setPermission(sessionId: string, preset: string) {
+      void sessionId; void preset
+    },
+    async listCommands(sessionId: string) {
+      return [{ name: 'compact', description: '压缩上下文' }, { name: 'plan', description: '计划模式' }]
+    },
+    async listModels(sessionId: string) {
+      return {
+        providers: [{ id: 'deepseek-official', models: [{ id: 'deepseek-v4-flash' }, { id: 'deepseek-v4-pro' }] }],
+        current: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+      }
+    },
+    async listPresets() {
+      return [{ id: 'standard', isDefault: true }, { id: 'code', isDefault: false }, { id: 'minimal', isDefault: false }]
+    },
     async listWorkspaces() {
       return [{ id: 'ws-1', path: '/tmp/proj', title: 'proj' }]
     },
@@ -116,8 +134,8 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
     homePath() {
       return '/Users/e2e'
     },
-    async createSession(cwd: string, route: { provider: string; model: string }) {
-      return `new-session-${cwd}-${route.model}`
+    async createSession(cwd: string, route: { provider: string; model: string }, agentPreset?: string) {
+      return `new-session-${cwd}-${route.model}-${agentPreset ?? 'standard'}`
     },
     async forkSession(sessionId: string, route: { provider: string; model: string }, boundary?: number) {
       return `fork-of-${sessionId}-at-${boundary ?? 'head'}`

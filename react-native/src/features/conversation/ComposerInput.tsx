@@ -28,6 +28,7 @@ export function ComposerInput(props: Readonly<{
         value={props.text}
         onChangeText={props.onChangeText}
         multiline
+        numberOfLines={1}
       />
       {props.running ? (
         <Pressable style={styles.sendInline} onPress={props.onStop} hitSlop={6}>

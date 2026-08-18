@@ -10,6 +10,7 @@ import { NotificationItem, OrderView } from '../domain/models';
 import type { OrderStatus } from '../payment/paymentModels';
 import { AppRoute } from '../navigation/routes';
 import { useApp } from '../state/AppStore';
+import { useDshStore } from '../state/dshStore';
 import { styles } from '../theme/styles';
 import { NotificationCard } from '../notifications/NotificationCard';
 import { spacing } from '../theme/tokens';
@@ -104,6 +105,8 @@ export function OrdersScreen() {
 
 export function AboutScreen() {
   const { config, online } = useApp();
+  const handshake = useDshStore((s) => s.workerHandshake);
+  const activeWorker = useDshStore((s) => s.workers.find((w) => w.workerId === s.activeWorkerId));
   return (
     <View style={styles.page}>
       <PageHeader title="关于与版本" />
@@ -118,6 +121,14 @@ export function AboutScreen() {
           <ListRow label="配置 Schema" value={`v${config.schemaVersion}`} />
           <ListRow label="服务状态" value={online ? '在线' : '离线缓存'} />
         </AppCard>
+        {/* Worker 信息（替代桌面「打开配置文件」：展示当前 worker 的指纹/协议/版本） */}
+        {handshake !== null && (
+          <AppCard>
+            <ListRow label="Worker 名称" value={activeWorker?.name ?? handshake.name} />
+            <ListRow label="主机指纹" value={handshake.fingerprint.slice(0, 12)} />
+            <ListRow label="协议版本" value={handshake.protocolVersion} />
+          </AppCard>
+        )}
       </ScrollView>
     </View>
   );

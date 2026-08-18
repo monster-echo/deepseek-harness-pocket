@@ -291,7 +291,7 @@ const markdownRules = {
   fence: (node: { content: string; sourceInfo?: string }, _children: unknown, _parent: unknown, _styles: unknown): React.JSX.Element => {
     const language = (node.sourceInfo ?? '').trim() || 'text'
     return (
-      <SyntaxHighlighter language={language} style={docco} highlighter="prism" fontSize={12}>
+      <SyntaxHighlighter language={language} style={docco} highlighter="hljs" fontSize={12}>
         {node.content}
       </SyntaxHighlighter>
     )

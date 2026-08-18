@@ -268,7 +268,9 @@ function createAdapter(ctx) {
       try {
         const session = ctx.sessions.get(sessionId);
         if (session === void 0) return null;
-        const snap = ctx.sessionProjections.snapshot(session);
+        const proj = ctx.get("sessionProjections");
+        if (proj === void 0) return null;
+        const snap = proj.snapshot(session);
         const pressure = snap.values["contextPressure"];
         const breakdown = snap.values["contextBreakdown"];
         return {

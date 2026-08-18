@@ -467,7 +467,9 @@ export function createAdapter(ctx: Context): DshAdapter {
       try {
         const session = ctx.sessions.get(sessionId as SessionId)
         if (session === undefined) return null
-        const snap = ctx.sessionProjections.snapshot(session)
+        const proj = ctx.get('sessionProjections') as { snapshot(session: unknown): { values: Record<string, unknown> } } | undefined
+        if (proj === undefined) return null
+        const snap = proj.snapshot(session)
         const pressure = snap.values['contextPressure'] as { projectedTokens?: number; contextWindow?: number } | undefined
         const breakdown = snap.values['contextBreakdown'] as { systemTokens?: number; toolsTokens?: number; messageTokens?: number } | undefined
         return {

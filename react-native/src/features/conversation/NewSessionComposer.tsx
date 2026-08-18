@@ -20,6 +20,7 @@ import { usePreferences } from "../../preferences/PreferencesProvider";
 import { useDshStore } from "../../state/dshStore";
 import { spacing, radii } from "../../theme/tokens";
 import { DirectoryPickerSheet } from "../workers/DirectoryPickerSheet";
+import { Sheet } from "../../design-system/Sheet";
 
 // ---------- 静态目录（展示名 → dsh 标识） ----------
 
@@ -261,7 +262,7 @@ export function NewSessionComposer(
       </View>
 
       {/* ===== Bottom Sheets ===== */}
-      <BottomSheet visible={sheet === "project"} title="选择工作区项目" onClose={() => setSheet(null)}>
+      <Sheet visible={sheet === "project"} title="选择工作区项目" onClose={() => setSheet(null)} scrollable snapPoints={["50%", "85%"]}>
         {workspaces.map((w) => (
           <SheetRow key={w.id} selected={path === w.path} onPress={() => { setPath(w.path); setSheet(null) }} label={w.title} sub={w.path} icon="home" />
         ))}
@@ -270,9 +271,9 @@ export function NewSessionComposer(
           <AppIcon name="plus" color={palette.brand} size={14} />
           <Text style={[styles.addText, { color: palette.brand }]}>浏览电脑目录添加…</Text>
         </Pressable>
-      </BottomSheet>
+      </Sheet>
 
-      <BottomSheet visible={sheet === "mode"} title="选择运行模式" onClose={() => setSheet(null)}>
+      <Sheet visible={sheet === "mode"} title="选择运行模式" onClose={() => setSheet(null)} scrollable snapPoints={["65%", "92%"]}>
         {MODES.map((m) => (
           <Pressable
             key={m.id}
@@ -295,9 +296,9 @@ export function NewSessionComposer(
             )}
           </Pressable>
         ))}
-      </BottomSheet>
+      </Sheet>
 
-      <BottomSheet visible={sheet === "commands"} title="快捷命令" onClose={() => setSheet(null)}>
+      <Sheet visible={sheet === "commands"} title="快捷命令" onClose={() => setSheet(null)} scrollable snapPoints={["55%", "85%"]}>
         {commands.map((cmd) => {
           const kind = COMMAND_KINDS[cmd.name] ?? "text"
           return (
@@ -314,9 +315,9 @@ export function NewSessionComposer(
             </Pressable>
           )
         })}
-      </BottomSheet>
+      </Sheet>
 
-      <BottomSheet visible={sheet === "permission"} title="工作区权限设置" onClose={() => setSheet(null)}>
+      <Sheet visible={sheet === "permission"} title="工作区权限设置" onClose={() => setSheet(null)} snapPoints={["55%"]}>
         {PERMISSIONS.map((p) => {
           const selected = permission === p.id
           return (
@@ -340,9 +341,9 @@ export function NewSessionComposer(
             </Pressable>
           )
         })}
-      </BottomSheet>
+      </Sheet>
 
-      <BottomSheet visible={sheet === "model"} title="模型与推理设置" onClose={() => setSheet(null)}>
+      <Sheet visible={sheet === "model"} title="模型与推理设置" onClose={() => setSheet(null)} scrollable snapPoints={["70%", "95%"]}>
         {/* 推理档三段 */}
         <View style={[styles.reasonBox, { backgroundColor: palette.surfaceMuted }]}>
           <Text style={[styles.reasonTitle, { color: palette.text }]}>推理 Thinking (CoT)</Text>
@@ -370,7 +371,7 @@ export function NewSessionComposer(
         <Pressable style={({ pressed }) => [styles.confirmButton, { backgroundColor: palette.brand }, pressed && { opacity: 0.85 }]} onPress={() => setSheet(null)}>
           <Text style={styles.confirmText}>确定</Text>
         </Pressable>
-      </BottomSheet>
+      </Sheet>
 
       {/* Full access 风险确认 */}
       <Modal visible={fullAccessConfirm} transparent animationType="fade" onRequestClose={() => setFullAccessConfirm(false)}>
@@ -427,29 +428,6 @@ function Chip(props: Readonly<{ icon: IconName; label: string; onPress: () => vo
       <Text style={[styles.chipText, { color: palette.text }]} numberOfLines={1}>{props.label}</Text>
       <Text style={[styles.chev, { color: palette.textSecondary }]}>▾</Text>
     </Pressable>
-  )
-}
-
-function BottomSheet(props: Readonly<{ visible: boolean; title: string; onClose: () => void; children: React.ReactNode }>): React.JSX.Element | null {
-  const { palette } = usePreferences()
-  if (!props.visible) return null
-  return (
-    <Modal visible transparent animationType="slide" onRequestClose={props.onClose}>
-      <Pressable style={[styles.scrim, { backgroundColor: palette.scrim }]} onPress={props.onClose}>
-        <Pressable style={[styles.sheet, { backgroundColor: palette.surface }]} onPress={(e) => e.stopPropagation()}>
-          <View style={[styles.grabber, { backgroundColor: palette.border }]} />
-          <View style={[styles.sheetHeader, { borderBottomColor: palette.border }]}>
-            <Text style={[styles.sheetTitle, { color: palette.text }]}>{props.title}</Text>
-            <Pressable onPress={props.onClose} hitSlop={8}>
-              <AppIcon name="close" color={palette.textSecondary} size={16} />
-            </Pressable>
-          </View>
-          <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ paddingBottom: spacing.x4 }}>
-            {props.children}
-          </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
   )
 }
 

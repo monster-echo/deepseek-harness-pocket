@@ -8,6 +8,7 @@ import { AppIcon } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
+import { Sheet } from '../../design-system/Sheet';
 
 const PERMISSION_LABELS: Readonly<Record<string, string>> = {
   'workspace-write': '工作区可写',
@@ -26,8 +27,11 @@ const PRESET_LABELS: Readonly<Record<string, string>> = {
 
 type Tab = 'main' | 'permission' | 'model' | 'preset' | 'commands'
 
+const TAB_TITLES: Readonly<Record<Tab, string>> = {
+  main: '会话设置', permission: '会话权限', model: '模型', preset: '模式', commands: '命令',
+}
+
 export function SessionMenuSheet(props: Readonly<{ visible: boolean; initialTab?: Tab; onClose: () => void }>) {
-  const { palette } = usePreferences();
   const [tab, setTab] = useState<Tab>('main');
 
   useEffect(() => {
@@ -35,17 +39,13 @@ export function SessionMenuSheet(props: Readonly<{ visible: boolean; initialTab?
   }, [props.visible, props.initialTab])
 
   return (
-    <Modal visible={props.visible} transparent animationType="slide" onRequestClose={props.onClose}>
-      <Pressable style={[styles.scrim, { backgroundColor: palette.scrim }]} onPress={props.onClose}>
-        <Pressable style={[styles.sheet, { backgroundColor: palette.surface }]} onPress={(e) => e.stopPropagation()}>
-          {tab === 'main' && <MainTab onClose={props.onClose} onOpen={setTab} />}
-          {tab === 'permission' && <PermissionTab onBack={() => setTab('main')} />}
-          {tab === 'model' && <ModelTab onBack={() => setTab('main')} />}
-          {tab === 'preset' && <PresetTab onBack={() => setTab('main')} />}
-          {tab === 'commands' && <CommandsTab onClose={props.onClose} />}
-        </Pressable>
-      </Pressable>
-    </Modal>
+    <Sheet visible={props.visible} title={TAB_TITLES[tab]} onClose={props.onClose} scrollable snapPoints={["55%", "88%"]}>
+      {tab === 'main' && <MainTab onClose={props.onClose} onOpen={setTab} />}
+      {tab === 'permission' && <PermissionTab onBack={() => setTab('main')} />}
+      {tab === 'model' && <ModelTab onBack={() => setTab('main')} />}
+      {tab === 'preset' && <PresetTab onBack={() => setTab('main')} />}
+      {tab === 'commands' && <CommandsTab onClose={props.onClose} />}
+    </Sheet>
   )
 }
 
@@ -81,7 +81,7 @@ function MainTab(props: Readonly<{ onClose: () => void; onOpen: (tab: Tab) => vo
   ]
   return (
     <View>
-      <SheetHeader title="会话设置" onClose={props.onClose} />
+      <SheetHeader title=" " onClose={props.onClose} />
       {items.map((item) => (
         <Pressable key={item.key} style={[styles.row, { borderColor: palette.border }]} onPress={() => props.onOpen(item.key)}>
           <Text style={[styles.rowLabel, { color: palette.text }]}>{item.label}</Text>

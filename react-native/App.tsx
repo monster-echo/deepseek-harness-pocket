@@ -3,6 +3,8 @@ import { Platform, SafeAreaView } from 'react-native';
 import * as ExpoSplashScreen from 'expo-splash-screen';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { navigationRef } from './src/navigation/navigationRef';
 import { AppRoute } from './src/navigation/routes';
@@ -49,7 +51,9 @@ function AppSurface() {
   const resume = useCallback(() => { void refreshBootstrap(); }, [refreshBootstrap]);
   useEntryIntents(openEntryRoute, resume);
   return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <SafeAreaProvider>
+      <BottomSheetModalProvider>
       <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]}>
         <NavigationContainer
           ref={navigationRef}
@@ -65,6 +69,8 @@ function AppSurface() {
         </NavigationContainer>
         <FeedbackHost />
       </SafeAreaView>
+      </BottomSheetModalProvider>
     </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

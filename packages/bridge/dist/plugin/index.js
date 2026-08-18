@@ -264,6 +264,24 @@ function createAdapter(ctx) {
         return [];
       }
     },
+    async sessionContext(sessionId) {
+      try {
+        const session = ctx.sessions.get(sessionId);
+        if (session === void 0) return null;
+        const snap = ctx.sessionProjections.snapshot(session);
+        const pressure = snap.values["contextPressure"];
+        const breakdown = snap.values["contextBreakdown"];
+        return {
+          projectedTokens: pressure?.projectedTokens ?? 0,
+          contextWindow: pressure?.contextWindow ?? 0,
+          systemTokens: breakdown?.systemTokens ?? 0,
+          toolsTokens: breakdown?.toolsTokens ?? 0,
+          messageTokens: breakdown?.messageTokens ?? 0
+        };
+      } catch {
+        return null;
+      }
+    },
     async createSession(cwd, route, agentPreset) {
       const registry = agents();
       if (registry === void 0) throw new Error("no agent factory (dsh \u672A\u8FD0\u884C agent loop)");
@@ -756,6 +774,15 @@ var BridgeHub = class {
         const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
         if (denied) return denied;
         return rpcSuccess(req.id, { plugins: await this.adapter.listPlugins() });
+      }
+      case "session.context": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
+        if (denied) return denied;
+        const sessionId = req.args["sessionId"];
+        if (typeof sessionId !== "string") return fail("bad-request", "sessionId required");
+        const ctx = await this.adapter.sessionContext(sessionId);
+        if (ctx === null) return fail("not-found", "\u4E0A\u4E0B\u6587\u5360\u7528\u4E0D\u53EF\u7528");
+        return rpcSuccess(req.id, ctx);
       }
       case "sessions.create": {
         const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");

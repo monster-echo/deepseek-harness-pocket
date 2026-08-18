@@ -33,6 +33,7 @@ interface DshState {
   renameWorkspace(id: string, title: string): Promise<boolean>
   deleteWorkspace(id: string): Promise<boolean>
   listPlugins(): Promise<readonly { id: string; name: string; enabled: boolean }[]>
+  sessionContext(sessionId: string): Promise<{ projectedTokens: number; contextWindow: number; systemTokens: number; toolsTokens: number; messageTokens: number } | null>
   createSession(cwd: string, opts?: { reasoningEffort?: string; permission?: string }): Promise<string | null>
   forkSession(sessionId: string, boundary?: number): Promise<string | null>
   openSession(sessionId: string): Promise<void>
@@ -221,6 +222,15 @@ export const useDshStore = create<DshState>((set, get) => {
         return await client.listPlugins()
       } catch {
         return []
+      }
+    },
+
+    async sessionContext(sessionId) {
+      if (client === null) return null
+      try {
+        return await client.sessionContext(sessionId)
+      } catch {
+        return null
       }
     },
 

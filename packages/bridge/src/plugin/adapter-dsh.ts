@@ -43,6 +43,9 @@ declare module '@deepseek-ai/cordis' {
     loader: {
       entries(): Iterable<{ id: unknown; options: { name: string; group?: unknown }; disabled: boolean }>
     }
+    sessionProjections: {
+      snapshot(session: unknown): { values: Record<string, unknown> }
+    }
   }
 
   interface Events {
@@ -126,6 +129,8 @@ export interface DshAdapter {
   deleteWorkspace(id: string): Promise<boolean>
   /** 已加载插件列表（只读，cordis loader.entries） */
   listPlugins(): Promise<readonly { id: string; name: string; enabled: boolean }[]>
+  /** 上下文占用（token-meter projection：projectedTokens/contextWindow/system/tools/message） */
+  sessionContext(sessionId: string): Promise<{ projectedTokens: number; contextWindow: number; systemTokens: number; toolsTokens: number; messageTokens: number } | null>
   /** 在指定 cwd 创建新会话（M3）；返回 sessionId */
   createSession(cwd: string, route: { provider: string; model: string; reasoningEffort?: string }, agentPreset?: string): Promise<string>
   /** 从既有会话分叉（dsh fork：取平衡的已完成回合前缀作种子）并挂 agent；返回新 sessionId */
@@ -455,6 +460,25 @@ export function createAdapter(ctx: Context): DshAdapter {
         return plugins
       } catch {
         return []
+      }
+    },
+
+    async sessionContext(sessionId) {
+      try {
+        const session = ctx.sessions.get(sessionId as SessionId)
+        if (session === undefined) return null
+        const snap = ctx.sessionProjections.snapshot(session)
+        const pressure = snap.values['contextPressure'] as { projectedTokens?: number; contextWindow?: number } | undefined
+        const breakdown = snap.values['contextBreakdown'] as { systemTokens?: number; toolsTokens?: number; messageTokens?: number } | undefined
+        return {
+          projectedTokens: pressure?.projectedTokens ?? 0,
+          contextWindow: pressure?.contextWindow ?? 0,
+          systemTokens: breakdown?.systemTokens ?? 0,
+          toolsTokens: breakdown?.toolsTokens ?? 0,
+          messageTokens: breakdown?.messageTokens ?? 0,
+        }
+      } catch {
+        return null
       }
     },
 

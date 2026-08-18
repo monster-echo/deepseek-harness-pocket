@@ -56,6 +56,7 @@ export function ComposerBar(): React.JSX.Element | null {
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [permissionOpen, setPermissionOpen] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
+  const [contextOpen, setContextOpen] = useState(false)
   const sendMessage = useDshStore((s) => s.sendMessage)
   const stopTurn = useDshStore((s) => s.stopTurn)
   const uploadImage = useDshStore((s) => s.uploadImage)
@@ -208,9 +209,9 @@ export function ComposerBar(): React.JSX.Element | null {
         )}
       </View>
 
-      {/* 状态行：上下文剩余量圆环 · 模型 · 累计 tokens（#20/#21 精简行） */}
+      {/* 状态行：上下文剩余量圆环（可点击查看占用详情）· 累计 tokens */}
       {(usedTokens > 0 || contextPct > 0) && (
-        <View style={styles.statsLine}>
+        <Pressable style={styles.statsLine} onPress={() => setContextOpen(true)}>
           <Svg width={18} height={18} viewBox="0 0 20 20">
             <Circle cx="10" cy="10" r={R} stroke={palette.border} strokeWidth="2.5" fill="none" />
             <Circle
@@ -226,13 +227,54 @@ export function ComposerBar(): React.JSX.Element | null {
           <Text style={[styles.statsText, { color: palette.textSecondary }]}>
             {usedTokens > 0 ? ` · ${compact(usedTokens)} tok` : ''}
           </Text>
-        </View>
+        </Pressable>
       )}
 
+      <ContextUsageSheet visible={contextOpen} onClose={() => setContextOpen(false)} />
       <CommandPaletteSheet visible={commandsOpen} onClose={() => setCommandsOpen(false)} />
       <PermissionSheet visible={permissionOpen} onClose={() => setPermissionOpen(false)} onChanged={(label) => showToast(`权限已切换为 ${label}`, 'info')} />
       <ModelSheet visible={modelOpen} onClose={() => setModelOpen(false)} models={models} currentModel={modelLabel} onChanged={(m) => showToast(`已选模型 ${m.id}`, 'info')} />
     </View>
+  )
+}
+
+/** 上下文占用详情（对齐 dsh token-meter：系统提示词/工具/对话消息 + 用量/容量）。 */
+function ContextUsageSheet(props: Readonly<{ visible: boolean; onClose: () => void }>) {
+  const { palette } = usePreferences()
+  const [ctx, setCtx] = useState<{ projectedTokens: number; contextWindow: number; systemTokens: number; toolsTokens: number; messageTokens: number } | null>(null)
+  const activeSessionId = useDshStore((s) => s.activeSessionId)
+  const sessionContext = useDshStore((s) => s.sessionContext)
+  useEffect(() => {
+    if (!props.visible || activeSessionId === null) return
+    void sessionContext(activeSessionId).then(setCtx)
+  }, [props.visible, activeSessionId, sessionContext])
+  const pct = ctx !== null && ctx.contextWindow > 0 ? Math.round((ctx.projectedTokens / ctx.contextWindow) * 1000) / 10 : 0
+  const fmt = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n))
+  return (
+    <Sheet visible={props.visible} title="上下文占用" onClose={props.onClose} snapPoints={['50%']}>
+      {ctx === null ? (
+        <Text style={[styles.sheetHint, { color: palette.textSecondary }]}>上下文占用不可用（需活跃会话）</Text>
+      ) : (
+        <>
+          <Text style={[styles.ctxPct, { color: palette.text }]}>上下文已用 {pct}%</Text>
+          <Text style={[styles.ctxTotal, { color: palette.textSecondary, fontFamily: 'Menlo' }]}>
+            ~{fmt(ctx.projectedTokens)} / {fmt(ctx.contextWindow)}
+          </Text>
+          <View style={[styles.ctxRow, { borderTopColor: palette.border }]}>
+            <Text style={[styles.ctxLabel, { color: palette.textSecondary }]}>系统提示词</Text>
+            <Text style={[styles.ctxValue, { color: palette.text, fontFamily: 'Menlo' }]}>~{fmt(ctx.systemTokens)}</Text>
+          </View>
+          <View style={[styles.ctxRow, { borderTopColor: palette.border }]}>
+            <Text style={[styles.ctxLabel, { color: palette.textSecondary }]}>工具</Text>
+            <Text style={[styles.ctxValue, { color: palette.text, fontFamily: 'Menlo' }]}>~{fmt(ctx.toolsTokens)}</Text>
+          </View>
+          <View style={[styles.ctxRow, { borderTopColor: palette.border }]}>
+            <Text style={[styles.ctxLabel, { color: palette.textSecondary }]}>对话消息</Text>
+            <Text style={[styles.ctxValue, { color: palette.text, fontFamily: 'Menlo' }]}>~{fmt(ctx.messageTokens)}</Text>
+          </View>
+        </>
+      )}
+    </Sheet>
   )
 }
 
@@ -358,6 +400,11 @@ const styles = StyleSheet.create({
   statsLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.x1 },
   statsText: { fontSize: 11 },
   sheetHint: { fontSize: 12, paddingBottom: spacing.x2 },
+  ctxPct: { fontSize: 22, fontWeight: '700', textAlign: 'center', marginTop: spacing.x2 },
+  ctxTotal: { fontSize: 13, textAlign: 'center', marginTop: spacing.x1, marginBottom: spacing.x3 },
+  ctxRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.x2, borderTopWidth: StyleSheet.hairlineWidth },
+  ctxLabel: { fontSize: 14 },
+  ctxValue: { fontSize: 14 },
   optionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, marginBottom: spacing.x2 },
   optionText: { fontSize: 15 },
   optionSub: { fontSize: 11, marginTop: 2 },

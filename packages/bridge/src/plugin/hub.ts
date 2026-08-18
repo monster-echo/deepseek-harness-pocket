@@ -277,6 +277,16 @@ export class BridgeHub {
         return rpcSuccess(req.id, { plugins: await this.adapter.listPlugins() })
       }
 
+      case 'session.context': {
+        const denied = denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled')
+        if (denied) return denied
+        const sessionId = req.args['sessionId']
+        if (typeof sessionId !== 'string') return fail('bad-request', 'sessionId required')
+        const ctx = await this.adapter.sessionContext(sessionId)
+        if (ctx === null) return fail('not-found', '上下文占用不可用')
+        return rpcSuccess(req.id, ctx)
+      }
+
       case 'sessions.create': {
         const denied =
           denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled') ??

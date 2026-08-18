@@ -172,6 +172,12 @@ export class DshClient {
     return (response.result as { plugins: { id: string; name: string; enabled: boolean }[] }).plugins
   }
 
+  async sessionContext(sessionId: string): Promise<{ projectedTokens: number; contextWindow: number; systemTokens: number; toolsTokens: number; messageTokens: number } | null> {
+    const response = await this.rpc('session', 'context', { sessionId })
+    if (!response.ok) return null
+    return response.result as { projectedTokens: number; contextWindow: number; systemTokens: number; toolsTokens: number; messageTokens: number }
+  }
+
   async forkSession(sessionId: string, boundary?: number): Promise<string> {
     const response = await this.rpc('sessions', 'fork', {
       sessionId,

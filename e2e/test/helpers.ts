@@ -143,6 +143,9 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
     async listPlugins() {
       return [{ id: 'bridge', name: '@deepseek-harness-pocket/bridge', enabled: true }]
     },
+    async sessionContext() {
+      return { projectedTokens: 3900, contextWindow: 1_000_000, systemTokens: 454, toolsTokens: 0, messageTokens: 3400 }
+    },
     async listDir(path: string) {
       return path === '/'
         ? [{ name: 'Users', path: '/Users' }, { name: 'tmp', path: '/tmp' }]

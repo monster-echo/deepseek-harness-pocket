@@ -5,6 +5,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { AppRoute } from '../navigation/routes';
 import { useApp } from '../state/AppStore';
 import { colors } from '../theme/tokens';
@@ -105,7 +106,10 @@ export function PageHeader({
   title,
   rightAction,
 }: Readonly<{ title: string; rightAction?: PageHeaderAction }>) {
-  const { back, canGoBack } = useApp();
+  // 用 React Navigation 的 useNavigation 实时拿 canGoBack（AppStore 的 useMemo
+  // 依赖缺失导致 canGoBack 恒为 mount 时的 false）
+  const navigation = useNavigation();
+  const canGoBack = navigation.canGoBack();
   const { palette } = usePreferences();
   return (
     <View style={[
@@ -114,7 +118,7 @@ export function PageHeader({
     ]}>
       <View style={componentStyles.headerSide}>
         {canGoBack ? (
-          <IconButton label="返回" icon="arrow-left" onPress={back} />
+          <IconButton label="返回" icon="arrow-left" onPress={() => navigation.goBack()} />
         ) : null}
       </View>
       <Text style={[componentStyles.headerTitle, { color: palette.text }]}>{title}</Text>

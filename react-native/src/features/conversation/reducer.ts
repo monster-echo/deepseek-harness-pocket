@@ -92,6 +92,10 @@ export interface SessionView {
   readonly totalUsage: { input: number; output: number }
   /** 会话统计（#21 顶栏 stats） */
   readonly stats: SessionStats
+  /** 跨事件 fold 状态：当前 open step（用于 llmMs/ttftMs/decodeMs 累计） */
+  readonly openStep: { startTime: number; firstTokenTime: number } | null
+  /** 跨事件 fold 状态：tool/call 派发时间（callId → time，用于 toolMs 累计） */
+  readonly pendingCalls: Record<string, number>
 }
 
 export const emptyStats: SessionStats = {
@@ -99,7 +103,7 @@ export const emptyStats: SessionStats = {
 }
 
 export const emptySessionView: SessionView = {
-  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 }, permissionCurrent: null, totalUsage: { input: 0, output: 0 }, stats: emptyStats,
+  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 }, permissionCurrent: null, totalUsage: { input: 0, output: 0 }, stats: emptyStats, openStep: null, pendingCalls: {},
 }
 
 // ---------- dsh 事件负载工具 ----------
@@ -269,8 +273,8 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     turnFirstTokenAt: -1,
     turnCacheHit: 0,
     turnCacheTotal: 0,
-    openStep: null,
-    pendingCalls: {},
+    openStep: view.openStep,
+    pendingCalls: view.pendingCalls,
   }
 
   switch (event.type) {
@@ -317,6 +321,11 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
         ensureStreamingAssistant(state, `a${event.seq}`)
         appendDelta(state, 'text', chunk['text'])
       } else if (ctype === 'reasoning-delta' && typeof chunk['text'] === 'string') {
+        // 首 token：reasoning-delta 也计入（对齐 dsh isTokenDelta）
+        if (state.openStep !== null && state.openStep.firstTokenTime < 0) {
+          const t = (event as unknown as { time?: unknown }).time
+          if (typeof t === 'number') state.openStep = { ...state.openStep, firstTokenTime: t }
+        }
         ensureStreamingAssistant(state, `a${event.seq}`)
         appendDelta(state, 'reasoning', chunk['text'])
       } else if (ctype === 'tool-call-delta') {
@@ -557,6 +566,8 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     permissionCurrent: state.permissionCurrent,
     totalUsage: state.totalUsage,
     stats: state.stats,
+    openStep: state.openStep,
+    pendingCalls: state.pendingCalls,
   }
 }
 

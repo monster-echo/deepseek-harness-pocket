@@ -53,7 +53,7 @@ describe('直连链路', () => {
       phone.send({ kind: 'rpc', request: { id: 'o1', ns: 'sessions', method: 'open', args: { sessionId: 'sess-e2e-1' } } })
       const snapshot = await phone.wait('snapshot')
       const events = (snapshot['snapshot'] as { events: DshSessionEvent[] }).events
-      expect(events.length).toBe(6) // 快照瘦身：assistant/chunk 不回放（定稿可重建）
+      expect(events.length).toBe(8) // assistant/chunk 保留（首 token 统计）
       expect(events[1]!.type).toBe('user/message')
 
       phone.send({ kind: 'rpc', request: { id: 's1', ns: 'messages', method: 'send', args: { sessionId: 'sess-e2e-1', text: '继续' } } })
@@ -132,7 +132,7 @@ describe('Gateway 全链路', () => {
       })
       const snap = await phone.wait('worker-frame', (f) => (f['inner'] as string).includes('"snapshot"'))
       const snapInner = JSON.parse(snap['inner'] as string) as { snapshot: { events: DshSessionEvent[] } }
-      expect(snapInner.snapshot.events.length).toBe(6) // 同上
+      expect(snapInner.snapshot.events.length).toBe(8) // 同上
       phone.close()
     } finally {
       await worker.closeAll()

@@ -505,7 +505,7 @@ export class BridgeHub {
 
 /** 快照瘦身：UI 无关/可由定稿事件重建的事件不回放（长会话可达数十 MB）。 */
 const SNAPSHOT_SKIP_TYPES = new Set([
-  'assistant/chunk', // 回放由 assistant/message 定稿块重建；流式增量只在 live 推送
+  // assistant/chunk 保留：首 token/解码耗时需 chunk 的 time 计算（App 端累计统计）
   'request/context', 'request/header', // 模型请求上下文快照，UI 不渲染
   'agent/inbox/spliced', // 收件箱投递记录
   // permission/preset、sandbox/mode、approval/policy 保留：全值变更事件，

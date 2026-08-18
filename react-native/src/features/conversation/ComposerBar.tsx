@@ -7,7 +7,7 @@
  * 输入 "/" 触发内联命令联想。
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import Svg, { Circle } from 'react-native-svg';
@@ -65,7 +65,20 @@ export function ComposerBar(): React.JSX.Element | null {
   const totalUsage = useDshStore((s) => s.sessionView.totalUsage)
   const newSessionDefaults = useDshStore((s) => s.newSessionDefaults)
   const modelCatalog = useDshStore((s) => s.modelCatalog)
+  const queueSend = useDshStore((s) => s.queueSend)
+  const [pendingQueue, setPendingQueue] = useState<string[]>([])
   const [commandsCache, setCommandsCache] = useState<readonly { name: string; description: string }[]>([])
+  const prevRunning = useRef(running)
+
+  // 排队发送：turn 结束后自动发送队列下一条
+  useEffect(() => {
+    if (prevRunning.current && !running && pendingQueue.length > 0) {
+      const [next, ...rest] = pendingQueue
+      setPendingQueue(rest)
+      void sendMessage(next)
+    }
+    prevRunning.current = running
+  }, [running, pendingQueue, sendMessage])
 
   useEffect(() => {
     void listCommands().then(setCommandsCache)
@@ -106,6 +119,11 @@ export function ComposerBar(): React.JSX.Element | null {
     if (value.length === 0 && ready.length === 0) return
     setText('')
     setImages([])
+    // 排队发送：turn 进行时入队，等 turn 结束自动发送
+    if (running && queueSend) {
+      setPendingQueue((prev) => [...prev, value])
+      return
+    }
     void sendMessage(value, ready.map((img) => img.ref))
   }
 

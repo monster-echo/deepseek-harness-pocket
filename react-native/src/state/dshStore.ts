@@ -48,6 +48,9 @@ interface DshState {
   newSessionDefaults: { provider: string; model: string } | null
   newSessionPreset: string
   setNewSessionDefaults(route: { provider: string; model: string } | null, preset?: string): void
+  /** 排队发送：turn 进行时允许输入并排队，turn 结束后自动发送 */
+  queueSend: boolean
+  setQueueSend(v: boolean): void
   respondQuestion(requestId: string, answer: string): Promise<void>
 }
 
@@ -116,6 +119,7 @@ export const useDshStore = create<DshState>((set, get) => {
     modelCatalog: [],
     newSessionDefaults: null,
     newSessionPreset: '',
+    queueSend: false,
 
     connectGateway() {
       ensureGateway()
@@ -340,6 +344,10 @@ export const useDshStore = create<DshState>((set, get) => {
         newSessionDefaults: route,
         ...(preset !== undefined ? { newSessionPreset: preset } : {}),
       })
+    },
+
+    setQueueSend(v) {
+      set({ queueSend: v })
     },
 
     async respondPermission(requestId, decision) {

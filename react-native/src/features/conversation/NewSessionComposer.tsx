@@ -29,6 +29,7 @@ import {
 } from "../../data/storage";
 import { DirectoryPickerSheet } from "../workers/DirectoryPickerSheet";
 import { Sheet } from "../../design-system/Sheet";
+import { CommandPaletteSheet } from "./CommandPaletteSheet";
 
 const LOGO = require("../../../assets/brand/logo.png"); // eslint-disable-line @typescript-eslint/no-require-imports
 const LOGO_DARK = require("../../../assets/brand/logo-dark.png"); // eslint-disable-line @typescript-eslint/no-require-imports
@@ -349,24 +350,7 @@ export function NewSessionComposer(): React.JSX.Element {
         ))}
       </Sheet>
 
-      <Sheet visible={sheet === "commands"} title="快捷命令" onClose={() => setSheet(null)} scrollable snapPoints={["55%", "85%"]}>
-        {commands.map((cmd) => {
-          const kind = COMMAND_KINDS[cmd.name] ?? "text"
-          return (
-            <Pressable key={cmd.name} style={({ pressed }) => [styles.cmdRow, pressed && { opacity: 0.7 }]} onPress={() => commandTap(cmd.name)}>
-              <Text style={[styles.cmdName2, { color: palette.warning }]}>/{cmd.name}</Text>
-              <Text style={[styles.cmdDesc, { color: palette.textSecondary }]} numberOfLines={1}>{cmd.description}</Text>
-              {kind === "modal" ? (
-                <View style={[styles.kindBadge, { backgroundColor: palette.brandSoft }]}>
-                  <Text style={[styles.kindText, { color: palette.brand }]}>设置</Text>
-                </View>
-              ) : (
-                <Text style={[styles.chev, { color: palette.textSecondary }]}>›</Text>
-              )}
-            </Pressable>
-          )
-        })}
-      </Sheet>
+      <CommandPaletteSheet visible={sheet === "commands"} onClose={() => setSheet(null)} onCommand={commandTap} />
 
       <Sheet visible={sheet === "permission"} title="工作区权限设置" onClose={() => setSheet(null)} snapPoints={["55%"]}>
         {PERMISSIONS.map((p) => {

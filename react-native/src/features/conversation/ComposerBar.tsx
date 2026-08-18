@@ -17,6 +17,7 @@ import { useApp } from '../../state/AppStore';
 import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
 import { CommandPaletteSheet } from './CommandPaletteSheet';
+import { ComposerInput } from './ComposerInput';
 
 const PERMISSION_LABELS: Readonly<Record<string, string>> = {
   'workspace-write': '工作区可写',
@@ -129,30 +130,15 @@ export function ComposerBar(): React.JSX.Element | null {
         <DockButton label={`${modelLabel} ▾`} onPress={() => setModelOpen(true)} />
       </View>
 
-      {/* 输入区（一体框，发送/停止内嵌右侧） */}
-      <View style={[styles.inputShell, { borderColor: palette.border, backgroundColor: palette.surfaceMuted }]}>
-        <TextInput
-          style={[styles.input, { color: palette.text }]}
-          placeholder="描述你想要构建的内容…"
-          placeholderTextColor={palette.textSecondary}
-          value={text}
-          onChangeText={setText}
-          multiline
-        />
-        {running ? (
-          <Pressable style={styles.sendInline} onPress={() => void stopTurn()} hitSlop={6}>
-            <View style={[styles.stopSquare, { backgroundColor: palette.error }]} />
-          </Pressable>
-        ) : (
-          <Pressable
-            style={[styles.sendInline, { backgroundColor: canSend ? palette.brand : palette.surfaceMuted }]}
-            onPress={submit}
-            disabled={!canSend}
-          >
-            <AppIcon name="chevron-right" color={canSend ? '#FFFFFF' : palette.textSecondary} size={18} />
-          </Pressable>
-        )}
-      </View>
+      {/* 输入区（共享 ComposerInput） */}
+      <ComposerInput
+        text={text}
+        onChangeText={setText}
+        onSubmit={submit}
+        onStop={() => void stopTurn()}
+        running={running}
+        canSend={canSend}
+      />
 
       {/* 状态行：上下文剩余量圆环（可点击查看占用详情）· 累计 tokens */}
       {(usedTokens > 0 || contextPct > 0) && (
@@ -176,7 +162,7 @@ export function ComposerBar(): React.JSX.Element | null {
       )}
 
       <ContextUsageSheet visible={contextOpen} onClose={() => setContextOpen(false)} />
-      <CommandPaletteSheet visible={commandsOpen} onClose={() => setCommandsOpen(false)} />
+      <CommandPaletteSheet visible={commandsOpen} onClose={() => setCommandsOpen(false)} onCommand={(name) => { sendMessage(`/${name}`); showToast(`已执行 /${name}`, 'info') }} />
       <PermissionSheet visible={permissionOpen} onClose={() => setPermissionOpen(false)} onChanged={(label) => showToast(`权限已切换为 ${label}`, 'info')} />
       <ModelSheet visible={modelOpen} onClose={() => setModelOpen(false)} models={models} currentModel={modelLabel} onChanged={(m) => showToast(`已选模型 ${m.id}`, 'info')} />
     </View>
@@ -332,10 +318,6 @@ const styles = StyleSheet.create({
   dockRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x3, paddingHorizontal: spacing.x4, flexWrap: 'wrap' },
   dockButton: { paddingVertical: 2 },
   dockText: { fontSize: 13 },
-  inputShell: { flexDirection: 'row', alignItems: 'flex-end', marginHorizontal: spacing.x3, borderRadius: radii.card, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: spacing.x2 },
-  input: { flex: 1, minHeight: 40, maxHeight: 120, paddingVertical: spacing.x2, fontSize: 15, textAlignVertical: 'center' },
-  sendInline: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginVertical: 5 },
-  stopSquare: { width: 12, height: 12, borderRadius: 3 },
   statsLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.x1 },
   statsText: { fontSize: 11 },
   sheetHint: { fontSize: 12, paddingBottom: spacing.x2 },

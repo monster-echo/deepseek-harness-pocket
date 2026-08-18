@@ -7,16 +7,13 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Sheet } from '../../design-system/Sheet';
 import { AppIcon } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
-import { useApp } from '../../state/AppStore';
 import { useDshStore } from '../../state/dshStore';
 import { radii, spacing } from '../../theme/tokens';
 
-export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose: () => void }>): React.JSX.Element {
+export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose: () => void; onCommand: (name: string) => void }>): React.JSX.Element {
   const { palette } = usePreferences()
-  const { showToast } = useApp()
   const [commands, setCommands] = useState<readonly { name: string; description: string }[]>([])
   const listCommands = useDshStore((s) => s.listCommands)
-  const sendMessage = useDshStore((s) => s.sendMessage)
   const notice = useDshStore((s) => s.notice)
 
   useEffect(() => {
@@ -26,8 +23,7 @@ export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose:
 
   const run = (name: string): void => {
     props.onClose()
-    void sendMessage(`/${name}`)
-    showToast(`已执行 /${name}`, 'info')
+    props.onCommand(name)
   }
 
   return (

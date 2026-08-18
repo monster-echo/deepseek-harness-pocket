@@ -8,8 +8,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 import { AppIcon } from '../../design-system/AppIcon';
 import { Sheet } from '../../design-system/Sheet';
@@ -39,27 +38,16 @@ const CONTEXT_LIMITS: Readonly<Record<string, number>> = {
 }
 const DEFAULT_CONTEXT_LIMIT = 128_000
 
-export interface PendingImage {
-  readonly base64: string
-  readonly mediaType: string
-  readonly uri: string
-  readonly uploading: boolean
-  /** 上传完成后的 dsh attachment ref */
-  readonly ref?: unknown
-}
-
 export function ComposerBar(): React.JSX.Element | null {
   const { palette } = usePreferences()
   const { showToast } = useApp()
   const [text, setText] = useState('')
-  const [images, setImages] = useState<PendingImage[]>([])
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [permissionOpen, setPermissionOpen] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
   const sendMessage = useDshStore((s) => s.sendMessage)
   const stopTurn = useDshStore((s) => s.stopTurn)
-  const uploadImage = useDshStore((s) => s.uploadImage)
   const listCommands = useDshStore((s) => s.listCommands)
   const running = useDshStore((s) => s.sessionView.agentStatus === 'running')
   const permission = useDshStore((s) => s.sessionView.permissionCurrent)
@@ -92,44 +80,19 @@ export function ComposerBar(): React.JSX.Element | null {
     return commandsCache.filter((c) => c.name.startsWith(slashQuery)).slice(0, 6)
   }, [slashQuery, commandsCache])
 
-  const addImages = async (mode: 'camera' | 'library'): Promise<void> => {
-    const options: ImagePicker.ImagePickerOptions = {
-      mediaTypes: ['images'],
-      quality: 0.8,
-      base64: true,
-      allowsMultipleSelection: mode === 'library',
-    }
-    const result = mode === 'camera'
-      ? await ImagePicker.launchCameraAsync(options)
-      : await ImagePicker.launchImageLibraryAsync(options)
-    if (result.canceled) return
-    for (const asset of result.assets) {
-      const mediaType = asset.mimeType ?? 'image/jpeg'
-      const base64 = asset.base64 ?? ''
-      const entry: PendingImage = { base64, mediaType, uri: asset.uri, uploading: true }
-      setImages((prev) => [...prev, entry])
-      void uploadImage(base64, mediaType, asset.fileName ?? undefined).then((ref) => {
-        setImages((prev) => prev.map((img) => (img === entry ? { ...img, uploading: false, ...(ref !== null ? { ref } : {}) } : img)))
-      })
-    }
-  }
-
   const submit = (): void => {
-    const ready = images.filter((img) => !img.uploading && img.ref !== undefined)
     const value = text.trim()
-    if (value.length === 0 && ready.length === 0) return
+    if (value.length === 0) return
     setText('')
-    setImages([])
     // 排队发送：turn 进行时入队，等 turn 结束自动发送
     if (running && queueSend) {
       setPendingQueue((prev) => [...prev, value])
       return
     }
-    void sendMessage(value, ready.map((img) => img.ref))
+    void sendMessage(value)
   }
 
-  const canSend = (text.trim().length > 0 || images.some((img) => !img.uploading && img.ref !== undefined))
-    && !images.some((img) => img.uploading)
+  const canSend = text.trim().length > 0
   const modelLabel = newSessionDefaults !== null ? newSessionDefaults.model : 'deepseek-v4-flash'
   const permissionLabel = permission !== null ? (PERMISSION_LABELS[permission] ?? permission) : '权限'
   const models = modelCatalog.length > 0 ? modelCatalog : FALLBACK_MODELS
@@ -164,25 +127,7 @@ export function ComposerBar(): React.JSX.Element | null {
         <DockButton label="命令" onPress={() => setCommandsOpen(true)} />
         <DockButton label={`${permissionLabel} ▾`} onPress={() => setPermissionOpen(true)} />
         <DockButton label={`${modelLabel} ▾`} onPress={() => setModelOpen(true)} />
-        <View style={{ flex: 1 }} />
-        <DockButton label="📷" onPress={() => void addImages('camera')} />
-        <DockButton label="🖼" onPress={() => void addImages('library')} />
       </View>
-
-      {/* 附件缩略图 */}
-      {images.length > 0 && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thumbRow}>
-          {images.map((img, i) => (
-            <View key={i} style={[styles.thumbWrap, { borderColor: palette.border }]}>
-              <Image source={{ uri: img.uri }} style={styles.thumb} />
-              {img.uploading && <View style={[styles.thumbOverlay, { backgroundColor: palette.scrim }]}><Text style={styles.thumbText}>…</Text></View>}
-              <Pressable style={styles.thumbRemove} onPress={() => setImages((prev) => prev.filter((x) => x !== img))}>
-                <AppIcon name="close" color="#FFFFFF" size={12} />
-              </Pressable>
-            </View>
-          ))}
-        </ScrollView>
-      )}
 
       {/* 输入区（一体框，发送/停止内嵌右侧） */}
       <View style={[styles.inputShell, { borderColor: palette.border, backgroundColor: palette.surfaceMuted }]}>
@@ -387,12 +332,6 @@ const styles = StyleSheet.create({
   dockRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x3, paddingHorizontal: spacing.x4, flexWrap: 'wrap' },
   dockButton: { paddingVertical: 2 },
   dockText: { fontSize: 13 },
-  thumbRow: { flexDirection: 'row', gap: spacing.x2, paddingHorizontal: spacing.x3 },
-  thumbWrap: { width: 56, height: 56, borderRadius: radii.control, borderWidth: 1, overflow: 'hidden' },
-  thumb: { width: '100%', height: '100%' },
-  thumbOverlay: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, alignItems: 'center', justifyContent: 'center' },
-  thumbText: { color: '#FFFFFF', fontSize: 12 },
-  thumbRemove: { position: 'absolute', top: 2, right: 2, width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center' },
   inputShell: { flexDirection: 'row', alignItems: 'flex-end', marginHorizontal: spacing.x3, borderRadius: radii.card, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: spacing.x2 },
   input: { flex: 1, minHeight: 40, maxHeight: 120, paddingVertical: spacing.x2, fontSize: 15, textAlignVertical: 'center' },
   sendInline: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginVertical: 5 },

@@ -37,6 +37,8 @@ interface DshState {
   createSession(cwd: string, opts?: { reasoningEffort?: string; permission?: string }): Promise<string | null>
   forkSession(sessionId: string, boundary?: number): Promise<string | null>
   openSession(sessionId: string): Promise<void>
+  /** 开始新会话：清 activeSessionId，主区域显示新建会话首屏（NewSessionComposer） */
+  startNewSession(): void
   sendMessage(text: string, images?: readonly unknown[]): Promise<void>
   uploadImage(dataB64: string, mediaType: string, name?: string): Promise<unknown | null>
   stopTurn(): Promise<void>
@@ -277,6 +279,10 @@ export const useDshStore = create<DshState>((set, get) => {
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
       }
+    },
+
+    startNewSession() {
+      set({ activeSessionId: null, sessionView: emptySessionView })
     },
 
     async sendMessage(text, images) {

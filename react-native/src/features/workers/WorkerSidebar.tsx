@@ -56,6 +56,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const activeSessionId = useDshStore((s) => s.activeSessionId);
   const openWorker = useDshStore((s) => s.openWorker);
   const openSession = useDshStore((s) => s.openSession);
+  const startNewSession = useDshStore((s) => s.startNewSession);
   const listWorkspaces = useDshStore((s) => s.listWorkspaces);
   const renameWorkspace = useDshStore((s) => s.renameWorkspace);
   const deleteWorkspace = useDshStore((s) => s.deleteWorkspace);
@@ -145,7 +146,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
       {/* 新会话 */}
       <Pressable
         style={[styles.newSessionBtn, { backgroundColor: palette.brand }]}
-        onPress={() => (activeWorkerId !== null ? setNewSheet({ id: '', path: '', title: '' }) : navigate('dsh.pair'))}
+        onPress={() => { startNewSession(); onClose(); }}
       >
         <AppIcon name="plus" color="#FFFFFF" size={16} />
         <Text style={styles.newSessionText}>新会话</Text>

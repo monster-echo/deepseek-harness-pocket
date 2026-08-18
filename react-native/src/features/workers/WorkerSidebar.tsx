@@ -17,6 +17,7 @@ import { DirectoryPickerSheet } from './DirectoryPickerSheet';
 
 interface WorkspaceRow { id: string; path: string; title: string }
 const LOGO = require('../../../assets/brand/logo.png') // eslint-disable-line @typescript-eslint/no-require-imports
+const LOGO_DARK = require('../../../assets/brand/logo-dark.png') // eslint-disable-line @typescript-eslint/no-require-imports
 
 /** human-readable 时间：刚刚 / N 分钟前 / 今天 HH:mm / 昨天 / MM-DD。 */
 function formatRelativeTime(ts: number): string {
@@ -37,7 +38,7 @@ function formatRelativeTime(ts: number): string {
 }
 
 export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
-  const { palette } = usePreferences();
+  const { palette, dark } = usePreferences();
   const { navigate, user } = useApp();
   const [query, setQuery] = useState('');
   const [grouping, setGrouping] = useState<'workspace' | 'flat'>('workspace');
@@ -139,7 +140,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
     <View style={[styles.container, { backgroundColor: palette.surface }]}>
       {/* 顶部：logo */}
       <View style={styles.logoRow}>
-        <Image source={LOGO} style={styles.logo} accessibilityLabel="掌鲸 DSH Pocket" />
+        <Image source={dark ? LOGO_DARK : LOGO} style={styles.logo} accessibilityLabel="掌鲸 DSH Pocket" />
         <Text style={[styles.logoName, { color: palette.text }]}>掌鲸 DSH Pocket</Text>
       </View>
 

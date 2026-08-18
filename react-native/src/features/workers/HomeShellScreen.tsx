@@ -21,6 +21,7 @@ import { WorkerSidebar } from './WorkerSidebar';
 
 const SIDEBAR_WIDTH = 300
 const LOGO = require('../../../assets/brand/logo.png') // eslint-disable-line @typescript-eslint/no-require-imports
+const LOGO_DARK = require('../../../assets/brand/logo-dark.png') // eslint-disable-line @typescript-eslint/no-require-imports
 
 const PRESET_LABELS: Readonly<Record<string, string>> = {
   standard: '标准', code: '代码编排', minimal: '极简', cordis: 'Cordis',
@@ -33,8 +34,9 @@ const PERMISSION_LABELS: Readonly<Record<string, string>> = {
 }
 
 export function HomeShellScreen() {
-  const { palette } = usePreferences();
+  const { palette, dark } = usePreferences();
   const { navigate } = useApp();
+  const logo = dark ? LOGO_DARK : LOGO;
   const [open, setOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const translate = useState(new Animated.Value(-SIDEBAR_WIDTH))[0];
@@ -97,7 +99,7 @@ export function HomeShellScreen() {
             </>
           ) : (
             <View style={styles.brandRow}>
-              <Image source={LOGO} style={styles.brandLogo} accessibilityLabel="掌鲸 DSH Pocket" />
+              <Image source={logo} style={styles.brandLogo} accessibilityLabel="掌鲸 DSH Pocket" />
               <Text style={[styles.workerName, { color: palette.text }]}>掌鲸 DSH Pocket</Text>
             </View>
           )}
@@ -134,11 +136,11 @@ export function HomeShellScreen() {
 }
 
 function EmptyWorker() {
-  const { palette } = usePreferences();
+  const { palette, dark } = usePreferences();
   const { navigate } = useApp();
   return (
     <View style={styles.empty}>
-      <Image source={LOGO} style={styles.emptyLogo} accessibilityLabel="掌鲸 DSH Pocket" />
+      <Image source={dark ? LOGO_DARK : LOGO} style={styles.emptyLogo} accessibilityLabel="掌鲸 DSH Pocket" />
       <Text style={[styles.emptyTitle, { color: palette.text }]}>掌鲸 DSH Pocket</Text>
       <Text style={[styles.emptyBody, { color: palette.textSecondary }]}>
         还没有可用的电脑。在电脑上安装 dshc 并开机自启，{'\n'}然后用手机配对码绑定到你的账号。

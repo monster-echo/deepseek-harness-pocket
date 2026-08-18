@@ -31,6 +31,7 @@ import { DirectoryPickerSheet } from "../workers/DirectoryPickerSheet";
 import { Sheet } from "../../design-system/Sheet";
 
 const LOGO = require("../../../assets/brand/logo.png"); // eslint-disable-line @typescript-eslint/no-require-imports
+const LOGO_DARK = require("../../../assets/brand/logo-dark.png"); // eslint-disable-line @typescript-eslint/no-require-imports
 
 // ---------- 静态目录（展示名 → dsh 标识） ----------
 
@@ -67,10 +68,10 @@ const COMMAND_KINDS: Readonly<Record<string, "direct" | "text" | "modal">> = {
   permission: "modal", plan: "text", model: "modal",
 }
 
-type SheetKind = "project" | "mode" | "commands" | "permission" | "model" | null
+type SheetKind = "project" | "mode" | "commands" | "permission" | "model" | "worker" | null
 
 export function NewSessionComposer(): React.JSX.Element {
-  const { palette } = usePreferences();
+  const { palette, dark } = usePreferences();
   const { showToast } = useApp();
   const [text, setText] = useState("");
   const [path, setPath] = useState("");
@@ -95,6 +96,9 @@ export function NewSessionComposer(): React.JSX.Element {
   const newSessionDefaults = useDshStore((s) => s.newSessionDefaults);
   const newSessionPreset = useDshStore((s) => s.newSessionPreset);
   const modelCatalog = useDshStore((s) => s.modelCatalog);
+  const workers = useDshStore((s) => s.workers);
+  const activeWorkerId = useDshStore((s) => s.activeWorkerId);
+  const openWorker = useDshStore((s) => s.openWorker);
 
   // 加载工作区 + 上次选择 + 最近使用（#8）
   useEffect(() => {
@@ -137,6 +141,7 @@ export function NewSessionComposer(): React.JSX.Element {
   const modelFull = newSessionDefaults?.model ?? "deepseek-v4-flash"
   const reasoningLabel = REASONING.find((r) => r.id === reasoning)?.label ?? "Off"
   const pathLabel = path.length > 0 ? path.split("/").filter(Boolean).pop() ?? path : "选择工作区"
+  const activeWorkerName = workers.find((w) => w.workerId === activeWorkerId)?.name ?? '选择电脑'
   const models = modelCatalog.length > 0 ? modelCatalog : FALLBACK_MODELS
   const recentWorkspaces = recentPaths
     .map((p) => workspaces.find((w) => w.path === p))
@@ -192,7 +197,7 @@ export function NewSessionComposer(): React.JSX.Element {
     <View style={[styles.container, { backgroundColor: palette.background }]}>
       {/* 标题 */}
       <View style={styles.titleRow}>
-        <Image source={LOGO} style={styles.logo} accessibilityLabel="掌鲸 DSH Pocket" />
+        <Image source={dark ? LOGO_DARK : LOGO} style={styles.logo} accessibilityLabel="掌鲸 DSH Pocket" />
         <Text style={[styles.title, { color: palette.text }]}>探索未至之境</Text>
         <View style={[styles.badge, { backgroundColor: palette.brandSoft }]}>
           <Text style={[styles.badgeText, { color: palette.brand }]}>预览版</Text>
@@ -201,6 +206,7 @@ export function NewSessionComposer(): React.JSX.Element {
 
       {/* 项目 / 模式 胶囊 */}
       <View style={styles.selectorRow}>
+        <Chip icon="home" label={activeWorkerName} onPress={() => setSheet("worker")} />
         <Chip icon="home" label={pathLabel} onPress={() => setSheet("project")} />
         <Chip icon="crown" label={modeName} onPress={() => setSheet("mode")} />
       </View>
@@ -278,6 +284,26 @@ export function NewSessionComposer(): React.JSX.Element {
       </View>
 
       {/* ===== Bottom Sheets ===== */}
+      <Sheet visible={sheet === "worker"} title="选择电脑" onClose={() => setSheet(null)} scrollable snapPoints={["50%", "85%"]}>
+        {workers.map((worker) => {
+          const active = worker.workerId === activeWorkerId
+          return (
+            <Pressable
+              key={worker.workerId}
+              style={[styles.modelRow, { borderColor: active ? palette.brand : palette.border }]}
+              onPress={() => { openWorker(worker.workerId); setSheet(null) }}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.modelName, { color: palette.text }]} numberOfLines={1}>{worker.name}</Text>
+                <Text style={[styles.modelSub, { color: palette.textSecondary }]}>{worker.online ? '在线' : '离线'}</Text>
+              </View>
+              {active && <AppIcon name="check" color={palette.brand} size={16} />}
+            </Pressable>
+          )
+        })}
+        {workers.length === 0 && <Text style={[styles.modeDesc, { color: palette.textSecondary }]}>还没有电脑，请先在侧边栏配对</Text>}
+      </Sheet>
+
       <Sheet visible={sheet === "project"} title="选择工作区项目" onClose={() => setSheet(null)} scrollable snapPoints={["50%", "85%"]}>
         {recentWorkspaces.length > 0 && (
           <>

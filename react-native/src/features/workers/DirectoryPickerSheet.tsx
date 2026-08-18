@@ -25,6 +25,7 @@ export function DirectoryPickerSheet(
   const [history, setHistory] = useState<readonly string[]>([]);
   const listDir = useDshStore((s) => s.listDir);
   const fsHome = useDshStore((s) => s.fsHome);
+  const notice = useDshStore((s) => s.notice);
 
   const listRef = React.useRef<ScrollView>(null);
   const load = useCallback((path: string) => {
@@ -125,7 +126,9 @@ export function DirectoryPickerSheet(
           )}
           {loading && <Text style={[styles.hint, { color: palette.textSecondary }]}>加载中…</Text>}
           {!loading && dirs.length === 0 && (
-            <Text style={[styles.hint, { color: palette.textSecondary }]}>没有子目录（或无法访问）</Text>
+            <Text style={[styles.hint, { color: notice !== null ? palette.error : palette.textSecondary }]}>
+              {notice !== null ? `读取失败：${notice}` : '没有子目录'}
+            </Text>
           )}
           {dirs.map((dir) => (
             <Row key={dir.path} name={dir.name} detail="" onPress={() => enter(dir)} chevron />
@@ -195,12 +198,12 @@ const styles = StyleSheet.create({
   list: { flex: 1, paddingHorizontal: spacing.x3 },
   hint: { fontSize: 13, padding: spacing.x3 },
   row: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.x2,
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.x2,
     borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control,
     backgroundColor: 'transparent', padding: spacing.x2, marginBottom: spacing.x2,
   },
-  rowIcon: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  rowIcon: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginTop: 1 },
   rowText: { flex: 1 },
   rowName: { fontSize: 14 },
-  rowDetail: { fontSize: 12 },
+  rowDetail: { fontSize: 12, marginTop: 2 },
 });

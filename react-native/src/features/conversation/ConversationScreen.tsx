@@ -256,7 +256,7 @@ type Palette = ReturnType<typeof usePreferences>['palette']
 
 function markdownStyle(palette: Palette) {
   return {
-    body: { color: palette.text, fontSize: 15, lineHeight: 22 },
+    body: { color: palette.text, fontSize: 16, lineHeight: 26, letterSpacing: 0.3 },
     heading1: { color: palette.text, fontSize: 20, fontWeight: '700' as const, marginVertical: 8 },
     heading2: { color: palette.text, fontSize: 18, fontWeight: '700' as const, marginVertical: 6 },
     heading3: { color: palette.text, fontSize: 16, fontWeight: '600' as const, marginVertical: 4 },
@@ -573,14 +573,14 @@ const styles = StyleSheet.create({
   timeline: { flex: 1 },
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },
   userBubble: { maxWidth: '80%', borderRadius: radii.card, padding: spacing.x3, borderBottomRightRadius: radii.small },
-  userText: { fontSize: 15, lineHeight: 22 },
+  userText: { fontSize: 16, lineHeight: 24, letterSpacing: 0.3 },
   assistantBubble: { alignSelf: 'flex-start', maxWidth: '100%', gap: spacing.x2 },
-  assistantText: { fontSize: 15, lineHeight: 22 },
+  assistantText: { fontSize: 16, lineHeight: 26, letterSpacing: 0.3 },
   thinkRow: { borderRadius: radii.control, padding: spacing.x2, gap: spacing.x1 },
   thinkHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.x1 },
   thinkLabel: { fontSize: 12, fontWeight: '600' },
   thinkSummary: { flex: 1, fontSize: 12 },
-  thinkBody: { fontSize: 12, lineHeight: 18, paddingTop: spacing.x1 },
+  thinkBody: { fontSize: 13, lineHeight: 20, paddingTop: spacing.x1 },
   stoppedMark: { fontSize: 12, alignSelf: 'flex-end' },
   usageLine: { fontSize: 11, alignSelf: 'flex-end' },
   toolCard: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, alignSelf: 'stretch' },

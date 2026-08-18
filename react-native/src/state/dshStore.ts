@@ -31,7 +31,8 @@ interface DshState {
   createSession(cwd: string): Promise<string | null>
   forkSession(sessionId: string, boundary?: number): Promise<string | null>
   openSession(sessionId: string): Promise<void>
-  sendMessage(text: string): Promise<void>
+  sendMessage(text: string, images?: readonly unknown[]): Promise<void>
+  uploadImage(dataB64: string, mediaType: string, name?: string): Promise<unknown | null>
   stopTurn(): Promise<void>
   respondPermission(requestId: string, decision: 'allow' | 'deny'): Promise<void>
   permissionOptions(): Promise<{ names: string[]; default: string }>
@@ -213,13 +214,23 @@ export const useDshStore = create<DshState>((set, get) => {
       }
     },
 
-    async sendMessage(text) {
+    async sendMessage(text, images) {
       const sessionId = get().activeSessionId
       if (client === null || sessionId === null) return
       try {
-        await client.sendMessage(sessionId, text)
+        await client.sendMessage(sessionId, text, images)
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
+      }
+    },
+
+    async uploadImage(dataB64, mediaType, name) {
+      if (client === null) return null
+      try {
+        return await client.uploadImage(dataB64, mediaType, name)
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+        return null
       }
     },
 

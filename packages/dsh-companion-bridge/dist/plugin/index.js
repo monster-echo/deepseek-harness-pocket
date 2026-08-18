@@ -232,16 +232,23 @@ function createAdapter(ctx) {
         return null;
       }
     },
-    async sendUserMessage(id, text) {
+    async sendUserMessage(id, text, imageRefs) {
       const agent = agents()?.get(id);
       if (!agent) throw new Error(`no live agent for session ${id}`);
+      const imageBlocks = Array.isArray(imageRefs) ? imageRefs.map((ref) => ({ type: "image", attachment: ref })) : [];
+      const hasText = text.trim().length > 0;
+      if (!hasText && imageBlocks.length === 0) throw new Error("empty message");
       const message = createUserMessage({
-        content: [{ type: "text", text }],
-        // 正常用户消息（Web 端同款 source）；此前误用 plugin source，
-        // 导致 Web UI 把手机消息归类为 Context Injection
+        content: hasText ? [...imageBlocks, { type: "text", text }] : imageBlocks,
         source: { kind: "user" }
       });
       agent.followup(message);
+    },
+    async uploadImage(dataB64, mediaType, name2) {
+      const store = ctx.get("attachments");
+      if (store === void 0) throw new Error("\u9644\u4EF6\u670D\u52A1\u4E0D\u53EF\u7528");
+      const bytes = Buffer.from(dataB64, "base64");
+      return await store.saveImage({ data: new Uint8Array(bytes), mediaType, ...name2 !== void 0 ? { name: name2 } : {} });
     },
     async stopTurn(id) {
       const agent = agents()?.get(id);
@@ -686,15 +693,39 @@ var BridgeHub = class {
         if (denied) return denied;
         return rpcSuccess(req.id, { presets: await this.adapter.listPresets() });
       }
+      case "attachments.upload": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const dataB64 = req.args["dataB64"];
+        const mediaType = req.args["mediaType"];
+        const name2 = req.args["name"];
+        if (typeof dataB64 !== "string" || typeof mediaType !== "string") {
+          return fail("bad-request", "dataB64 and mediaType required");
+        }
+        if (dataB64.length > 8 * 1024 * 1024) {
+          return fail("bad-request", "image too large (base64 > 8MB)");
+        }
+        try {
+          const ref = await this.adapter.uploadImage(dataB64, mediaType, typeof name2 === "string" ? name2 : void 0);
+          return rpcSuccess(req.id, { ref });
+        } catch (error) {
+          return fail("bad-request", error instanceof Error ? error.message : "upload failed");
+        }
+      }
       case "messages.send": {
         const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
         if (denied) return denied;
         const sessionId = req.args["sessionId"];
         const text = req.args["text"];
-        if (typeof sessionId !== "string" || typeof text !== "string" || text.length === 0) {
+        const images = req.args["images"];
+        const imageRefs = Array.isArray(images) ? images : void 0;
+        if (typeof sessionId !== "string" || typeof text !== "string") {
           return fail("bad-request", "sessionId and text required");
         }
-        await this.adapter.sendUserMessage(sessionId, text);
+        if (text.length === 0 && (imageRefs === void 0 || imageRefs.length === 0)) {
+          return fail("bad-request", "empty message");
+        }
+        await this.adapter.sendUserMessage(sessionId, text, imageRefs);
         return rpcSuccess(req.id, { ok: true });
       }
       case "turn.stop": {

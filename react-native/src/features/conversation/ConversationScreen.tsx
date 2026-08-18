@@ -16,6 +16,8 @@ import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
 import type { AssistantBlock, TimelineItem, ToolStatus } from './reducer';
 import { splitDsml, cutAtDsmlStart, type DsmlToolCall } from './dsml';
+import { ComposerBar } from './ComposerBar';
+import { SessionMenuSheet } from './SessionMenuSheet';
 
 export function ConversationScreen() {
   const { palette } = usePreferences();
@@ -39,6 +41,8 @@ export function ConversationScreen() {
   }
 
   const pending = serverRequests[0]
+  const [menuTab, setMenuTab] = useState<'permission' | 'model' | 'preset' | 'commands' | null>(null)
+  const openMenu = (tab: 'permission' | 'model' | 'preset' | 'commands'): void => setMenuTab(tab)
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
@@ -60,11 +64,12 @@ export function ConversationScreen() {
         target={actionTarget}
         onClose={() => setActionTarget(null)}
       />
-      {/* 审批/提问接管输入区上方（dsh ApprovalPanel 模式） */}
+      <SessionMenuSheet visible={menuTab !== null} initialTab={menuTab ?? 'main'} onClose={() => setMenuTab(null)} />
+      {/* 审批/提问接管输入区（dsh ApprovalPanel 模式）；否则升级版输入区 */}
       {pending !== undefined ? (
         <ServerRequestCard request={pending} />
       ) : (
-        <Composer />
+        <ComposerBar onOpenMenu={openMenu} />
       )}
     </View>
   )
@@ -389,46 +394,6 @@ function ServerRequestCard({ request }: Readonly<{ request: import('@dsh-compani
   )
 }
 
-function Composer() {
-  const { palette } = usePreferences()
-  const [text, setText] = useState('')
-  const sendMessage = useDshStore((s) => s.sendMessage)
-  const stopTurn = useDshStore((s) => s.stopTurn)
-  const running = useDshStore((s) => s.sessionView.agentStatus === 'running')
-
-  const submit = (): void => {
-    const value = text.trim()
-    if (value.length === 0) return
-    setText('')
-    void sendMessage(value)
-  }
-
-  return (
-    <View style={[styles.composer, { borderTopColor: palette.border, backgroundColor: palette.surface }]}>
-      {running && (
-        <Pressable style={[styles.stopButton, { borderColor: palette.error }]} onPress={() => void stopTurn()}>
-          <View style={[styles.stateDot, { backgroundColor: palette.error }]} />
-          <Text style={[styles.stopText, { color: palette.error }]}>停止</Text>
-        </Pressable>
-      )}
-      <TextInput
-        style={[styles.input, { color: palette.text }]}
-        placeholder="发送消息…"
-        placeholderTextColor={palette.textSecondary}
-        value={text}
-        onChangeText={setText}
-        multiline
-      />
-      <Pressable
-        style={[styles.send, { backgroundColor: text.trim().length > 0 ? palette.brand : palette.surfaceMuted }]}
-        onPress={submit}
-        disabled={text.trim().length === 0}
-      >
-        <AppIcon name="chevron-right" color={text.trim().length > 0 ? '#FFFFFF' : palette.textSecondary} size={20} />
-      </Pressable>
-    </View>
-  )
-}
 
 /** 长按消息菜单（hover 等价）：复制全文 / 从这里分支。 */
 function MessageActionSheet(props: Readonly<{ target: TimelineItem | null; onClose: () => void }>) {

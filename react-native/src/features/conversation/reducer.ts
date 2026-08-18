@@ -61,10 +61,12 @@ export interface SessionView {
   readonly turnUsage: { input: number; output: number }
   /** 当前权限档位（permission/preset last-wins；null 未知） */
   readonly permissionCurrent: string | null
+  /** 会话累计 usage（状态行统计，跨回合） */
+  readonly totalUsage: { input: number; output: number }
 }
 
 export const emptySessionView: SessionView = {
-  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 }, permissionCurrent: null,
+  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 }, permissionCurrent: null, totalUsage: { input: 0, output: 0 },
 }
 
 // ---------- dsh 事件负载工具 ----------
@@ -160,6 +162,7 @@ interface MutableState {
   turnStartAt: number
   turnUsage: { input: number; output: number }
   permissionCurrent: string | null
+  totalUsage: { input: number; output: number }
 }
 
 function ensureStreamingAssistant(state: MutableState, key: string): number {
@@ -201,6 +204,7 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     turnStartAt: view.turnStartAt,
     turnUsage: { ...view.turnUsage },
     permissionCurrent: view.permissionCurrent,
+    totalUsage: { ...view.totalUsage },
   }
 
   switch (event.type) {
@@ -241,6 +245,7 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
         : undefined
       if (usage !== undefined) {
         state.turnUsage = { input: state.turnUsage.input + usage.input, output: state.turnUsage.output + usage.output }
+        state.totalUsage = { input: state.totalUsage.input + usage.input, output: state.totalUsage.output + usage.output }
       }
       if (state.streamingIndex >= 0) {
         const idx = state.streamingIndex
@@ -389,6 +394,7 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     turnStartAt: state.turnStartAt,
     turnUsage: state.turnUsage,
     permissionCurrent: state.permissionCurrent,
+    totalUsage: state.totalUsage,
   }
 }
 

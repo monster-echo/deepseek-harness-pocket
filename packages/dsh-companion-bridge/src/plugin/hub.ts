@@ -323,6 +323,28 @@ export class BridgeHub {
         return rpcSuccess(req.id, { presets: await this.adapter.listPresets() })
       }
 
+      case 'attachments.upload': {
+        const denied =
+          denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const dataB64 = req.args['dataB64']
+        const mediaType = req.args['mediaType']
+        const name = req.args['name']
+        if (typeof dataB64 !== 'string' || typeof mediaType !== 'string') {
+          return fail('bad-request', 'dataB64 and mediaType required')
+        }
+        if (dataB64.length > 8 * 1024 * 1024) {
+          return fail('bad-request', 'image too large (base64 > 8MB)')
+        }
+        try {
+          const ref = await this.adapter.uploadImage(dataB64, mediaType, typeof name === 'string' ? name : undefined)
+          return rpcSuccess(req.id, { ref })
+        } catch (error) {
+          return fail('bad-request', error instanceof Error ? error.message : 'upload failed')
+        }
+      }
+
       case 'messages.send': {
         const denied =
           denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled') ??
@@ -330,10 +352,15 @@ export class BridgeHub {
         if (denied) return denied
         const sessionId = req.args['sessionId']
         const text = req.args['text']
-        if (typeof sessionId !== 'string' || typeof text !== 'string' || text.length === 0) {
+        const images = req.args['images']
+        const imageRefs = Array.isArray(images) ? images : undefined
+        if (typeof sessionId !== 'string' || typeof text !== 'string') {
           return fail('bad-request', 'sessionId and text required')
         }
-        await this.adapter.sendUserMessage(sessionId, text)
+        if (text.length === 0 && (imageRefs === undefined || imageRefs.length === 0)) {
+          return fail('bad-request', 'empty message')
+        }
+        await this.adapter.sendUserMessage(sessionId, text, imageRefs)
         return rpcSuccess(req.id, { ok: true })
       }
 

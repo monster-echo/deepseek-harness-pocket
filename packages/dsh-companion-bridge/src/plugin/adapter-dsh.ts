@@ -118,7 +118,9 @@ export interface DshAdapter {
   /** 从既有会话分叉（dsh fork：取平衡的已完成回合前缀作种子）并挂 agent；返回新 sessionId */
   forkSession(sessionId: string, route: { provider: string; model: string }, boundary?: number): Promise<string>
   readSlice(id: string, fromSeq: number): Promise<SessionSlice | null>
-  sendUserMessage(id: string, text: string): Promise<void>
+  sendUserMessage(id: string, text: string, imageRefs?: readonly unknown[]): Promise<void>
+  /** 图片字节入 dsh 附件库（ref 可拼进用户消息 content） */
+  uploadImage(dataB64: string, mediaType: string, name?: string): Promise<unknown>
   stopTurn(id: string): Promise<void>
   /** 订阅事件流；返回退订函数 */
   onEvent(handler: (sessionId: string, event: DshSessionEvent) => void): () => void
@@ -403,16 +405,30 @@ export function createAdapter(ctx: Context): DshAdapter {
       }
     },
 
-    async sendUserMessage(id, text) {
+    async sendUserMessage(id, text, imageRefs) {
       const agent = agents()?.get(id as SessionId)
       if (!agent) throw new Error(`no live agent for session ${id}`)
+      const imageBlocks = Array.isArray(imageRefs)
+        ? imageRefs.map((ref) => ({ type: 'image', attachment: ref }))
+        : []
+      const hasText = text.trim().length > 0
+      if (!hasText && imageBlocks.length === 0) throw new Error('empty message')
       const message = createUserMessage({
-        content: [{ type: 'text', text }],
-        // 正常用户消息（Web 端同款 source）；此前误用 plugin source，
-        // 导致 Web UI 把手机消息归类为 Context Injection
+        content: (hasText
+          ? [...imageBlocks, { type: 'text', text }]
+          : imageBlocks) as never,
         source: { kind: 'user' },
       })
       agent.followup(message)
+    },
+
+    async uploadImage(dataB64, mediaType, name) {
+      const store = ctx.get('attachments') as
+        | { saveImage(input: { data: Uint8Array; mediaType: string; name?: string }): Promise<unknown> }
+        | undefined
+      if (store === undefined) throw new Error('附件服务不可用')
+      const bytes = Buffer.from(dataB64, 'base64')
+      return await store.saveImage({ data: new Uint8Array(bytes), mediaType, ...(name !== undefined ? { name } : {}) })
     },
 
     async stopTurn(id) {

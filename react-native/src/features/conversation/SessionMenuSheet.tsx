@@ -26,13 +26,13 @@ const PRESET_LABELS: Readonly<Record<string, string>> = {
 
 type Tab = 'main' | 'permission' | 'model' | 'preset' | 'commands'
 
-export function SessionMenuSheet(props: Readonly<{ visible: boolean; onClose: () => void }>) {
+export function SessionMenuSheet(props: Readonly<{ visible: boolean; initialTab?: Tab; onClose: () => void }>) {
   const { palette } = usePreferences();
   const [tab, setTab] = useState<Tab>('main');
 
   useEffect(() => {
-    if (props.visible) setTab('main')
-  }, [props.visible])
+    if (props.visible) setTab(props.initialTab ?? 'main')
+  }, [props.visible, props.initialTab])
 
   return (
     <Modal visible={props.visible} transparent animationType="slide" onRequestClose={props.onClose}>

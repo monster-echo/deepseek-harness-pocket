@@ -26,7 +26,13 @@
       "expo-web-browser",
       "expo-apple-authentication",
       "./plugins/withModularHeaders",
-      "expo-video"
+      "expo-video",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "允许拍照并发送给电脑上的 dsh 会话。"
+        }
+      ]
     ],
     "ios": {
       "usesAppleSignIn": true,

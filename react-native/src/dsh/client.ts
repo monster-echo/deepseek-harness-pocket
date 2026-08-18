@@ -211,9 +211,23 @@ export class DshClient {
     return (response.result as { presets: { id: string; name?: string; description?: string; isDefault: boolean }[] }).presets
   }
 
-  async sendMessage(sessionId: string, text: string): Promise<void> {
-    const response = await this.rpc('messages', 'send', { sessionId, text })
+  async sendMessage(sessionId: string, text: string, images?: readonly unknown[]): Promise<void> {
+    const response = await this.rpc('messages', 'send', {
+      sessionId,
+      text,
+      ...(images !== undefined && images.length > 0 ? { images } : {}),
+    })
     if (!response.ok) throw new Error(response.error.message)
+  }
+
+  async uploadImage(dataB64: string, mediaType: string, name?: string): Promise<unknown> {
+    const response = await this.rpc('attachments', 'upload', {
+      dataB64,
+      mediaType,
+      ...(name !== undefined ? { name } : {}),
+    })
+    if (!response.ok) throw new Error(response.error.message)
+    return (response.result as { ref: unknown }).ref
   }
 
   async stopTurn(sessionId: string): Promise<void> {

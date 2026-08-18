@@ -9,6 +9,7 @@ import { AppIcon } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useApp } from '../../state/AppStore';
 import { useDshStore } from '../../state/dshStore';
+import type { SessionListItem as SessionListItemLocal } from '../conversation/reducer';
 import { spacing, radii } from '../../theme/tokens';
 import { DirectoryPickerSheet } from './DirectoryPickerSheet';
 
@@ -17,12 +18,41 @@ export function SessionSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const { navigate } = useApp();
   const [newSheet, setNewSheet] = useState(false);
   const [picker, setPicker] = useState(false);
+  const [workspaceTitles, setWorkspaceTitles] = useState<Readonly<Record<string, string>>>({});
+  const listWorkspaces = useDshStore((s) => s.listWorkspaces);
   const workers = useDshStore((s) => s.workers);
   const activeWorkerId = useDshStore((s) => s.activeWorkerId);
   const sessions = useDshStore((s) => s.sessions);
   const activeSessionId = useDshStore((s) => s.activeSessionId);
   const openWorker = useDshStore((s) => s.openWorker);
   const openSession = useDshStore((s) => s.openSession);
+
+  useEffect(() => {
+    if (activeWorkerId === null) return
+    void listWorkspaces().then((list) => {
+      const map: Record<string, string> = {}
+      for (const w of list) map[w.path] = w.title
+      setWorkspaceTitles(map)
+    })
+  }, [activeWorkerId, listWorkspaces])
+
+  // 会话按 cwd 分组（对齐 web UI 的 workspace 导航；未加为 workspace 的目录也分组显示）
+  const groups: ReadonlyArray<{ key: string; title: string; sessions: SessionListItemLocal[] }> = (() => {
+    const byCwd = new Map<string, SessionListItemLocal[]>()
+    for (const session of sessions) {
+      const cwd = session.cwd ?? ''
+      const list = byCwd.get(cwd) ?? []
+      list.push(session)
+      byCwd.set(cwd, list)
+    }
+    return [...byCwd.entries()]
+      .sort((a, b) => (b[1].length - a[1].length) || a[0].localeCompare(b[0]))
+      .map(([cwd, list]) => ({
+        key: cwd,
+        title: cwd.length > 0 ? (workspaceTitles[cwd] ?? cwd.split('/').filter(Boolean).pop() ?? cwd) : '未指定目录',
+        sessions: list,
+      }))
+  })()
 
   return (
     <View style={[styles.container, { backgroundColor: palette.surface }]}>
@@ -66,19 +96,26 @@ export function SessionSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
             {sessions.length === 0 && (
               <Text style={[styles.emptyText, { color: palette.textSecondary }]}>暂无会话</Text>
             )}
-            {sessions.map((session) => (
-              <Pressable
-                key={session.id}
-                style={[styles.sessionRow, activeSessionId === session.id && { backgroundColor: palette.brandSoft }]}
-                onPress={() => { openSession(session.id); onClose(); }}
-              >
-                <Text style={[styles.sessionTitle, { color: palette.text }]} numberOfLines={1}>
-                  {session.title}
+            {groups.map((group) => (
+              <View key={group.key}>
+                <Text style={[styles.groupTitle, { color: palette.textSecondary }]} numberOfLines={1}>
+                  {group.title} · {group.sessions.length}
                 </Text>
-                {session.agentStatus === 'running' && (
-                  <View style={[styles.dot, { backgroundColor: palette.warning }]} />
-                )}
-              </Pressable>
+                {group.sessions.map((session) => (
+                  <Pressable
+                    key={session.id}
+                    style={[styles.sessionRow, activeSessionId === session.id && { backgroundColor: palette.brandSoft }]}
+                    onPress={() => { openSession(session.id); onClose(); }}
+                  >
+                    <Text style={[styles.sessionTitle, { color: palette.text }]} numberOfLines={1}>
+                      {session.title}
+                    </Text>
+                    {session.agentStatus === 'running' && (
+                      <View style={[styles.dot, { backgroundColor: palette.warning }]} />
+                    )}
+                  </Pressable>
+                ))}
+              </View>
             ))}
           </ScrollView>
         </>
@@ -246,6 +283,7 @@ const styles = StyleSheet.create({
   newButton: { flexDirection: 'row', alignItems: 'center', gap: spacing.x1 },
   newButtonText: { fontSize: 12 },
   emptyText: { fontSize: 13, padding: spacing.x2 },
+  groupTitle: { fontSize: 11, paddingVertical: spacing.x1, paddingHorizontal: spacing.x2, marginTop: spacing.x2 },
   sessionRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.x2,
     padding: spacing.x2, borderRadius: radii.control,

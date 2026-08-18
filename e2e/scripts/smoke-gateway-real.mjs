@@ -6,7 +6,7 @@ import WebSocket from 'ws'
 
 const GATEWAY_HTTP = process.env.GATEWAY_HTTP ?? 'http://127.0.0.1:3781'
 const GATEWAY_WS = GATEWAY_HTTP.replace(/^http/, 'ws')
-const CODE = process.env.PAIRING_CODE ?? JSON.parse(readFileSync(`${homedir()}/.dsh-companion/bridge-state.json`, 'utf8')).pairingCode
+const CODE = process.env.PAIRING_CODE ?? JSON.parse(readFileSync(`${homedir()}/.deepseek-harness-pocket/bridge-state.json`, 'utf8')).pairingCode
 
 const fail = (msg) => { console.error('✗', msg); process.exit(1) }
 

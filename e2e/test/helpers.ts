@@ -7,13 +7,13 @@ import { createServer, type Server } from 'node:http'
 import { EventEmitter } from 'node:events'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { Store, WorkerRow } from '../../gateway/src/server/store'
-import type { DshAdapter, SessionSlice, SessionSummary, ApprovalAsk, QuestionAsk } from '../../packages/dsh-companion-bridge/src/plugin/adapter-dsh'
-import { BridgeHub } from '../../packages/dsh-companion-bridge/src/plugin/hub'
-import { startDirectServer } from '../../packages/dsh-companion-bridge/src/plugin/server'
-import { startUplink } from '../../packages/dsh-companion-bridge/src/plugin/uplink'
+import type { DshAdapter, SessionSlice, SessionSummary, ApprovalAsk, QuestionAsk } from '../../packages/bridge/src/plugin/adapter-dsh'
+import { BridgeHub } from '../../packages/bridge/src/plugin/hub'
+import { startDirectServer } from '../../packages/bridge/src/plugin/server'
+import { startUplink } from '../../packages/bridge/src/plugin/uplink'
 import type { GatewayConfig } from '../../gateway/src/server/config'
 import { Gateway } from '../../gateway/src/server/gateway'
-import type { DshSessionEvent } from '@dsh-companion/bridge-protocol'
+import type { DshSessionEvent } from '@deepseek-harness-pocket/bridge-protocol'
 
 // ---------- 内存 Store（gateway） ----------
 

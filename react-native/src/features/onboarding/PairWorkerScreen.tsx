@@ -12,7 +12,7 @@ import { bindWorkerByCode } from '../../dsh/connection';
 import { spacing, radii } from '../../theme/tokens';
 
 const INSTALL_STEPS: readonly { title: string; command: string }[] = [
-  { title: '1. 安装（电脑端，需 Node.js）', command: 'npm i -g @dsh-companion/bridge' },
+  { title: '1. 安装（电脑端，需 Node.js）', command: 'npm i -g @deepseek-harness-pocket/bridge' },
   { title: '2. 启动并守护 dsh', command: 'dshc start' },
   { title: '3. 开机自启（推荐）', command: 'dshc install' },
 ]

@@ -4,9 +4,9 @@
   "profiles": [
     "react-native"
   ],
-  "repositoryName": "dsh-companion",
-  "packageName": "dsh_companion",
-  "displayName": "DSH Companion",
+  "repositoryName": "deepseek-harness-pocket",
+  "packageName": "deepseek_harness_pocket",
+  "displayName": "掌鲸 DSH Pocket",
   "organization": "com.rwecho.dshcompanion",
   "appId": "dshcompanion",
   "features": [

@@ -4,7 +4,7 @@
  */
 
 import { create } from 'zustand'
-import type { ServerRequest, WorkerPresence } from '@dsh-companion/bridge-protocol'
+import type { ServerRequest, WorkerPresence } from '@deepseek-harness-pocket/bridge-protocol'
 import { GatewayConnection, type GatewayStatus } from '../dsh/connection'
 import { DshClient, type HandshakeInfo } from '../dsh/client'
 import { emptySessionView, projectSessionList, reduceSessionEvent, type SessionListItem, type SessionView } from '../features/conversation/reducer'

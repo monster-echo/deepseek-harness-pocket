@@ -113,7 +113,7 @@ export class DshClient {
 
   async handshake(): Promise<HandshakeInfo> {
     const response = await this.rpc('handshake', 'hello', {
-      client: 'dsh-companion-app',
+      client: 'deepseek-harness-pocket-app',
       protocolVersion: PROTOCOL_VERSION,
     })
     if (!response.ok) throw new Error(`handshake failed: ${response.error.message}`)

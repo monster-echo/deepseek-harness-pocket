@@ -1,5 +1,5 @@
 {
-  "name": "dsh_companion-react-native",
+  "name": "deepseek-harness-pocket-app",
   "version": "1.0.0",
   "private": true,
   "main": "node_modules/expo/AppEntry.js",
@@ -12,7 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dsh-companion/bridge-protocol": "file:../packages/dsh-bridge-protocol",
+    "@deepseek-harness-pocket/bridge-protocol": "file:../packages/bridge-protocol",
     "@expo/metro-runtime": "~57.0.8",
     "@gorhom/bottom-sheet": "^5.2.14",
     "@react-native-async-storage/async-storage": "2.2.0",

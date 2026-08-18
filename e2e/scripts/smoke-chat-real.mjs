@@ -51,7 +51,7 @@ ws.on('open', async () => {
     if (DIRECT) {
       const { promises: fsp } = await import('node:fs')
       const { homedir } = await import('node:os')
-      const state = JSON.parse(await fsp.readFile(`${homedir()}/.dsh-companion/bridge-state.json`, 'utf8'))
+      const state = JSON.parse(await fsp.readFile(`${homedir()}/.deepseek-harness-pocket/bridge-state.json`, 'utf8'))
       ws.send(JSON.stringify({ kind: 'auth', token: state.pairingToken }))
     } else {
       ws.send(JSON.stringify({ kind: 'phone-auth', authToken: 'dev:smoke_user', deviceKey: 'chat-smoke' }))

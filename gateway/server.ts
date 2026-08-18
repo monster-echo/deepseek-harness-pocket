@@ -70,7 +70,7 @@ async function main(): Promise<void> {
   const heartbeat = setInterval(() => gateway.heartbeat(), 25_000)
 
   server.listen(config.port, config.hostname, () => {
-    console.log(`dsh-companion gateway on http://${config.hostname}:${config.port} (ws: /gw/worker, /gw/phone)`)
+    console.log(`deepseek-harness-pocket gateway on http://${config.hostname}:${config.port} (ws: /gw/worker, /gw/phone)`)
   })
 
   const shutdown = (): void => {

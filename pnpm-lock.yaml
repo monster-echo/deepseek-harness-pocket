@@ -10,9 +10,9 @@ importers:
 
   e2e:
     dependencies:
-      '@dsh-companion/bridge-protocol':
+      '@deepseek-harness-pocket/bridge-protocol':
         specifier: workspace:*
-        version: link:../packages/dsh-bridge-protocol
+        version: link:../packages/bridge-protocol
     devDependencies:
       '@types/node':
         specifier: ^22
@@ -32,9 +32,9 @@ importers:
 
   gateway:
     dependencies:
-      '@dsh-companion/bridge-protocol':
+      '@deepseek-harness-pocket/bridge-protocol':
         specifier: workspace:*
-        version: link:../packages/dsh-bridge-protocol
+        version: link:../packages/bridge-protocol
       next:
         specifier: ^16.2.0
         version: 16.3.1(@types/node@22.20.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -76,16 +76,7 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)(tsx@4.23.12)
 
-  packages/dsh-bridge-protocol:
-    devDependencies:
-      typescript:
-        specifier: ^5.8.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.0.0
-        version: 3.2.7(@types/node@22.20.1)(tsx@4.23.12)
-
-  packages/dsh-companion-bridge:
+  packages/bridge:
     dependencies:
       qrcode-terminal:
         specifier: ^0.12.0
@@ -103,9 +94,9 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: 3.18.1
         version: 3.18.1
-      '@dsh-companion/bridge-protocol':
+      '@deepseek-harness-pocket/bridge-protocol':
         specifier: workspace:*
-        version: link:../dsh-bridge-protocol
+        version: link:../bridge-protocol
       '@types/node':
         specifier: ^22
         version: 22.20.1
@@ -118,6 +109,15 @@ importers:
       esbuild:
         specifier: ^0.24.0
         version: 0.24.2
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)(tsx@4.23.12)
+
+  packages/bridge-protocol:
+    devDependencies:
       typescript:
         specifier: ^5.8.0
         version: 5.9.3

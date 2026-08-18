@@ -331,7 +331,7 @@ function TurnEndRow({ item }: Readonly<{ item: TimelineItem }>) {
 
 // ---------- 审批 / 提问（接管输入区，对齐 dsh ApprovalPanel） ----------
 
-function ServerRequestCard({ request }: Readonly<{ request: import('@dsh-companion/bridge-protocol').ServerRequest }>) {
+function ServerRequestCard({ request }: Readonly<{ request: import('@deepseek-harness-pocket/bridge-protocol').ServerRequest }>) {
   const { palette } = usePreferences()
   const respondPermission = useDshStore((s) => s.respondPermission)
   const respondQuestion = useDshStore((s) => s.respondQuestion)

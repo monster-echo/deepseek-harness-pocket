@@ -9,7 +9,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { parsePairingQrPayload } from '@dsh-companion/bridge-protocol'
+import { parsePairingQrPayload } from '@deepseek-harness-pocket/bridge-protocol'
 import type { Store } from './store.js'
 import type { Gateway } from './gateway.js'
 import { createAuthVerifier, type VerifiedUser } from './auth-verify.js'
@@ -51,7 +51,7 @@ export function createApiRouter(deps: ApiDeps): (req: IncomingMessage, res: Serv
     if (url === undefined || !url.startsWith('/api/v1/')) return false
 
     if (url === '/api/v1/health' && req.method === 'GET') {
-      json(res, 200, { ok: true, service: 'dsh-companion-gateway', protocol: 'mobile/v1' })
+      json(res, 200, { ok: true, service: 'deepseek-harness-pocket-gateway', protocol: 'mobile/v1' })
       return true
     }
 

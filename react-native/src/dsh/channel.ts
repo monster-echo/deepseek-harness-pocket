@@ -5,7 +5,7 @@
  * 帧解析统一在 DshClient.handleInner。
  */
 
-import type { PhoneToWorkerFrame } from '@dsh-companion/bridge-protocol'
+import type { PhoneToWorkerFrame } from '@deepseek-harness-pocket/bridge-protocol'
 
 export interface Channel {
   /** 发送一帧 /mobile 协议；未连接时抛错 */

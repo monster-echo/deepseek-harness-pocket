@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { PROTOCOL_VERSION, type DshSessionEvent } from '@dsh-companion/bridge-protocol'
+import { PROTOCOL_VERSION, type DshSessionEvent } from '@deepseek-harness-pocket/bridge-protocol'
 import { makeFakeDsh, startFakeWorker, startTestGateway, TestPhone, sleep } from './helpers'
 
 function fixture(): { sessionId: string; events: DshSessionEvent[] }[] {

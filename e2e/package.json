@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-companion/e2e",
+  "name": "@deepseek-harness-pocket/e2e",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@dsh-companion/bridge-protocol": "workspace:*"
+    "@deepseek-harness-pocket/bridge-protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22",

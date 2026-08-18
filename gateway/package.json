@@ -1,7 +1,7 @@
 {
-  "name": "@dsh-companion/gateway",
+  "name": "@deepseek-harness-pocket/gateway",
   "version": "0.1.0",
-  "description": "dsh-companion Gateway：手机↔Worker 中转（Next.js 管理面 + 自定义 server 承载 WebSocket）",
+  "description": "deepseek-harness-pocket Gateway：手机↔Worker 中转（Next.js 管理面 + 自定义 server 承载 WebSocket）",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,7 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dsh-companion/bridge-protocol": "workspace:*",
+    "@deepseek-harness-pocket/bridge-protocol": "workspace:*",
     "next": "^16.2.0",
     "pg": "^8.13.0",
     "react": "^19.2.0",

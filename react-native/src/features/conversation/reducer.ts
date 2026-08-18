@@ -10,7 +10,7 @@
  * 事件负载全部在 event.data 下。
  */
 
-import type { DshSessionEvent } from '@dsh-companion/bridge-protocol'
+import type { DshSessionEvent } from '@deepseek-harness-pocket/bridge-protocol'
 
 // ---------- 视图模型 ----------
 

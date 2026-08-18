@@ -1,0 +1,19 @@
+# 轻模式安装示例（已有 dsh web 在跑、不想装 dshc）：
+#
+#   dsh plugin --profile web add @deepseek-harness-pocket/bridge
+#
+# 然后把下面这行加进 ~/.dsh/profiles/web/cordis.patch.yml：
+- insert:
+  - id: deepseek-harness-pocket-bridge
+    name: '@deepseek-harness-pocket/bridge'
+    config:
+      listen:
+        host: 0.0.0.0
+        port: 3780
+      gateway:
+        url: ''            # wss://你的-gateway 地址；留空则仅同网段直连
+        hostKey: ''
+      caps: m2
+      name: ''             # 默认 hostname
+      stateFile: '~/.deepseek-harness-pocket/bridge-state.json'
+      readOnly: false

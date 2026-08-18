@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import WebSocket from 'ws'
 
-const state = JSON.parse(readFileSync(`${homedir()}/.dsh-companion/bridge-state.json`, 'utf8'))
+const state = JSON.parse(readFileSync(`${homedir()}/.deepseek-harness-pocket/bridge-state.json`, 'utf8'))
 const ws = new WebSocket('ws://127.0.0.1:3780/mobile/ws')
 const waiters = []
 const frames = []

@@ -7,7 +7,7 @@
  * - REST（配对绑定 / push token）走 fetch
  */
 
-import { parseGatewayToPhoneFrame, type WorkerPresence } from '@dsh-companion/bridge-protocol'
+import { parseGatewayToPhoneFrame, type WorkerPresence } from '@deepseek-harness-pocket/bridge-protocol'
 import { readSessionToken } from '../data/storage'
 import { GatewayTunnel } from './channel'
 

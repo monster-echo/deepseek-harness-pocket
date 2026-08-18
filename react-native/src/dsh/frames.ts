@@ -2,9 +2,9 @@
  * 协议帧的 RN 侧出口：重导出协议包 + 宽松的下行帧解析。
  */
 
-export * from '@dsh-companion/bridge-protocol'
+export * from '@deepseek-harness-pocket/bridge-protocol'
 
-import type { WorkerToPhoneFrame } from '@dsh-companion/bridge-protocol'
+import type { WorkerToPhoneFrame } from '@deepseek-harness-pocket/bridge-protocol'
 
 /** 宽松解析 Worker 下行帧；未知结构返回 null（不抛错）。 */
 export function parseWorkerFrameSafe(value: unknown): WorkerToPhoneFrame | null {

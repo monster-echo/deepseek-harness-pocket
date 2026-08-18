@@ -10,8 +10,8 @@ import {
   parseGatewayToPhoneFrame,
   type PairingQrPayload,
   type WorkerPresence,
-} from '@dsh-companion/bridge-protocol'
-import type { GatewayToPhoneFrame, GatewayToWorkerFrame, WorkerToGatewayFrame } from '@dsh-companion/bridge-protocol'
+} from '@deepseek-harness-pocket/bridge-protocol'
+import type { GatewayToPhoneFrame, GatewayToWorkerFrame, WorkerToGatewayFrame } from '@deepseek-harness-pocket/bridge-protocol'
 import { WebSocket } from 'ws'
 import type { Store } from './store.js'
 import type { GatewayConfig } from './config.js'

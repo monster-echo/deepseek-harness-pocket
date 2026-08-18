@@ -27,6 +27,7 @@ export function ConversationScreen() {
   const serverRequests = useDshStore((s) => s.serverRequests);
   const scrollRef = useRef<ScrollView>(null);
   const [actionTarget, setActionTarget] = useState<TimelineItem | null>(null);
+  const [menuTab, setMenuTab] = useState<'permission' | 'model' | 'preset' | 'commands' | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true })
@@ -41,7 +42,6 @@ export function ConversationScreen() {
   }
 
   const pending = serverRequests[0]
-  const [menuTab, setMenuTab] = useState<'permission' | 'model' | 'preset' | 'commands' | null>(null)
   const openMenu = (tab: 'permission' | 'model' | 'preset' | 'commands'): void => setMenuTab(tab)
 
   return (

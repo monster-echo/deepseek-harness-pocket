@@ -114,7 +114,7 @@ function StatsLine() {
   parts.push(`输入 ${fmtTok(totalUsage.input)} · 输出 ${fmtTok(totalUsage.output)}`)
   return (
     <Text style={[styles.statsBar, { color: palette.textSecondary }]} numberOfLines={2}>
-      {parts.join('  ·  ')}
+      {parts.join('  ｜  ')}
     </Text>
   )
 }

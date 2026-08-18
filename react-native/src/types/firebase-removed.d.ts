@@ -37,3 +37,8 @@ declare module 'react-native-syntax-highlighter' {
 declare module 'react-syntax-highlighter/styles/hljs' {
   export const docco: unknown
 }
+
+declare module 'react-syntax-highlighter/styles/hljs/atom-one-dark' {
+  const atomOneDark: unknown
+  export default atomOneDark
+}

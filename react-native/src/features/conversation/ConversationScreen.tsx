@@ -11,6 +11,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import Markdown from 'react-native-markdown-display';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
 import { docco } from 'react-syntax-highlighter/styles/hljs';
+import atomOneDark from 'react-syntax-highlighter/styles/hljs/atom-one-dark';
 import * as Clipboard from 'expo-clipboard';
 import { AppIcon, IconName } from '../../design-system/AppIcon';
 import { Sheet } from '../../design-system/Sheet';
@@ -202,7 +203,7 @@ function AssistantRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLo
 
 /** text → 正文（流式纯文本，定稿 Markdown）；reasoning → Think 折叠行。 */
 function AssistantBlockView({ block, streaming }: Readonly<{ block: AssistantBlock; streaming: boolean }>) {
-  const { palette } = usePreferences()
+  const { palette, dark } = usePreferences()
   const [open, setOpen] = useState(false)
   if (block.type === 'text') {
     if (streaming) {
@@ -218,7 +219,7 @@ function AssistantBlockView({ block, streaming }: Readonly<{ block: AssistantBlo
       return (
         <View style={styles.dsmlGroup}>
           {prose.length > 0 && (
-            <Markdown style={markdownStyle(palette)} rules={markdownRules}>{prose}</Markdown>
+            <Markdown style={markdownStyle(palette)} rules={markdownRules(palette, dark)}>{prose}</Markdown>
           )}
           {calls.map((call, i) => (
             <DsmlToolCard key={i} call={call} />
@@ -229,7 +230,7 @@ function AssistantBlockView({ block, streaming }: Readonly<{ block: AssistantBlo
         </View>
       )
     }
-    return <Markdown style={markdownStyle(palette)} rules={markdownRules}>{block.text}</Markdown>
+    return <Markdown style={markdownStyle(palette)} rules={markdownRules(palette, dark)}>{block.text}</Markdown>
   }
   const lines = block.text.split('\n').filter((l) => l.trim().length > 0)
   const summary = streaming ? lines[lines.length - 1] ?? '' : lines[0] ?? ''
@@ -286,16 +287,30 @@ function markdownStyle(palette: Palette) {
   }
 }
 
-/** 代码块高亮（react-native-syntax-highlighter，prism 引擎）。 */
-const markdownRules = {
-  fence: (node: { content: string; sourceInfo?: string }, _children: unknown, _parent: unknown, _styles: unknown): React.JSX.Element => {
-    const language = (node.sourceInfo ?? '').trim() || 'text'
-    return (
-      <SyntaxHighlighter language={language} style={docco} highlighter="hljs" fontSize={12}>
-        {node.content}
-      </SyntaxHighlighter>
-    )
-  },
+/** 代码块高亮：头部（语言标签 + 复制）+ 语法高亮，深浅色用不同样式。 */
+function markdownRules(palette: Palette, dark: boolean) {
+  const codeStyle = dark ? atomOneDark : docco
+  const copyCode = (code: string): void => {
+    void Clipboard.setStringAsync(code)
+  }
+  return {
+    fence: (node: { content: string; sourceInfo?: string }, _children: unknown, _parent: unknown, _styles: unknown): React.JSX.Element => {
+      const language = (node.sourceInfo ?? '').trim() || 'text'
+      return (
+        <View style={[styles.codeBlock, { borderColor: palette.border }]}>
+          <View style={[styles.codeHead, { borderBottomColor: palette.border, backgroundColor: palette.surfaceMuted }]}>
+            <Text style={[styles.codeLang, { color: palette.textSecondary, fontFamily: 'Menlo' }]}>{language}</Text>
+            <Pressable onPress={() => copyCode(node.content)} hitSlop={8}>
+              <Text style={[styles.codeCopy, { color: palette.brand }]}>复制</Text>
+            </Pressable>
+          </View>
+          <SyntaxHighlighter language={language} style={codeStyle} highlighter="hljs" fontSize={12}>
+            {node.content}
+          </SyntaxHighlighter>
+        </View>
+      )
+    },
+  }
 }
 
 /** DSML 文本协议工具调用：内联卡（未执行态）。 */
@@ -590,6 +605,10 @@ const styles = StyleSheet.create({
   ciSection: { paddingVertical: spacing.x1 },
   ciSectionName: { fontSize: 11, fontWeight: '600' },
   ciSectionText: { fontSize: 12, lineHeight: 17 },
+  codeBlock: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, overflow: 'hidden' },
+  codeHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.x2, paddingVertical: spacing.x1, borderBottomWidth: StyleSheet.hairlineWidth },
+  codeLang: { fontSize: 11 },
+  codeCopy: { fontSize: 12, fontWeight: '600' },
   compactionBody: { fontSize: 12, lineHeight: 18, paddingTop: spacing.x1 },
   turnEndCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: 1, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'center' },
   turnEndText: { fontSize: 13, flexShrink: 1 },

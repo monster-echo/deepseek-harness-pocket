@@ -40,7 +40,9 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const { palette } = usePreferences();
   const { navigate, user } = useApp();
   const [query, setQuery] = useState('');
-  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped');
+  const [grouping, setGrouping] = useState<'workspace' | 'flat'>('workspace');
+  const [sorting, setSorting] = useState<'manual' | 'recent'>('recent');
+  const [viewSheet, setViewSheet] = useState(false);
   const [newSheet, setNewSheet] = useState<WorkspaceRow | null>(null);
   const [actionTarget, setActionTarget] = useState<WorkspaceRow | null>(null);
   const [renameTarget, setRenameTarget] = useState<WorkspaceRow | null>(null);
@@ -57,6 +59,8 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const listWorkspaces = useDshStore((s) => s.listWorkspaces);
   const renameWorkspace = useDshStore((s) => s.renameWorkspace);
   const deleteWorkspace = useDshStore((s) => s.deleteWorkspace);
+  const pinnedSessionIds = useDshStore((s) => s.pinnedSessionIds);
+  const togglePinSession = useDshStore((s) => s.togglePinSession);
 
   useEffect(() => {
     if (activeWorkerId === null) { setWorkspaces([]); return }
@@ -66,6 +70,16 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const q = query.trim().toLowerCase()
   const online = workers.filter((w) => w.online).length
   const signedIn = user !== null
+
+  const sortList = (list: SessionListItem[]): SessionListItem[] => {
+    if (sorting === 'recent') return [...list].sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+    return [...list].sort((a, b) => {
+      const ap = pinnedSessionIds.includes(a.id) ? 1 : 0
+      const bp = pinnedSessionIds.includes(b.id) ? 1 : 0
+      if (ap !== bp) return bp - ap
+      return b.lastActivityAt - a.lastActivityAt
+    })
+  }
 
   const groups = useMemo(() => {
     const filtered = q.length === 0
@@ -78,8 +92,15 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
       list.push(s)
       byCwd.set(cwd, list)
     }
+    const sortSessions = sortList
+    for (const [cwd, list] of byCwd) byCwd.set(cwd, sortSessions(list))
     const wsByPath = new Map(workspaces.map((w) => [w.path, w]))
-    return [...byCwd.entries()].sort((a, b) => b[1][0].lastActivityAt - a[1][0].lastActivityAt)
+    return [...byCwd.entries()].sort((a, b) => {
+      const ap = a[1].some((s) => pinnedSessionIds.includes(s.id)) ? 1 : 0
+      const bp = b[1].some((s) => pinnedSessionIds.includes(s.id)) ? 1 : 0
+      if (sorting === 'manual' && ap !== bp) return bp - ap
+      return b[1][0].lastActivityAt - a[1][0].lastActivityAt
+    })
       .map(([cwd, list]) => {
         const ws = wsByPath.get(cwd)
         const visible = q.length === 0 || list.length > 0 || (ws !== undefined && (ws.title.toLowerCase().includes(q) || ws.path.toLowerCase().includes(q)))
@@ -93,7 +114,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
         }
       })
       .filter((g) => g.visible)
-  }, [sessions, workspaces, q])
+  }, [sessions, workspaces, q, sorting, pinnedSessionIds])
 
   const doRename = (): void => {
     if (renameTarget === null || renameText.trim().length === 0) return
@@ -151,10 +172,10 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
         </View>
         <Pressable
           style={[styles.viewToggle, { borderColor: palette.border }]}
-          onPress={() => setViewMode(viewMode === 'grouped' ? 'flat' : 'grouped')}
+          onPress={() => setViewSheet(true)}
           hitSlop={8}
         >
-          <AppIcon name={viewMode === 'grouped' ? 'home' : 'minus'} color={palette.textSecondary} size={14} />
+          <AppIcon name="settings" color={palette.textSecondary} size={14} />
         </Pressable>
       </View>
 
@@ -173,10 +194,9 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
                 {sessions.length === 0 ? '暂无会话' : '无匹配结果'}
               </Text>
             )}
-            {viewMode === 'flat' ? (
-              [...sessions].sort((a, b) => b.lastActivityAt - a.lastActivityAt)
-                .filter((s) => q.length === 0 || s.title.toLowerCase().includes(q) || (s.cwd ?? '').toLowerCase().includes(q))
-                .map((session) => <SessionRow key={session.id} session={session} active={activeSessionId === session.id} onPress={() => { openSession(session.id); onClose(); }} />)
+            {grouping === 'flat' ? (
+              sortList(sessions.filter((s) => q.length === 0 || s.title.toLowerCase().includes(q) || (s.cwd ?? '').toLowerCase().includes(q)))
+                .map((session) => <SessionRow key={session.id} session={session} active={activeSessionId === session.id} onPress={() => { openSession(session.id); onClose(); }} onLongPress={() => togglePinSession(session.id)} pinned={pinnedSessionIds.includes(session.id)} />)
             ) : (
               groups.map((group) => (
                 <View key={group.key}>
@@ -194,7 +214,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
                       </Pressable>
                     )}
                   </Pressable>
-                  {group.sessions.map((session) => <SessionRow key={session.id} session={session} active={activeSessionId === session.id} onPress={() => { openSession(session.id); onClose(); }} />)}
+                  {group.sessions.map((session) => <SessionRow key={session.id} session={session} active={activeSessionId === session.id} onPress={() => { openSession(session.id); onClose(); }} onLongPress={() => togglePinSession(session.id)} pinned={pinnedSessionIds.includes(session.id)} />)}
                 </View>
               ))
             )}
@@ -210,6 +230,27 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
       </View>
 
       {/* Sheets */}
+      {/* 视图选项：分组 + 排序 两维度 */}
+      <Sheet visible={viewSheet} title="视图选项" onClose={() => setViewSheet(false)} snapPoints={['55%']}>
+        <Text style={[styles.viewSectionLabel, { color: palette.textSecondary }]}>分组</Text>
+        <Pressable style={[styles.actionRow, { borderColor: palette.border }]} onPress={() => { setGrouping('workspace'); setViewSheet(false); }}>
+          <Text style={[styles.actionText, { color: palette.text }]}>按工作区</Text>
+          {grouping === 'workspace' && <AppIcon name="check" color={palette.brand} size={16} />}
+        </Pressable>
+        <Pressable style={[styles.actionRow, { borderColor: palette.border }]} onPress={() => { setGrouping('flat'); setViewSheet(false); }}>
+          <Text style={[styles.actionText, { color: palette.text }]}>单列表</Text>
+          {grouping === 'flat' && <AppIcon name="check" color={palette.brand} size={16} />}
+        </Pressable>
+        <Text style={[styles.viewSectionLabel, { color: palette.textSecondary }]}>排序</Text>
+        <Pressable style={[styles.actionRow, { borderColor: palette.border }]} onPress={() => { setSorting('manual'); setViewSheet(false); }}>
+          <Text style={[styles.actionText, { color: palette.text }]}>手动排序</Text>
+          {sorting === 'manual' && <AppIcon name="check" color={palette.brand} size={16} />}
+        </Pressable>
+        <Pressable style={[styles.actionRow, { borderColor: palette.border }]} onPress={() => { setSorting('recent'); setViewSheet(false); }}>
+          <Text style={[styles.actionText, { color: palette.text }]}>最近更新</Text>
+          {sorting === 'recent' && <AppIcon name="check" color={palette.brand} size={16} />}
+        </Pressable>
+      </Sheet>
       <NewSessionSheet
         visible={newSheet !== null}
         presetWorkspace={newSheet && newSheet.path.length > 0 ? newSheet : undefined}
@@ -243,14 +284,15 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   );
 }
 
-function SessionRow({ session, active, onPress }: Readonly<{ session: SessionListItem; active: boolean; onPress: () => void }>) {
+function SessionRow({ session, active, pinned, onPress, onLongPress }: Readonly<{ session: SessionListItem; active: boolean; pinned?: boolean; onPress: () => void; onLongPress?: () => void }>) {
   const { palette } = usePreferences();
   return (
-    <Pressable style={[styles.sessionRow, active && { backgroundColor: palette.brandSoft }]} onPress={onPress}>
+    <Pressable style={[styles.sessionRow, active && { backgroundColor: palette.brandSoft }]} onPress={onPress} onLongPress={onLongPress} delayLongPress={350}>
       <View style={{ flex: 1 }}>
         <Text style={[styles.sessionTitle, { color: palette.text }]} numberOfLines={1}>{session.title}</Text>
         <Text style={[styles.sessionTime, { color: palette.textSecondary }]}>{formatRelativeTime(session.lastActivityAt)}</Text>
       </View>
+      {pinned === true && <AppIcon name="crown" color={palette.brand} size={12} />}
       {session.agentStatus === 'running' && <View style={[styles.dot, { backgroundColor: palette.warning }]} />}
     </Pressable>
   );
@@ -414,7 +456,8 @@ const styles = StyleSheet.create({
   entryLabel: { fontSize: 14 },
   entrySub: { fontSize: 11 },
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, marginBottom: spacing.x2 },
-  actionText: { fontSize: 14 },
+  actionText: { fontSize: 14, flex: 1 },
+  viewSectionLabel: { fontSize: 12, marginBottom: spacing.x1, marginTop: spacing.x1 },
   renameInput: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, fontSize: 15, marginBottom: spacing.x3 },
   renameBtn: { borderRadius: radii.control, alignItems: 'center', paddingVertical: spacing.x3 },
   renameBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },

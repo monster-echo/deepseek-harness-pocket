@@ -51,6 +51,9 @@ interface DshState {
   /** 排队发送：turn 进行时允许输入并排队，turn 结束后自动发送 */
   queueSend: boolean
   setQueueSend(v: boolean): void
+  /** 置顶会话（手动排序）；置顶的会话排在列表最前 */
+  pinnedSessionIds: readonly string[]
+  togglePinSession(id: string): void
   respondQuestion(requestId: string, answer: string): Promise<void>
 }
 
@@ -120,6 +123,7 @@ export const useDshStore = create<DshState>((set, get) => {
     newSessionDefaults: null,
     newSessionPreset: '',
     queueSend: false,
+    pinnedSessionIds: [],
 
     connectGateway() {
       ensureGateway()
@@ -348,6 +352,13 @@ export const useDshStore = create<DshState>((set, get) => {
 
     setQueueSend(v) {
       set({ queueSend: v })
+    },
+
+    togglePinSession(id) {
+      const cur = get().pinnedSessionIds
+      set({
+        pinnedSessionIds: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
+      })
     },
 
     async respondPermission(requestId, decision) {

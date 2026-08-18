@@ -30,7 +30,7 @@ interface DshState {
   listDir(path: string): Promise<readonly { name: string; path: string }[]>
   fsHome(): Promise<string>
   addWorkspace(path: string): Promise<{ id: string; path: string; title: string } | null>
-  createSession(cwd: string): Promise<string | null>
+  createSession(cwd: string, opts?: { reasoningEffort?: string; permission?: string }): Promise<string | null>
   forkSession(sessionId: string, boundary?: number): Promise<string | null>
   openSession(sessionId: string): Promise<void>
   sendMessage(text: string, images?: readonly unknown[]): Promise<void>
@@ -177,15 +177,20 @@ export const useDshStore = create<DshState>((set, get) => {
       }
     },
 
-    async createSession(cwd) {
+    async createSession(cwd, opts) {
       if (client === null) return null
       const state = get()
       try {
+        const reasoningEffort = opts?.reasoningEffort
         const sessionId = state.newSessionDefaults !== null
-          ? await client.createSessionWithRoute(cwd, state.newSessionDefaults.provider, state.newSessionDefaults.model, state.newSessionPreset.length > 0 ? state.newSessionPreset : undefined)
+          ? await client.createSessionWithRoute(cwd, state.newSessionDefaults.provider, state.newSessionDefaults.model, state.newSessionPreset.length > 0 ? state.newSessionPreset : undefined, reasoningEffort)
           : await client.createSession(cwd)
         await get().refreshSessions()
         await get().openSession(sessionId)
+        // 新建会话显式选的权限：创建后立即应用（默认档 workspace-write 跳过，避免每次弹提示）
+        if (opts?.permission !== undefined && opts.permission.length > 0 && opts.permission !== 'workspace-write') {
+          await get().setPermission(opts.permission)
+        }
         return sessionId
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))

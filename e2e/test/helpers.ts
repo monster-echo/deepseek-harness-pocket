@@ -93,9 +93,11 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
     async listSessions(): Promise<SessionSummary[]> {
       return fixture.map((s) => {
         const lastSeq = s.events.length - 1
+        const last = s.events[s.events.length - 1]
         return {
           id: s.sessionId, createdAt: 1000, cwd: '/tmp/proj', lastSeq,
-          live: true, agentStatus: lastSeq >= 0 && s.events[s.events.length - 1]!.type === 'turn/end' ? 'idle' : 'running',
+          lastActivityAt: typeof last?.time === 'number' ? last.time : 1000,
+          live: true, agentStatus: lastSeq >= 0 && last?.type === 'turn/end' ? 'idle' : 'running',
         }
       })
     },

@@ -13,7 +13,9 @@ export type IconName =
   | 'globe'
   | 'home'
   | 'image'
+  | 'info'
   | 'lock'
+  | 'menu'
   | 'palette'
   | 'minus'
   | 'plus'
@@ -49,7 +51,9 @@ const paths: Record<Exclude<IconName, 'user'>, string[]> = {
   globe: ['M3 12h18', 'M12 3a14 14 0 0 1 0 18', 'M12 3a14 14 0 0 0 0 18'],
   home: ['m3 11 9-8 9 8', 'M5 10v10h14V10', 'M9 20v-6h6v6'],
   image: ['M4 4h16v16H4Z', 'm4 17 4-4 3 3 3-4 6 6', 'M15 8h.01'],
+  info: ['M12 8h.01', 'M12 11v5'],
   lock: ['M8 10V7a4 4 0 0 1 8 0v3'],
+  menu: ['M4 7h16', 'M4 12h16', 'M4 17h16'],
   minus: ['M5 12h14'],
   palette: ['M12 3a9 9 0 0 0 0 18h1.5a1.5 1.5 0 0 0 0-3H12a2 2 0 0 1 0-4h2a7 7 0 0 0 0-14h-2Z'],
   plus: ['M12 5v14', 'M5 12h14'],
@@ -71,6 +75,7 @@ export function AppIcon({ name, color = 'currentColor', size = 24 }: IconProps) 
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       {name === 'globe' ? <Circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2" /> : null}
+      {name === 'info' ? <Circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2" /> : null}
       {name === 'lock' ? <Rect x="4" y="10" width="16" height="11" rx="2" stroke={color} strokeWidth="2" /> : null}
       {name === 'settings' ? <Circle cx="12" cy="12" r="3" stroke={color} strokeWidth="2" /> : null}
       {paths[name].map((d) => (

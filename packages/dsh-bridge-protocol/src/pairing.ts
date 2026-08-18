@@ -66,7 +66,7 @@ export function isValidPairingCode(code: string): boolean {
   return /^\d{6}$/.test(code)
 }
 
-/** app → gateway：发起配对绑定（携带终北 session，由 HTTP 层附加）。 */
+/** app → gateway：发起配对绑定（携带掌鲸 DSH Pocket session，由 HTTP 层附加）。 */
 export interface PairingBindArgs {
   /** 二选一 */
   readonly qr?: PairingQrPayload

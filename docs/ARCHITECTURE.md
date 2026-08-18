@@ -4,9 +4,9 @@
 
 ```
 手机 app (Expo/RN, react-native/)
-  │ 强制登录 auth.zhongbei.tech（终北统一认证）
+  │ 强制登录 auth.zhongbei.tech（掌鲸 DSH Pocket 统一认证）
   ├─ 直连 ws://<worker>:3780 + pairing token（同 WiFi 兜底）
-  └─ wss://<gateway> + 终北 session（外网主路径）
+  └─ wss://<gateway> + 掌鲸 DSH Pocket session（外网主路径）
          │
 Gateway (gateway/, Next.js + 自定义 server 承载 WS, 自有 PG)
   ├─ 验票：auth.zhongbei.tech 内部校验端点

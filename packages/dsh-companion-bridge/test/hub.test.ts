@@ -19,8 +19,8 @@ function makeAdapter(events: { sessionId: string; event: { type: string; seq: nu
     dshVersion: () => null,
     async listSessions(): Promise<SessionSummary[]> {
       return [
-        { id: 's1', createdAt: 1, cwd: '/tmp', lastSeq: 1, live: true, agentStatus: 'idle' },
-        { id: 's2', createdAt: 2, cwd: null, lastSeq: -1, live: false, agentStatus: null },
+        { id: 's1', createdAt: 1, lastActivityAt: 1, cwd: '/tmp', lastSeq: 1, live: true, agentStatus: 'idle' },
+        { id: 's2', createdAt: 2, lastActivityAt: 2, cwd: null, lastSeq: -1, live: false, agentStatus: null },
       ]
     },
     async readSlice(id: string, fromSeq: number): Promise<SessionSlice | null> {

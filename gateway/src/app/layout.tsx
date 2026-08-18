@@ -1,5 +1,5 @@
 export const metadata = {
-  title: 'DSH Companion Gateway',
+  title: '掌鲸 DSH Pocket Gateway',
   description: '手机上的 DeepSeek Harness 客户端 — 中转服务',
 }
 

@@ -13,13 +13,13 @@ export type LegalDocument = Readonly<{
 
 export const privacyPolicy: LegalDocument = {
   title: '隐私政策',
-  summary: '了解 MobileUI 如何收集、使用、共享、保存和保护你的数据，以及你可以如何行使隐私权利。',
+  summary: '了解 掌鲸 DSH Pocket 如何收集、使用、共享、保存和保护你的数据，以及你可以如何行使隐私权利。',
   effectiveDate: '2026 年 7 月 30 日',
   sections: [
     {
       title: '1. 适用范围与服务提供方',
       paragraphs: [
-        '本政策适用于 MobileUI 应用及其账号、内容同步、会员、通知和客户支持服务。服务提供方以 App Store 产品页显示的开发者主体为准。',
+        '本政策适用于 掌鲸 DSH Pocket 应用及其账号、内容同步、会员、通知和客户支持服务。服务提供方以 App Store 产品页显示的开发者主体为准。',
         '使用服务前请完整阅读本政策。若你不同意必要的数据处理，将无法使用依赖账号或云端同步的功能。',
       ],
     },
@@ -101,7 +101,7 @@ export const termsOfService: LegalDocument = {
     {
       title: '1. 协议成立与适用',
       paragraphs: [
-        '下载、注册或使用 MobileUI 即表示你同意本协议和隐私政策。若你代表组织使用，应确保已获得有效授权。',
+        '下载、注册或使用 掌鲸 DSH Pocket 即表示你同意本协议和隐私政策。若你代表组织使用，应确保已获得有效授权。',
         '你应达到所在地订立本协议所需年龄；未成年人应在监护人阅读并同意后使用。',
       ],
     },
@@ -124,7 +124,7 @@ export const termsOfService: LegalDocument = {
       paragraphs: [
         '订阅前，购买页面会显示权益、周期、价格和是否自动续期。通过 App Store 购买时，付款由 Apple ID 账户确认并处理。',
         '除非在当前订阅期结束至少 24 小时前关闭自动续期，否则订阅会按所示周期续订。你可在 Apple ID 的“订阅”设置中管理或取消；取消后权益通常持续至已付费周期结束。',
-        '免费试用、退款、价格变更、家庭共享及恢复购买受购买页面说明、适用法律和 Apple 媒体服务条款约束。删除 MobileUI 账号不会自动取消 App Store 订阅。',
+        '免费试用、退款、价格变更、家庭共享及恢复购买受购买页面说明、适用法律和 Apple 媒体服务条款约束。删除 掌鲸 DSH Pocket 账号不会自动取消 App Store 订阅。',
       ],
     },
     {
@@ -180,7 +180,7 @@ export const subscriptionTerms: LegalDocument = {
     {
       title: '3. 管理与取消',
       paragraphs: [
-        '应用商店订阅应在对应商店账号的“订阅”设置中管理或取消。卸载应用或注销 MobileUI 账号不会自动取消订阅。',
+        '应用商店订阅应在对应商店账号的“订阅”设置中管理或取消。卸载应用或注销 掌鲸 DSH Pocket 账号不会自动取消订阅。',
       ],
     },
     {

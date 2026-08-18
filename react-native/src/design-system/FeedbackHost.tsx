@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useApp } from '../state/AppStore';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { colors, radii, spacing } from '../theme/tokens';
@@ -23,7 +23,7 @@ export function FeedbackHost() {
           style={[feedbackStyles.toast, { backgroundColor: palette.surface, borderColor: palette.border }]}
         >
           <AppIcon name={toast.tone === 'error' ? 'alert' : 'check'} color={toastColor} size={20} />
-          <Text style={styles.body}>{toast.message}</Text>
+          <Text style={[feedbackStyles.toastText, { color: palette.brand }]}>{toast.message}</Text>
         </View>
       ) : null}
       <Modal visible={Boolean(confirm)} transparent animationType="fade">
@@ -64,17 +64,29 @@ const feedbackStyles = StyleSheet.create({
     position: 'absolute',
     left: spacing.x4,
     right: spacing.x4,
-    bottom: spacing.x6,
-    minHeight: 52,
+    top: spacing.x8,
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: spacing.x3,
-    borderRadius: radii.control,
+    borderRadius: radii.round,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
-    paddingHorizontal: spacing.x4,
+    paddingHorizontal: spacing.x5,
+    paddingVertical: spacing.x2,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOpacity: 0.12,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 },
+      },
+      android: { elevation: 8 },
+    }),
   },
+  toastText: { fontSize: 13, fontWeight: '500' },
   scrim: {
     flex: 1,
     alignItems: 'center',

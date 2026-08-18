@@ -1,5 +1,5 @@
 /**
- * dshc — DSH Companion Worker CLI。
+ * dshc — 掌鲸 DSH Pocket Worker CLI。
  *
  * 用法：
  *   dshc install [--gateway wss://…]     安装开机自启（launchd / systemd user）
@@ -189,7 +189,7 @@ async function main(): Promise<void> {
     default:
       process.stdout.write(
         [
-          'dshc — DSH Companion Worker',
+          'dshc — 掌鲸 DSH Pocket Worker',
           '',
           '用法: dshc <command> [options]',
           '',

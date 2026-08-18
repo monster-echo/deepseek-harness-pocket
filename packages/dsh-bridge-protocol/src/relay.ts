@@ -61,7 +61,7 @@ export type GatewayToWorkerFrame =
 
 export interface PhoneAuthFrame {
   readonly kind: 'phone-auth'
-  /** 终北 session token（Bearer）；gateway 调内部校验端点验真 */
+  /** 掌鲸 DSH Pocket session token（Bearer）；gateway 调内部校验端点验真 */
   readonly authToken: string
   /** 设备推送标识（expo push token，可后续注册） */
   readonly deviceKey: string

@@ -7,17 +7,17 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import * as Clipboard from 'expo-clipboard';
 import { AppIcon, IconName } from '../../design-system/AppIcon';
+import { Sheet } from '../../design-system/Sheet';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
 import type { AssistantBlock, TimelineItem, ToolStatus } from './reducer';
 import { splitDsml, cutAtDsmlStart, type DsmlToolCall } from './dsml';
 import { ComposerBar } from './ComposerBar';
-import { SessionMenuSheet } from './SessionMenuSheet';
 import { NewSessionComposer } from './NewSessionComposer';
 
 export function ConversationScreen() {
@@ -28,8 +28,6 @@ export function ConversationScreen() {
   const serverRequests = useDshStore((s) => s.serverRequests);
   const scrollRef = useRef<ScrollView>(null);
   const [actionTarget, setActionTarget] = useState<TimelineItem | null>(null);
-  const [menuTab, setMenuTab] = useState<'permission' | 'model' | 'preset' | 'commands' | null>(null);
-  const openMenu = (tab: 'permission' | 'model' | 'preset' | 'commands'): void => setMenuTab(tab);
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true })
@@ -39,8 +37,7 @@ export function ConversationScreen() {
     // 对齐 dsh Web 新建会话页：选择工作区 + 功能条 + 大输入区（首条消息即建会话）
     return (
       <View style={[styles.container, { backgroundColor: palette.background }]}>
-        <NewSessionComposer onOpenMenu={openMenu} />
-        <SessionMenuSheet visible={menuTab !== null} initialTab={menuTab ?? 'main'} onClose={() => setMenuTab(null)} />
+        <NewSessionComposer />
       </View>
     )
   }
@@ -67,12 +64,11 @@ export function ConversationScreen() {
         target={actionTarget}
         onClose={() => setActionTarget(null)}
       />
-      <SessionMenuSheet visible={menuTab !== null} initialTab={menuTab ?? 'main'} onClose={() => setMenuTab(null)} />
       {/* 审批/提问接管输入区（dsh ApprovalPanel 模式）；否则升级版输入区 */}
       {pending !== undefined ? (
         <ServerRequestCard request={pending} />
       ) : (
-        <ComposerBar onOpenMenu={openMenu} />
+        <ComposerBar />
       )}
     </View>
   )
@@ -397,15 +393,14 @@ function ServerRequestCard({ request }: Readonly<{ request: import('@dsh-compani
 }
 
 
-/** 长按消息菜单（hover 等价）：复制全文 / 从这里分支。 */
+/** 长按消息菜单（hover 等价）：复制全文 / 从这里分支。改底部 Sheet ≥50%（#12）。 */
 function MessageActionSheet(props: Readonly<{ target: TimelineItem | null; onClose: () => void }>) {
   const { palette } = usePreferences()
   const activeSessionId = useDshStore((s) => s.activeSessionId)
   const forkSession = useDshStore((s) => s.forkSession)
   const [copied, setNoticeCopied] = useState(false)
   const target = props.target
-  if (target === null || activeSessionId === null) return null
-  const text = (target.blocks ?? []).map((b) => b.text).join('\n\n') || target.text || ''
+  const text = (target?.blocks ?? []).map((b) => b.text).join('\n\n') || target?.text || ''
 
   const copy = (): void => {
     void Clipboard.setStringAsync(text).then(() => setNoticeCopied(true))
@@ -413,22 +408,18 @@ function MessageActionSheet(props: Readonly<{ target: TimelineItem | null; onClo
 
   const fork = (): void => {
     props.onClose()
-    void forkSession(activeSessionId, target.seq)
+    if (target !== null && activeSessionId !== null) void forkSession(activeSessionId, target.seq)
   }
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={props.onClose}>
-      <Pressable style={[sheetStyles.scrim, { backgroundColor: palette.scrim }]} onPress={props.onClose}>
-        <View style={[sheetStyles.sheet, { backgroundColor: palette.surface }]}>
-          <Text style={[sheetStyles.title, { color: palette.text }]} numberOfLines={2}>
-            {text.slice(0, 80)}
-          </Text>
-          <SheetAction label={copied ? '已复制 ✓' : '复制全文'} onPress={copy} />
-          <SheetAction label="从这里分支（fork 新会话）" onPress={fork} />
-          <SheetAction label="取消" onPress={props.onClose} muted />
-        </View>
-      </Pressable>
-    </Modal>
+    <Sheet visible={target !== null} title="消息操作" onClose={props.onClose} snapPoints={['50%']}>
+      <Text style={[sheetStyles.title, { color: palette.text }]} numberOfLines={2}>
+        {text.slice(0, 80)}
+      </Text>
+      <SheetAction label={copied ? '已复制 ✓' : '复制全文'} onPress={copy} />
+      <SheetAction label="从这里分支（fork 新会话）" onPress={fork} />
+      <SheetAction label="取消" onPress={props.onClose} muted />
+    </Sheet>
   )
 }
 

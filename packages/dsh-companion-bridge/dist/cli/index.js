@@ -66,7 +66,7 @@ import qrcodeTerminal from "qrcode-terminal";
 function printPairing(payload) {
   const text = JSON.stringify(payload);
   process.stdout.write("\n\u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n");
-  process.stdout.write("\u2502  DSH Companion \u914D\u5BF9                         \u2502\n");
+  process.stdout.write("\u2502  \u638C\u9CB8 DSH Pocket \u914D\u5BF9                         \u2502\n");
   process.stdout.write("\u2502  \u6253\u5F00\u624B\u673A App \u2192 \u626B\u7801\uFF0C\u6216\u624B\u52A8\u8F93\u5165\u914D\u5BF9\u7801       \u2502\n");
   process.stdout.write("\u251C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\n");
   qrcodeTerminal.generate(text, { small: true }, (qr) => process.stdout.write(qr));
@@ -355,7 +355,7 @@ function installSystemd(gatewayUrl) {
   mkdirSync4(dir, { recursive: true });
   const target = `${dir}/dsh-companion.service`;
   const unit = `[Unit]
-Description=DSH Companion Worker (dshc)
+Description=\u638C\u9CB8 DSH Pocket Worker (dshc)
 After=network-online.target
 
 [Service]
@@ -545,7 +545,7 @@ home: ${dshcDir()}
     default:
       process.stdout.write(
         [
-          "dshc \u2014 DSH Companion Worker",
+          "dshc \u2014 \u638C\u9CB8 DSH Pocket Worker",
           "",
           "\u7528\u6CD5: dshc <command> [options]",
           "",

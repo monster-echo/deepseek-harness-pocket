@@ -1,7 +1,7 @@
 /**
  * ConnectionManager：App 与 Gateway 的手机连接（单例生命周期）。
  *
- * - 终北 session token 鉴权（phone-auth 帧）
+ * - 掌鲸 DSH Pocket session token 鉴权（phone-auth 帧）
  * - presence 维护（我的 Worker 在线列表）
  * - worker-open / worker-frame 隧道（DshClient 的 GatewayTunnel 走这里）
  * - REST（配对绑定 / push token）走 fetch
@@ -26,7 +26,7 @@ function httpToWs(url: string): string {
 }
 
 /**
- * 会话 token：优先终北真实 session；开发环境可用
+ * 会话 token：优先掌鲸 DSH Pocket 真实 session；开发环境可用
  * EXPO_PUBLIC_DEV_SESSION_TOKEN（形如 dev:<userId>）走 gateway 的 dev 验票。
  */
 async function readAuthSessionToken(): Promise<string | null> {
@@ -108,7 +108,7 @@ export class GatewayConnection {
         }, 25_000)
         return
       case 'auth-rejected':
-        // 终北 session 失效：交给上层引导重新登录，这里停止重连
+        // 掌鲸 DSH Pocket session 失效：交给上层引导重新登录，这里停止重连
         this.closedByUser = true
         this.callbacks.onStatus('idle')
         this.ws?.close()

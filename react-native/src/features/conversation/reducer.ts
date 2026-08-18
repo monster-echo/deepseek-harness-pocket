@@ -50,6 +50,23 @@ export interface TimelineItem {
   readonly compaction?: { items: number; tokens: number; summaryText: string }
 }
 
+/** 会话统计（对齐 dsh Web 顶栏 stats 行；缺失字段为 0/NaN，展示侧用「—」）。 */
+export interface SessionStats {
+  readonly turns: number
+  readonly steps: number
+  /** 最近一回合 LLM 耗时（ms） */
+  readonly lastTurnMs: number
+  /** 最近一回合首 token 延迟（ms） */
+  readonly firstTokenMs: number
+  /** 最近一回合输出速率（tok/s） */
+  readonly tokPerSec: number
+  /** 最近一回合缓存命中率（0-100；无缓存数据时 NaN） */
+  readonly cacheHitPct: number
+  /** 最近一回合输入/输出 tokens */
+  readonly turnInput: number
+  readonly turnOutput: number
+}
+
 export interface SessionView {
   readonly items: readonly TimelineItem[]
   /** 当前流式 assistant 条目下标（-1 无） */
@@ -63,10 +80,16 @@ export interface SessionView {
   readonly permissionCurrent: string | null
   /** 会话累计 usage（状态行统计，跨回合） */
   readonly totalUsage: { input: number; output: number }
+  /** 会话统计（#21 顶栏 stats） */
+  readonly stats: SessionStats
+}
+
+export const emptyStats: SessionStats = {
+  turns: 0, steps: 0, lastTurnMs: 0, firstTokenMs: 0, tokPerSec: 0, cacheHitPct: NaN, turnInput: 0, turnOutput: 0,
 }
 
 export const emptySessionView: SessionView = {
-  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 }, permissionCurrent: null, totalUsage: { input: 0, output: 0 },
+  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 }, permissionCurrent: null, totalUsage: { input: 0, output: 0 }, stats: emptyStats,
 }
 
 // ---------- dsh 事件负载工具 ----------
@@ -105,6 +128,23 @@ function pickUserText(data: Data): string {
       return ''
     })
     .join('')
+}
+
+/** 从 usage 载荷宽容提取缓存命中/未命中 token（DeepSeek/dsh 字段名多版本）。 */
+function pickNum(raw: Data, ...keys: string[]): number {
+  for (const key of keys) {
+    const v = raw[key]
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+  }
+  return -1
+}
+
+function pickCacheTokens(usageRaw: Data | undefined): { hit: number; total: number } | null {
+  if (usageRaw === undefined) return null
+  const hit = pickNum(usageRaw, 'cacheReadInputTokens', 'promptCacheHitTokens', 'prompt_cache_hit_tokens')
+  const miss = pickNum(usageRaw, 'cacheCreationInputTokens', 'promptCacheMissTokens', 'prompt_cache_miss_tokens')
+  if (hit < 0 && miss < 0) return null
+  return { hit: Math.max(0, hit), total: Math.max(0, hit) + Math.max(0, miss) }
 }
 
 /** 工具变体与单行摘要（对齐 dsh Web tool-call-model 的 SUMMARY_KEYS）。 */
@@ -163,6 +203,12 @@ interface MutableState {
   turnUsage: { input: number; output: number }
   permissionCurrent: string | null
   totalUsage: { input: number; output: number }
+  stats: SessionStats
+  /** 当前回合首个 text-delta 的 event.time（用于首 token 延迟） */
+  turnFirstTokenAt: number
+  /** 当前回合缓存命中/总 token（assistant/message usage 聚合） */
+  turnCacheHit: number
+  turnCacheTotal: number
 }
 
 function ensureStreamingAssistant(state: MutableState, key: string): number {
@@ -205,6 +251,10 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     turnUsage: { ...view.turnUsage },
     permissionCurrent: view.permissionCurrent,
     totalUsage: { ...view.totalUsage },
+    stats: { ...view.stats },
+    turnFirstTokenAt: -1,
+    turnCacheHit: 0,
+    turnCacheTotal: 0,
   }
 
   switch (event.type) {
@@ -219,6 +269,10 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       if (chunk === undefined) break
       const ctype = chunk['type']
       if (ctype === 'text-delta' && typeof chunk['text'] === 'string') {
+        if (state.turnFirstTokenAt < 0) {
+          const t = (event as unknown as { time?: unknown }).time
+          if (typeof t === 'number') state.turnFirstTokenAt = t
+        }
         ensureStreamingAssistant(state, `a${event.seq}`)
         appendDelta(state, 'text', chunk['text'])
       } else if (ctype === 'reasoning-delta' && typeof chunk['text'] === 'string') {
@@ -246,6 +300,11 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       if (usage !== undefined) {
         state.turnUsage = { input: state.turnUsage.input + usage.input, output: state.turnUsage.output + usage.output }
         state.totalUsage = { input: state.totalUsage.input + usage.input, output: state.totalUsage.output + usage.output }
+      }
+      const cache = pickCacheTokens(usageRaw)
+      if (cache !== null) {
+        state.turnCacheHit += cache.hit
+        state.turnCacheTotal += cache.total
       }
       if (state.streamingIndex >= 0) {
         const idx = state.streamingIndex
@@ -320,6 +379,10 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       const startedAt = (event as unknown as { time?: unknown }).time
       state.turnStartAt = typeof startedAt === 'number' ? startedAt : -1
       state.turnUsage = { input: 0, output: 0 }
+      state.turnFirstTokenAt = -1
+      state.turnCacheHit = 0
+      state.turnCacheTotal = 0
+      state.stats = { ...state.stats, turns: state.stats.turns + 1 }
       break
     }
 
@@ -342,13 +405,31 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       }
       const endedAt = (event as unknown as { time?: unknown }).time
       const ranMs = state.turnStartAt > 0 && typeof endedAt === 'number' ? Math.max(0, endedAt - state.turnStartAt) : undefined
+      const turnTokens = { ...state.turnUsage }
+      const firstTokenMs = state.turnStartAt > 0 && state.turnFirstTokenAt > state.turnStartAt
+        ? state.turnFirstTokenAt - state.turnStartAt
+        : 0
+      const tokPerSec = ranMs !== undefined && ranMs > 0 ? Math.round((turnTokens.output / ranMs) * 1000) : 0
+      const cacheHitPct = state.turnCacheTotal > 0
+        ? Math.round((state.turnCacheHit / state.turnCacheTotal) * 100)
+        : NaN
+      state.stats = {
+        ...state.stats,
+        steps: state.stats.steps,
+        lastTurnMs: ranMs ?? 0,
+        firstTokenMs,
+        tokPerSec,
+        cacheHitPct,
+        turnInput: turnTokens.input,
+        turnOutput: turnTokens.output,
+      }
       state.items.push({
         key: `e${event.seq}`,
         kind: 'turnEnd',
         turnReason: kind,
         reasonMessage: message,
         ranMs,
-        turnTokens: { ...state.turnUsage },
+        turnTokens,
       })
       state.agentStatus = 'idle'
       break
@@ -385,6 +466,11 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     }
 
     default:
+      // step/* 事件（step/start、step/end …）：计数供 stats 行「步」展示
+      if (typeof event.type === 'string' && event.type.startsWith('step/')) {
+        state.stats = { ...state.stats, steps: state.stats.steps + 1 }
+        break
+      }
       return view
   }
   return {
@@ -395,6 +481,7 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     turnUsage: state.turnUsage,
     permissionCurrent: state.permissionCurrent,
     totalUsage: state.totalUsage,
+    stats: state.stats,
   }
 }
 
@@ -406,6 +493,8 @@ export function reduceSessionEvents(events: readonly DshSessionEvent[]): Session
 export interface SessionListItem {
   readonly id: string
   readonly createdAt: number
+  /** 最后一次活动时间（bridge 增强；缺失回退 createdAt） */
+  readonly lastActivityAt: number
   readonly cwd: string | null
   readonly lastSeq: number
   readonly live: boolean
@@ -425,6 +514,7 @@ export function projectSessionList(raw: unknown): readonly SessionListItem[] {
     items.push({
       id: e['id'],
       createdAt,
+      lastActivityAt: typeof e['lastActivityAt'] === 'number' ? e['lastActivityAt'] : createdAt,
       cwd,
       lastSeq: typeof e['lastSeq'] === 'number' ? e['lastSeq'] : -1,
       live: e['live'] === true,
@@ -432,5 +522,5 @@ export function projectSessionList(raw: unknown): readonly SessionListItem[] {
       title: cwd !== null ? cwd.split('/').filter(Boolean).pop() ?? cwd : `会话 ${new Date(createdAt).toLocaleString()}`,
     })
   }
-  return items.sort((a, b) => b.createdAt - a.createdAt)
+  return items.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
 }

@@ -1,32 +1,52 @@
 /**
  * 主界面外壳：侧边栏（默认收起）+ 会话聊天主区域（最大化）。
  * 登录后首屏；无 Worker 时引导去配对。
+ *
+ * 顶栏（对齐 dsh Web）：
+ *   左：汉堡菜单（开侧边栏）
+ *   中：标题 + 副标题——会话中显示「模式 · 权限 · 在线数」（#19），否则品牌/连接状态
+ *   右：会话信息按钮（#21）/ 无 Worker 时「配对电脑」
  */
 
 import React, { useEffect, useState } from 'react';
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { AppIcon } from '../../design-system/AppIcon';
 import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useApp } from '../../state/AppStore';
 import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
 import { ConversationScreen } from '../conversation/ConversationScreen';
-import { SessionMenuSheet } from '../conversation/SessionMenuSheet';
+import { SessionInfoSheet } from '../conversation/SessionInfoSheet';
 import { SessionSidebar } from './SessionSidebar';
 
 const SIDEBAR_WIDTH = 300
+const LOGO = require('../../../assets/brand/logo.png') // eslint-disable-line @typescript-eslint/no-require-imports
+
+const PRESET_LABELS: Readonly<Record<string, string>> = {
+  standard: '标准', code: '代码编排', minimal: '极简', cordis: 'Cordis',
+}
+const PERMISSION_LABELS: Readonly<Record<string, string>> = {
+  'workspace-write': '工作区可写',
+  'danger-full-access': '完全访问',
+  'read-only': '只读',
+  custom: '自定义',
+}
 
 export function HomeShellScreen() {
   const { palette } = usePreferences();
   const { navigate } = useApp();
   const [open, setOpen] = useState(false);
-  const [menu, setMenu] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const translate = useState(new Animated.Value(-SIDEBAR_WIDTH))[0];
   const connectGateway = useDshStore((s) => s.connectGateway);
   const workers = useDshStore((s) => s.workers);
   const gatewayStatus = useDshStore((s) => s.gatewayStatus);
   const activeWorker = useDshStore((s) => s.workers.find((w) => w.workerId === s.activeWorkerId));
   const sessionCount = useDshStore((s) => s.sessions.length);
+  const activeSessionId = useDshStore((s) => s.activeSessionId);
+  const activeSessionTitle = useDshStore((s) => s.sessions.find((x) => x.id === s.activeSessionId)?.title);
+  const newSessionPreset = useDshStore((s) => s.newSessionPreset);
+  const permission = useDshStore((s) => s.sessionView.permissionCurrent);
 
   useEffect(() => {
     connectGateway();
@@ -42,31 +62,49 @@ export function HomeShellScreen() {
   };
 
   const hasWorker = workers.length > 0;
+  const online = workers.filter((w) => w.online).length;
+
+  const subtitle = (() => {
+    if (!hasWorker) return '把 DeepSeek Harness 装进口袋'
+    if (gatewayStatus !== 'connected') {
+      return gatewayStatus === 'connecting' ? '连接中…' : '网关未连接'
+    }
+    if (activeSessionId !== null) {
+      // #19：进入会话后，模式/权限上移到标题副标题
+      const presetLabel = PRESET_LABELS[newSessionPreset.length > 0 ? newSessionPreset : 'standard'] ?? '标准'
+      const permLabel = permission !== null ? (PERMISSION_LABELS[permission] ?? permission) : null
+      return `${presetLabel}${permLabel !== null ? ` · ${permLabel}` : ''} · ${online} 台在线`
+    }
+    return hasWorker ? `${online} 台在线 · ${sessionCount} 个会话` : '尚未添加电脑'
+  })();
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
-      {/* 顶栏：菜单 + 当前 Worker + 连接状态 */}
+      {/* 顶栏 */}
       <View style={[styles.topBar, { backgroundColor: palette.surface, borderBottomColor: palette.border }]}>
         <Pressable style={styles.menuButton} onPress={() => showSidebar(!open)} hitSlop={12}>
-          <AppIcon name="home" color={palette.text} size={22} />
+          <AppIcon name="menu" color={palette.text} size={22} />
         </Pressable>
         <View style={styles.topTitle}>
-          <Text style={[styles.workerName, { color: palette.text }]} numberOfLines={1}>
-            {activeWorker?.name ?? 'DSH Companion'}
-          </Text>
-          <Text style={[styles.workerSub, { color: palette.textSecondary }]} numberOfLines={1}>
-            {gatewayStatus === 'connected'
-              ? hasWorker
-                ? `${workers.filter((w) => w.online).length} 台在线 · ${sessionCount} 个会话`
-                : '尚未添加电脑'
-              : gatewayStatus === 'connecting'
-                ? '连接中…'
-                : '网关未连接'}
-          </Text>
+          {hasWorker ? (
+            <>
+              <Text style={[styles.workerName, { color: palette.text }]} numberOfLines={1}>
+                {activeSessionTitle ?? activeWorker?.name ?? '掌鲸 DSH Pocket'}
+              </Text>
+              <Text style={[styles.workerSub, { color: palette.textSecondary }]} numberOfLines={1}>
+                {subtitle}
+              </Text>
+            </>
+          ) : (
+            <View style={styles.brandRow}>
+              <Image source={LOGO} style={styles.brandLogo} accessibilityLabel="掌鲸 DSH Pocket" />
+              <Text style={[styles.workerName, { color: palette.text }]}>掌鲸 DSH Pocket</Text>
+            </View>
+          )}
         </View>
-        {hasWorker && (
-          <Pressable style={styles.menuButton} onPress={() => setMenu(true)} hitSlop={8}>
-            <AppIcon name="settings" color={palette.text} size={20} />
+        {activeSessionId !== null && hasWorker && (
+          <Pressable style={styles.menuButton} onPress={() => setInfoOpen(true)} hitSlop={8}>
+            <AppIcon name="info" color={palette.text} size={20} />
           </Pressable>
         )}
         {!hasWorker && (
@@ -81,7 +119,7 @@ export function HomeShellScreen() {
         {!hasWorker ? <EmptyWorker /> : <ConversationScreen />}
       </View>
 
-      <SessionMenuSheet visible={menu} onClose={() => setMenu(false)} />
+      <SessionInfoSheet visible={infoOpen} onClose={() => setInfoOpen(false)} />
 
       {/* 侧边栏抽屉 */}
       {open && (
@@ -100,9 +138,10 @@ function EmptyWorker() {
   const { navigate } = useApp();
   return (
     <View style={styles.empty}>
-      <Text style={[styles.emptyTitle, { color: palette.text }]}>还没有可用的电脑</Text>
+      <Image source={LOGO} style={styles.emptyLogo} accessibilityLabel="掌鲸 DSH Pocket" />
+      <Text style={[styles.emptyTitle, { color: palette.text }]}>掌鲸 DSH Pocket</Text>
       <Text style={[styles.emptyBody, { color: palette.textSecondary }]}>
-        在电脑上安装 dshc 并开机自启，{'\n'}然后用手机配对码绑定到你的账号。
+        还没有可用的电脑。在电脑上安装 dshc 并开机自启，{'\n'}然后用手机配对码绑定到你的账号。
       </Text>
       <Pressable style={[styles.emptyButton, { backgroundColor: palette.brand }]} onPress={() => navigate('dsh.pair')}>
         <Text style={styles.emptyButtonText}>查看安装指引</Text>
@@ -120,6 +159,8 @@ const styles = StyleSheet.create({
   },
   menuButton: { padding: spacing.x1 },
   topTitle: { flex: 1 },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2 },
+  brandLogo: { width: 22, height: 22, borderRadius: 11 },
   workerName: { fontSize: 16 },
   workerSub: { fontSize: 12 },
   addPair: { paddingHorizontal: spacing.x3, paddingVertical: spacing.x2, borderRadius: radii.round },
@@ -132,7 +173,8 @@ const styles = StyleSheet.create({
     borderRightWidth: StyleSheet.hairlineWidth,
   },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.x6, gap: spacing.x3 },
-  emptyTitle: { fontSize: 18 },
+  emptyLogo: { width: 72, height: 72, borderRadius: 36, marginBottom: spacing.x2 },
+  emptyTitle: { fontSize: 18, fontWeight: '700' },
   emptyBody: { fontSize: 14, textAlign: 'center', lineHeight: 22 },
   emptyButton: { paddingHorizontal: spacing.x6, paddingVertical: spacing.x3, borderRadius: radii.round, marginTop: spacing.x2 },
   emptyButtonText: { color: '#FFFFFF', fontSize: 15 },

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "DSH Companion",
+    "name": "掌鲸 DSH Pocket",
     "slug": "dshcompanion",
     "scheme": [
       "dshcompanion",
@@ -45,7 +45,7 @@
       "package": "top.rwecho.dshcompanion",
       "adaptiveIcon": {
         "foregroundImage": "./assets/splash-icon.png",
-        "backgroundColor": "#A84444"
+        "backgroundColor": "#B03C3C"
       },
       "intentFilters": [
         {

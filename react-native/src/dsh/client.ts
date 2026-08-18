@@ -171,12 +171,13 @@ export class DshClient {
     return (response.result as { sessionId: string }).sessionId
   }
 
-  async createSessionWithRoute(cwd: string, provider: string, model: string, agentPreset?: string): Promise<string> {
+  async createSessionWithRoute(cwd: string, provider: string, model: string, agentPreset?: string, reasoningEffort?: string): Promise<string> {
     const response = await this.rpc('sessions', 'create', {
       cwd,
       provider,
       model,
       ...(agentPreset !== undefined ? { agentPreset } : {}),
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     })
     if (!response.ok) throw new Error(response.error.message)
     return (response.result as { sessionId: string }).sessionId

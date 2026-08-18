@@ -61,11 +61,17 @@ function createAdapter(ctx) {
     if (registry) for (const agent of registry.list()) map.set(agent.id.toString(), agent.status);
     return map;
   };
-  const toSummary = (id, createdAt, cwd, lastSeq) => {
+  const lastActivityById = /* @__PURE__ */ new Map();
+  const eventTimeOf = (raw) => {
+    const t = raw?.time;
+    return typeof t === "number" && Number.isFinite(t) ? t : void 0;
+  };
+  const toSummary = (id, createdAt, cwd, lastSeq, lastActivityAt) => {
     const status = agentStatusById().get(id);
     return {
       id,
       createdAt,
+      lastActivityAt: lastActivityAt ?? createdAt,
       cwd: cwd ?? null,
       lastSeq,
       live: status !== void 0,
@@ -85,7 +91,7 @@ function createAdapter(ctx) {
           const headers = await per.list();
           for (const h of headers) {
             const id = h.id.toString();
-            summaries.set(id, toSummary(id, h.createdAt, h.cwd, h.lastSeq ?? -1));
+            summaries.set(id, toSummary(id, h.createdAt, h.cwd, h.lastSeq ?? -1, lastActivityById.get(id)));
           }
         } catch {
         }
@@ -93,9 +99,10 @@ function createAdapter(ctx) {
       const live = ctx.sessions.list();
       for (const s of live) {
         const id = s.id.toString();
-        summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1));
+        const tail = s.events[s.events.length - 1];
+        summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1, lastActivityById.get(id) ?? eventTimeOf(tail)));
       }
-      return [...summaries.values()].sort((a, b) => b.createdAt - a.createdAt);
+      return [...summaries.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     },
     async permissionOptions() {
       const presets = ctx.get("permissionPresets");
@@ -261,7 +268,10 @@ function createAdapter(ctx) {
     },
     onEvent(handler) {
       const dispose = ctx.on("session/event", (session, event) => {
-        handler(session.id.toString(), toEvent(event));
+        const id = session.id.toString();
+        const t = eventTimeOf(event);
+        if (t !== void 0) lastActivityById.set(id, Math.max(lastActivityById.get(id) ?? 0, t));
+        handler(id, toEvent(event));
       });
       return () => void dispose();
     },

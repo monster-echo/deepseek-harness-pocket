@@ -8,7 +8,7 @@ import type { PairingQrPayload } from '@dsh-companion/bridge-protocol'
 export function printPairing(payload: PairingQrPayload): void {
   const text = JSON.stringify(payload)
   process.stdout.write('\n┌─────────────────────────────────────────────┐\n')
-  process.stdout.write('│  DSH Companion 配对                         │\n')
+  process.stdout.write('│  掌鲸 DSH Pocket 配对                         │\n')
   process.stdout.write('│  打开手机 App → 扫码，或手动输入配对码       │\n')
   process.stdout.write('├─────────────────────────────────────────────┤\n')
   qrcodeTerminal.generate(text, { small: true }, (qr: string) => process.stdout.write(qr))

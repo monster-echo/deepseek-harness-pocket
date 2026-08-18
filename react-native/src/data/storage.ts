@@ -8,7 +8,37 @@ const refreshTokenKey = 'mobileui.session.refresh';
 const configKey = 'mobileui.config.lastKnownGood';
 const anonymousKey = 'mobileui.telemetry.anonymousId';
 const telemetryQueueKey = 'mobileui.telemetry.queue';
+const lastWorkspaceKey = 'dsh.lastWorkspace';
+const recentWorkspacesKey = 'dsh.recentWorkspaces';
 let anonymousIdPromise: Promise<string> | null = null;
+
+/** 上次选中的 workspace 绝对路径（新建会话默认值）。 */
+export async function readLastWorkspace(): Promise<string | null> {
+  return AsyncStorage.getItem(lastWorkspaceKey);
+}
+
+export async function saveLastWorkspace(path: string) {
+  await AsyncStorage.setItem(lastWorkspaceKey, path);
+}
+
+/** 最近使用的 workspace 路径（新→旧，去重，上限 N）。 */
+export async function readRecentWorkspaces(): Promise<string[]> {
+  const value = await AsyncStorage.getItem(recentWorkspacesKey);
+  if (!value) return [];
+  try {
+    const items = JSON.parse(value) as string[];
+    return Array.isArray(items) ? items.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function pushRecentWorkspace(path: string, limit = 6) {
+  const current = await readRecentWorkspaces();
+  const next = [path, ...current.filter((x) => x !== path)].slice(0, limit);
+  if (next.length > 0) await AsyncStorage.setItem(recentWorkspacesKey, JSON.stringify(next));
+  else await AsyncStorage.removeItem(recentWorkspacesKey);
+}
 
 export async function readSessionToken() {
   if (Platform.OS === 'web') return window.localStorage.getItem(tokenKey);

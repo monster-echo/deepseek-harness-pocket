@@ -1,15 +1,16 @@
 /**
- * 新建会话首屏（按 2026-08 设计稿重写）：
- * 鲸鱼 Logo 标题 · 项目/模式胶囊 · 大圆角输入卡（/命令覆盖层 + 发送上箭头）
- * · ＋命令 · 权限（Full access 风险确认）· 模型+推理档
+ * 新建会话首屏：Logo 标题 · 项目/模式胶囊 · 大圆角输入卡（/命令覆盖层 + 发送）
+ * · ＋命令 · 权限 · 模型+推理档（off/low/high/max，真实生效）
  * 发送首条消息 = 创建会话（模型/模式/推理档/权限全生效）并发送。
+ *
+ * 工作区历史（#8）：默认选中上次工作区；项目 Sheet 顶部展示「最近使用」。
  */
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  Image,
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -17,10 +18,19 @@ import {
 } from "react-native";
 import { AppIcon, IconName } from "../../design-system/AppIcon";
 import { usePreferences } from "../../preferences/PreferencesProvider";
+import { useApp } from "../../state/AppStore";
 import { useDshStore } from "../../state/dshStore";
 import { spacing, radii } from "../../theme/tokens";
+import {
+  readLastWorkspace,
+  readRecentWorkspaces,
+  saveLastWorkspace,
+  pushRecentWorkspace,
+} from "../../data/storage";
 import { DirectoryPickerSheet } from "../workers/DirectoryPickerSheet";
 import { Sheet } from "../../design-system/Sheet";
+
+const LOGO = require("../../../assets/brand/logo.png"); // eslint-disable-line @typescript-eslint/no-require-imports
 
 // ---------- 静态目录（展示名 → dsh 标识） ----------
 
@@ -38,10 +48,18 @@ const PERMISSIONS: ReadonlyArray<{ id: string; name: string; icon: IconName; des
   { id: "danger-full-access", name: "Full access", icon: "alert", desc: "包含全局 Shell 与系统最高执行权限", danger: true },
 ];
 
+/** 推理档四档（#10：off/low/high/max，随 createSession 的 reasoningEffort 生效）。 */
 const REASONING: ReadonlyArray<{ id: string; label: string; sub: string; desc: string }> = [
   { id: "off", label: "Off", sub: "关", desc: "常规快速输出，不进行额外思维链推理" },
-  { id: "high", label: "On", sub: "标准推理", desc: "开启标准 Think 思考，平衡速度与深度" },
-  { id: "max", label: "Deep", sub: "深度思考", desc: "启用超长 CoT 思考链，解决复杂逻辑算法" },
+  { id: "low", label: "Low", sub: "轻度", desc: "轻度 Think，适合简单任务，响应更快" },
+  { id: "high", label: "High", sub: "标准", desc: "开启标准 Think 思考，平衡速度与深度" },
+  { id: "max", label: "Max", sub: "深度", desc: "启用超长 CoT 思考链，解决复杂逻辑算法" },
+];
+
+/** worker 未下发模型目录时的回退双模型（#10）。 */
+const FALLBACK_MODELS: ReadonlyArray<{ id: string; name?: string }> = [
+  { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+  { id: "deepseek-pro", name: "DeepSeek Pro" },
 ];
 
 const COMMAND_KINDS: Readonly<Record<string, "direct" | "text" | "modal">> = {
@@ -51,25 +69,21 @@ const COMMAND_KINDS: Readonly<Record<string, "direct" | "text" | "modal">> = {
 
 type SheetKind = "project" | "mode" | "commands" | "permission" | "model" | null
 
-export function NewSessionComposer(
-  props: Readonly<{
-    onOpenMenu: (tab: "permission" | "model" | "preset" | "commands") => void;
-  }>,
-): React.JSX.Element {
+export function NewSessionComposer(): React.JSX.Element {
   const { palette } = usePreferences();
+  const { showToast } = useApp();
   const [text, setText] = useState("");
   const [path, setPath] = useState("");
   const [workspaces, setWorkspaces] = useState<readonly { id: string; path: string; title: string }[]>([]);
+  const [recentPaths, setRecentPaths] = useState<string[]>([]);
   const [sheet, setSheet] = useState<SheetKind>(null);
   const [picker, setPicker] = useState(false);
   const [busy, setBusy] = useState(false);
   const [focused, setFocused] = useState(false);
   const [commands, setCommands] = useState<readonly { name: string; description: string }[]>([]);
-  // 权限（新建会话时经 permission preset 生效）
-  const [permission, setPermission] = useState("workspace-write");
+  const [permission, setPermissionState] = useState("workspace-write");
   const [fullAccessConfirm, setFullAccessConfirm] = useState(false);
   const [riskAck, setRiskAck] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
   const [reasoning, setReasoning] = useState("off");
 
   const createSession = useDshStore((s) => s.createSession);
@@ -80,27 +94,32 @@ export function NewSessionComposer(
   const setDefaults = useDshStore((s) => s.setNewSessionDefaults);
   const newSessionDefaults = useDshStore((s) => s.newSessionDefaults);
   const newSessionPreset = useDshStore((s) => s.newSessionPreset);
+  const modelCatalog = useDshStore((s) => s.modelCatalog);
 
+  // 加载工作区 + 上次选择 + 最近使用（#8）
   useEffect(() => {
-    void listWorkspaces().then((list) => {
+    void (async () => {
+      const [list, last, recent] = await Promise.all([listWorkspaces(), readLastWorkspace(), readRecentWorkspaces()]);
       setWorkspaces(list);
-      const first = list[0];
-      if (first !== undefined && path.length === 0) setPath(first.path);
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      setRecentPaths(recent);
+      const saved = last !== null ? list.find((w) => w.path === last) : undefined;
+      if (saved !== undefined) setPath(saved.path);
+      else if (list[0] !== undefined) setPath(list[0].path);
+    })()
   }, [listWorkspaces])
   useEffect(() => {
     void listCommands().then(setCommands)
   }, [listCommands])
 
-  const showToast = (msg: string): void => {
-    setToast(msg)
-    setTimeout(() => setToast(null), 3000)
+  const rememberWorkspace = (p: string): void => {
+    setPath(p)
+    void saveLastWorkspace(p)
+    void pushRecentWorkspace(p)
   }
 
-  // /命令解析（设计稿覆盖层）
+  // /命令解析（覆盖层）
   const parsed = useMemo(() => {
-    if (!text.startsWith("/")) return { name: null as string | null, body: "" , placeholder: "" }
+    if (!text.startsWith("/")) return { name: null as string | null, body: "", placeholder: "" }
     const m = /^\/([a-zA-Z0-9_-]+)/.exec(text)
     if (m === null) return { name: null, body: "", placeholder: "" }
     const name = m[1]!.toLowerCase()
@@ -114,16 +133,22 @@ export function NewSessionComposer(
 
   const modeName = MODES.find((m) => m.id === (newSessionPreset.length > 0 ? newSessionPreset : "standard"))?.name ?? "标准模式"
   const perm = PERMISSIONS.find((p) => p.id === permission) ?? PERMISSIONS[1]!
-  const modelShort = (newSessionDefaults?.model ?? "deepseek-v4-flash").replace("deepseek-", "")
+  // #10：展示完整模型 id（不再 strip deepseek-）
+  const modelFull = newSessionDefaults?.model ?? "deepseek-v4-flash"
   const reasoningLabel = REASONING.find((r) => r.id === reasoning)?.label ?? "Off"
   const pathLabel = path.length > 0 ? path.split("/").filter(Boolean).pop() ?? path : "选择工作区"
+  const models = modelCatalog.length > 0 ? modelCatalog : FALLBACK_MODELS
+  const recentWorkspaces = recentPaths
+    .map((p) => workspaces.find((w) => w.path === p))
+    .filter((w): w is { id: string; path: string; title: string } => w !== undefined)
+    .filter((w) => w.path !== path)
 
   const pickDirectory = (dir: string): void => {
     setBusy(true)
     void addWorkspace(dir).then((w) => {
       setBusy(false)
       if (w !== null) {
-        setPath(w.path)
+        rememberWorkspace(w.path)
         setWorkspaces((prev) => [...prev.filter((x) => x.id !== w.id), w])
       }
     })
@@ -136,16 +161,14 @@ export function NewSessionComposer(
       setFullAccessConfirm(true)
       return
     }
-    setPermission(id)
+    setPermissionState(id)
   }
 
   const commandTap = (name: string): void => {
     const kind = COMMAND_KINDS[name] ?? "text"
     setSheet(null)
     if (kind === "direct") {
-      showToast(`已执行 /${name}`)
-      setPath(path)
-      setText("")
+      showToast(`已执行 /${name}`, 'info')
       return
     }
     if (name === "permission") { setSheet("permission"); setText(""); return }
@@ -158,7 +181,7 @@ export function NewSessionComposer(
     if (value.length === 0 || path.length === 0 || busy) return Promise.resolve()
     setBusy(true)
     setText("")
-    return createSession(path)
+    return createSession(path, { reasoningEffort: reasoning, permission })
       .then(() => sendMessage(value))
       .finally(() => setBusy(false))
   }
@@ -167,16 +190,9 @@ export function NewSessionComposer(
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
-      {/* Toast */}
-      {toast !== null && (
-        <View style={[styles.toast, { backgroundColor: palette.text }]} pointerEvents="none">
-          <Text style={[styles.toastText, { color: palette.surface }]}>{toast}</Text>
-        </View>
-      )}
-
       {/* 标题 */}
       <View style={styles.titleRow}>
-        <View style={[styles.logoDot, { backgroundColor: palette.brand }]} />
+        <Image source={LOGO} style={styles.logo} accessibilityLabel="掌鲸 DSH Pocket" />
         <Text style={[styles.title, { color: palette.text }]}>探索未至之境</Text>
         <View style={[styles.badge, { backgroundColor: palette.brandSoft }]}>
           <Text style={[styles.badgeText, { color: palette.brand }]}>预览版</Text>
@@ -242,7 +258,7 @@ export function NewSessionComposer(
           </View>
           <View style={styles.actionRight}>
             <Pressable style={styles.actionChip} onPress={() => setSheet("model")}>
-              <Text style={[styles.actionChipText, { color: palette.text }]}>{modelShort}</Text>
+              <Text style={[styles.actionChipText, { color: palette.text, fontFamily: 'Menlo' }]}>{modelFull}</Text>
               <Text style={[styles.reasonTag, { color: palette.textSecondary }]}> {reasoningLabel}</Text>
               <Text style={[styles.chev, { color: palette.textSecondary }]}>▾</Text>
             </Pressable>
@@ -263,8 +279,17 @@ export function NewSessionComposer(
 
       {/* ===== Bottom Sheets ===== */}
       <Sheet visible={sheet === "project"} title="选择工作区项目" onClose={() => setSheet(null)} scrollable snapPoints={["50%", "85%"]}>
+        {recentWorkspaces.length > 0 && (
+          <>
+            <Text style={[styles.recentLabel, { color: palette.textSecondary }]}>最近使用</Text>
+            {recentWorkspaces.map((w) => (
+              <SheetRow key={w.id} selected={path === w.path} onPress={() => { rememberWorkspace(w.path); setSheet(null) }} label={w.title} sub={w.path} icon="home" />
+            ))}
+            <View style={styles.sheetDivider} />
+          </>
+        )}
         {workspaces.map((w) => (
-          <SheetRow key={w.id} selected={path === w.path} onPress={() => { setPath(w.path); setSheet(null) }} label={w.title} sub={w.path} icon="home" />
+          <SheetRow key={w.id} selected={path === w.path} onPress={() => { rememberWorkspace(w.path); setSheet(null) }} label={w.title} sub={w.path} icon="home" />
         ))}
         <View style={styles.sheetDivider} />
         <Pressable style={styles.addRow} onPress={() => { setSheet(null); setPicker(true) }}>
@@ -285,7 +310,7 @@ export function NewSessionComposer(
               },
               pressed && { opacity: 0.8 },
             ]}
-            onPress={() => { setDefaults(null, m.id); setSheet(null) }}
+            onPress={() => { setDefaults(null, m.id); showToast(`已切换模式：${m.name}`, 'info'); setSheet(null) }}
           >
             <View style={{ flex: 1 }}>
               <Text style={[styles.modeName, { color: palette.text }]}>{m.name}</Text>
@@ -344,7 +369,7 @@ export function NewSessionComposer(
       </Sheet>
 
       <Sheet visible={sheet === "model"} title="模型与推理设置" onClose={() => setSheet(null)} scrollable snapPoints={["70%", "95%"]}>
-        {/* 推理档三段 */}
+        {/* 推理档四段（#10） */}
         <View style={[styles.reasonBox, { backgroundColor: palette.surfaceMuted }]}>
           <Text style={[styles.reasonTitle, { color: palette.text }]}>推理 Thinking (CoT)</Text>
           <View style={styles.reasonSeg}>
@@ -366,11 +391,25 @@ export function NewSessionComposer(
             {REASONING.find((r) => r.id === reasoning)?.desc}
           </Text>
         </View>
-        {/* 模型列表（从 worker 目录动态） */}
-        <ModelList selected={newSessionDefaults?.model ?? "deepseek-v4-flash"} onSelect={(m) => setDefaults({ provider: "deepseek-official", model: m.id })} />
-        <Pressable style={({ pressed }) => [styles.confirmButton, { backgroundColor: palette.brand }, pressed && { opacity: 0.85 }]} onPress={() => setSheet(null)}>
-          <Text style={styles.confirmText}>确定</Text>
-        </Pressable>
+        {/* 模型列表（worker 目录为空时回退双模型） */}
+        {models.map((m) => {
+          const selected = modelFull === m.id
+          return (
+            <Pressable
+              key={m.id}
+              style={[styles.modelRow, { borderColor: selected ? palette.brand : palette.border }]}
+              onPress={() => { setDefaults({ provider: "deepseek-official", model: m.id }); showToast(`已选模型 ${m.id}`, 'info'); setSheet(null) }}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.modelName, { color: palette.text, fontFamily: 'Menlo' }]}>{m.id}</Text>
+                {m.name !== undefined && m.name.length > 0 && (
+                  <Text style={[styles.modelSub, { color: palette.textSecondary }]}>{m.name}</Text>
+                )}
+              </View>
+              {selected && <AppIcon name="check" color={palette.brand} size={16} />}
+            </Pressable>
+          )
+        })}
       </Sheet>
 
       {/* Full access 风险确认 */}
@@ -404,7 +443,7 @@ export function NewSessionComposer(
               <Pressable
                 style={({ pressed }) => [styles.enableButton, { backgroundColor: riskAck ? palette.text : palette.surfaceMuted }, pressed && riskAck && { opacity: 0.85 }]}
                 disabled={!riskAck}
-                onPress={() => { setPermission("danger-full-access"); setFullAccessConfirm(false) }}
+                onPress={() => { setPermissionState("danger-full-access"); setFullAccessConfirm(false) }}
               >
                 <Text style={[styles.enableText, { color: riskAck ? palette.surface : palette.textSecondary }]}>启用 Full access</Text>
               </Pressable>
@@ -450,33 +489,12 @@ function SheetRow(props: Readonly<{ selected: boolean; onPress: () => void; labe
   )
 }
 
-function ModelList(props: Readonly<{ selected: string; onSelect: (m: { id: string; name?: string }) => void }>): React.JSX.Element | null {
-  const models = useDshStore((s) => s.modelCatalog)
-  const { palette } = usePreferences()
-  if (models.length === 0) return null
-  return (
-    <View>
-      {models.map((m) => (
-        <SheetRow
-          key={m.id}
-          selected={props.selected === m.id}
-          onPress={() => props.onSelect(m)}
-          label={m.name ?? m.id}
-          sub={m.id}
-        />
-      ))}
-    </View>
-  )
-}
-
 // ---------- 样式 ----------
 
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.x4 },
-  toast: { position: "absolute", top: spacing.x8, paddingHorizontal: spacing.x4, paddingVertical: spacing.x2, borderRadius: radii.round, zIndex: 30 },
-  toastText: { fontSize: 12 },
+  logo: { width: 28, height: 28, borderRadius: 14 },
   titleRow: { flexDirection: "row", alignItems: "center", gap: spacing.x2, marginBottom: spacing.x4 },
-  logoDot: { width: 28, height: 28, borderRadius: 14 },
   title: { fontSize: 22, fontWeight: "700" },
   badge: { paddingHorizontal: spacing.x2, paddingVertical: 2, borderRadius: 6 },
   badgeText: { fontSize: 11, fontWeight: "500" },
@@ -497,17 +515,10 @@ const styles = StyleSheet.create({
   actionRight: { flexDirection: "row", alignItems: "center", gap: spacing.x2 },
   plusButton: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   actionChip: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: spacing.x2, paddingVertical: spacing.x1, borderRadius: radii.small },
-  actionChipText: { fontSize: 12, fontWeight: "500", maxWidth: 110 },
+  actionChipText: { fontSize: 12, fontWeight: "500", maxWidth: 140 },
   reasonTag: { fontSize: 12 },
   send: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
-  scrim: { flex: 1, justifyContent: "flex-end" },
-  sheet: { borderTopLeftRadius: radii.sheet, borderTopRightRadius: radii.sheet, paddingHorizontal: spacing.x4, paddingBottom: spacing.x4 },
-  grabber: { width: 40, height: 4, borderRadius: 2, alignSelf: "center", marginVertical: spacing.x2 },
-  sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingBottom: spacing.x2, borderBottomWidth: StyleSheet.hairlineWidth, marginBottom: spacing.x2 },
-  sheetTitle: { fontSize: 16, fontWeight: "700" },
-  sheetRow: { flexDirection: "row", alignItems: "center", gap: spacing.x3, paddingVertical: spacing.x3, borderRadius: radii.control, paddingHorizontal: spacing.x2 },
-  sheetRowLabel: { fontSize: 14, fontWeight: "500" },
-  sheetRowSub: { fontSize: 11 },
+  recentLabel: { fontSize: 12, paddingBottom: spacing.x1, paddingHorizontal: spacing.x2 },
   sheetDivider: { height: StyleSheet.hairlineWidth, marginTop: spacing.x2 },
   addRow: { flexDirection: "row", alignItems: "center", gap: spacing.x2, paddingVertical: spacing.x3 },
   addText: { fontSize: 14, fontWeight: "500" },
@@ -527,8 +538,12 @@ const styles = StyleSheet.create({
   reasonLabel: { fontSize: 12, fontWeight: "600" },
   reasonSub: { fontSize: 10 },
   reasonDesc: { fontSize: 11, marginTop: spacing.x2 },
-  confirmButton: { borderRadius: radii.control, alignItems: "center", paddingVertical: spacing.x3, marginTop: spacing.x2 },
-  confirmText: { color: "#FFFFFF", fontSize: 13, fontWeight: "600" },
+  modelRow: { flexDirection: "row", alignItems: "center", gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, marginBottom: spacing.x2 },
+  modelName: { fontSize: 15, fontWeight: "600" },
+  modelSub: { fontSize: 11, marginTop: 2 },
+  sheetRow: { flexDirection: "row", alignItems: "center", gap: spacing.x3, paddingVertical: spacing.x3, borderRadius: radii.control, paddingHorizontal: spacing.x2 },
+  sheetRowLabel: { fontSize: 14, fontWeight: "500" },
+  sheetRowSub: { fontSize: 11 },
   centerScrim: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.x6 },
   confirmCard: { alignSelf: "stretch", borderRadius: 24, padding: spacing.x5 },
   confirmHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingBottom: spacing.x3, borderBottomWidth: StyleSheet.hairlineWidth },

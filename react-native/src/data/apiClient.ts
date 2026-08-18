@@ -109,7 +109,7 @@ export const apiClient = {
   signIn: (identifier: string, password: string) => requestAuth('/api/v1/auth/sign-in', {
     identifier,
     password,
-    deviceName: `${getPlatformHeader()} · MobileUI`,
+    deviceName: `${getPlatformHeader()} · 掌鲸 DSH Pocket`,
   }),
   signUp: (email: string, password: string, username: string, consentVersion: string) =>
     requestAuth('/api/v1/auth/sign-up', {
@@ -117,7 +117,7 @@ export const apiClient = {
       password,
       username,
       consentVersion,
-      deviceName: `${getPlatformHeader()} · MobileUI`,
+      deviceName: `${getPlatformHeader()} · 掌鲸 DSH Pocket`,
     }),
   verifyEmail: (email: string, code: string) => request<{ verified: boolean }>(
     '/api/v1/auth/verify-email', jsonOptions('POST', { email, code }),
@@ -135,7 +135,7 @@ export const apiClient = {
     nonce?: string;
   }) => requestAuth('/api/v1/auth/social', {
     ...input,
-    deviceName: `${getPlatformHeader()} · MobileUI`,
+    deviceName: `${getPlatformHeader()} · 掌鲸 DSH Pocket`,
   }),
   signOut: () => request<{ signedOut: boolean }>('/api/v1/auth/sign-out', { method: 'POST' }),
   signOutAll: () => request<{ signedOut: boolean }>('/api/v1/auth/sign-out-all', { method: 'POST' }),
@@ -146,7 +146,7 @@ export const apiClient = {
   verifyPhoneCode: (phone: string, code: string) => requestAuth('/api/v1/auth/phone/verify', {
     phone,
     code,
-    deviceName: `${getPlatformHeader()} · MobileUI`,
+    deviceName: `${getPlatformHeader()} · 掌鲸 DSH Pocket`,
   }),
   requestPasswordReset: (email: string) => request<{
     accepted: boolean;

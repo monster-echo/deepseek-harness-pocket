@@ -72,7 +72,7 @@ function installSystemd(gatewayUrl: string): string {
   mkdirSync(dir, { recursive: true })
   const target = `${dir}/dsh-companion.service`
   const unit = `[Unit]
-Description=DSH Companion Worker (dshc)
+Description=掌鲸 DSH Pocket Worker (dshc)
 After=network-online.target
 
 [Service]

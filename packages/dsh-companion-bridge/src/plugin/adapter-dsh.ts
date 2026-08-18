@@ -53,6 +53,8 @@ declare module '@deepseek-ai/cordis' {
 export interface SessionSummary {
   readonly id: string
   readonly createdAt: number
+  /** 最后活动时间（事件流最近一条 time；缺失回退 createdAt）。手机端「会话时间」排序/展示用 */
+  readonly lastActivityAt: number
   readonly cwd: string | null
   readonly lastSeq: number
   readonly live: boolean
@@ -178,11 +180,20 @@ export function createAdapter(ctx: Context): DshAdapter {
     return map
   }
 
-  const toSummary = (id: string, createdAt: number, cwd: string | undefined, lastSeq: number): SessionSummary => {
+  // 手机连接期间经事件流观察到的各会话最近活动时间（id → time）
+  const lastActivityById = new Map<string, number>()
+
+  const eventTimeOf = (raw: unknown): number | undefined => {
+    const t = (raw as { time?: unknown } | null)?.time
+    return typeof t === 'number' && Number.isFinite(t) ? t : undefined
+  }
+
+  const toSummary = (id: string, createdAt: number, cwd: string | undefined, lastSeq: number, lastActivityAt?: number): SessionSummary => {
     const status = agentStatusById().get(id)
     return {
       id,
       createdAt,
+      lastActivityAt: lastActivityAt ?? createdAt,
       cwd: cwd ?? null,
       lastSeq,
       live: status !== undefined,
@@ -206,7 +217,7 @@ export function createAdapter(ctx: Context): DshAdapter {
           const headers = await per.list()
           for (const h of headers) {
             const id = h.id.toString()
-            summaries.set(id, toSummary(id, h.createdAt, h.cwd, h.lastSeq ?? -1))
+            summaries.set(id, toSummary(id, h.createdAt, h.cwd, h.lastSeq ?? -1, lastActivityById.get(id)))
           }
         } catch {
           // 持久化后端不可用时仅返回 live
@@ -215,9 +226,10 @@ export function createAdapter(ctx: Context): DshAdapter {
       const live = ctx.sessions.list() as readonly LiveSessionLike[]
       for (const s of live) {
         const id = s.id.toString()
-        summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1))
+        const tail = s.events[s.events.length - 1]
+        summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1, lastActivityById.get(id) ?? eventTimeOf(tail)))
       }
-      return [...summaries.values()].sort((a, b) => b.createdAt - a.createdAt)
+      return [...summaries.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt)
     },
 
     async permissionOptions() {
@@ -443,7 +455,10 @@ export function createAdapter(ctx: Context): DshAdapter {
 
     onEvent(handler) {
       const dispose = ctx.on('session/event', (session, event) => {
-        handler(session.id.toString(), toEvent(event))
+        const id = session.id.toString()
+        const t = eventTimeOf(event)
+        if (t !== undefined) lastActivityById.set(id, Math.max(lastActivityById.get(id) ?? 0, t))
+        handler(id, toEvent(event))
       })
       return () => void dispose()
     },

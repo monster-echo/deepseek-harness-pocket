@@ -13,7 +13,6 @@ import { useApp } from '../state/AppStore';
 import { AvatarCropEditor } from '../profile/AvatarCropEditor';
 import { ProfileIdentityCard } from '../profile/ProfileIdentityCard';
 import { usePreferences } from '../preferences/PreferencesProvider';
-import { PrimaryTabs } from '../navigation/PrimaryTabs';
 import { colors, radii, spacing } from '../theme/tokens';
 import { styles } from '../theme/styles';
 
@@ -66,7 +65,6 @@ export function ProfileScreen() {
         </AppCard>
         <AppButton label="退出登录" variant="danger" onPress={requestSignOut} />
       </ScrollView>
-      <PrimaryTabs active="profile" />
     </View>
   );
 }
@@ -84,7 +82,6 @@ function SignedOutProfile() {
           <AppButton label="登录或注册" onPress={() => navigate('auth.signIn')} />
         </View>
       </View>
-      <PrimaryTabs active="profile" />
     </View>
   );
 }

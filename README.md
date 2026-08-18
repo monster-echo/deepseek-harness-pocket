@@ -10,7 +10,7 @@
 |---|---|---|
 | `packages/dsh-bridge-protocol` | mobile/v1 协议包（全系统唯一协议真相源，纯 TS） | ✅ M1 |
 | `packages/dsh-companion-bridge` | dsh 插件（协议服务端：直连 server + gateway uplink）+ `dshc` Worker CLI（拉起守护 dsh、开机自启、配对码） | ✅ M1/M2 |
-| `gateway/` | 中转服务（Next.js + 自定义 server 承载 WS；终北认证、配对、presence、推送、用量） | ✅ M2 |
+| `gateway/` | 中转服务（Next.js + 自定义 server 承载 WS；掌鲸 DSH Pocket 认证、配对、presence、推送、用量） | ✅ M2 |
 | `react-native/` | 手机 App（Expo；侧边栏布局、会话聊天最大化、配对引导） | ✅ M1/M2 |
 | `e2e/` | 全链路冒烟（假手机→gateway→uplink→hub→假 dsh + 真实 dsh 冒烟脚本） | ✅ |
 

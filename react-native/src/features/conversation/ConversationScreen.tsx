@@ -235,18 +235,33 @@ type Palette = ReturnType<typeof usePreferences>['palette']
 function markdownStyle(palette: Palette) {
   return {
     body: { color: palette.text, fontSize: 15, lineHeight: 22 },
-    strong: { color: palette.text },
+    heading1: { color: palette.text, fontSize: 20, fontWeight: '700' as const, marginVertical: 8 },
+    heading2: { color: palette.text, fontSize: 18, fontWeight: '700' as const, marginVertical: 6 },
+    heading3: { color: palette.text, fontSize: 16, fontWeight: '600' as const, marginVertical: 4 },
+    strong: { color: palette.text, fontWeight: '700' as const },
+    em: { fontStyle: 'italic' as const },
     link: { color: palette.brand },
     code_inline: {
       backgroundColor: palette.surfaceMuted, color: palette.text,
-      fontFamily: 'Menlo', fontSize: 13,
+      fontFamily: 'Menlo', fontSize: 13, borderRadius: 4, paddingHorizontal: 4,
     },
     fence: {
       backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderWidth: StyleSheet.hairlineWidth,
-      fontFamily: 'Menlo', fontSize: 12, color: palette.text, borderRadius: 8, padding: 8,
+      fontFamily: 'Menlo', fontSize: 12, color: palette.text, borderRadius: 8, padding: 10, lineHeight: 18,
     },
+    code_block: { backgroundColor: palette.surfaceMuted, borderRadius: 8, padding: 10 },
     bullet_list_icon: { color: palette.textSecondary },
-    blockquote: { backgroundColor: palette.surfaceMuted, borderRadius: 8, paddingLeft: 8 },
+    ordered_list_icon: { color: palette.textSecondary, fontSize: 14 },
+    blockquote: {
+      backgroundColor: palette.surfaceMuted, borderLeftColor: palette.brand, borderLeftWidth: 3,
+      borderRadius: 4, paddingLeft: spacing.x2, paddingVertical: spacing.x1, marginVertical: spacing.x1,
+    },
+    hr: { backgroundColor: palette.border, height: StyleSheet.hairlineWidth, marginVertical: spacing.x2 },
+    table: { borderWidth: StyleSheet.hairlineWidth, borderColor: palette.border, borderRadius: 8, overflow: 'hidden' as const },
+    thead: { backgroundColor: palette.surfaceMuted },
+    th: { color: palette.text, fontWeight: '700' as const, padding: spacing.x2, borderColor: palette.border, borderRightWidth: StyleSheet.hairlineWidth },
+    td: { color: palette.text, padding: spacing.x2, borderColor: palette.border, borderRightWidth: StyleSheet.hairlineWidth },
+    tr: { borderColor: palette.border, borderBottomWidth: StyleSheet.hairlineWidth },
   }
 }
 

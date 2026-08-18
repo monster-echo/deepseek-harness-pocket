@@ -451,9 +451,7 @@ async function startClient(workerId: string, set: Set, get: Get): Promise<void> 
     set({ workerHandshake: info })
     const raw = await client.listSessions()
     set({ sessions: projectSessionList(raw) })
-    // 默认打开最新会话
-    const first = projectSessionList(raw)[0]
-    if (first !== undefined) await get().openSession(first.id)
+    // 不自动打开会话：选择 worker 后停在新建会话首屏，发送首条消息才创建 session
   } catch (error) {
     setNotice(set, error instanceof Error ? error.message : String(error))
   }

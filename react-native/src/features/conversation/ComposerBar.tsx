@@ -162,7 +162,12 @@ export function ComposerBar(): React.JSX.Element | null {
       )}
 
       <ContextUsageSheet visible={contextOpen} onClose={() => setContextOpen(false)} />
-      <CommandPaletteSheet visible={commandsOpen} onClose={() => setCommandsOpen(false)} onCommand={(name) => { sendMessage(`/${name}`); showToast(`已执行 /${name}`, 'info') }} />
+      <CommandPaletteSheet visible={commandsOpen} onClose={() => setCommandsOpen(false)} onCommand={(name) => {
+        if (name === 'permission') { setPermissionOpen(true); return }
+        if (name === 'model') { setModelOpen(true); return }
+        if (name === 'export' || name === 'feedback' || name === 'goal') { showToast(`/${name} 暂未实现`, 'info'); return }
+        sendMessage(`/${name}`); showToast(`已执行 /${name}`, 'info')
+      }} />
       <PermissionSheet visible={permissionOpen} onClose={() => setPermissionOpen(false)} onChanged={(label) => showToast(`权限已切换为 ${label}`, 'info')} />
       <ModelSheet visible={modelOpen} onClose={() => setModelOpen(false)} models={models} currentModel={modelLabel} onChanged={(m) => showToast(`已选模型 ${m.id}`, 'info')} />
     </View>

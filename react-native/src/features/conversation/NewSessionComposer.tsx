@@ -23,9 +23,7 @@ import { useDshStore } from "../../state/dshStore";
 import { spacing, radii } from "../../theme/tokens";
 import {
   readLastWorkspace,
-  readRecentWorkspaces,
   saveLastWorkspace,
-  pushRecentWorkspace,
 } from "../../data/storage";
 import { DirectoryPickerSheet } from "../workers/DirectoryPickerSheet";
 import { Sheet } from "../../design-system/Sheet";
@@ -77,7 +75,6 @@ export function NewSessionComposer(): React.JSX.Element {
   const [text, setText] = useState("");
   const [path, setPath] = useState("");
   const [workspaces, setWorkspaces] = useState<readonly { id: string; path: string; title: string }[]>([]);
-  const [recentPaths, setRecentPaths] = useState<string[]>([]);
   const [sheet, setSheet] = useState<SheetKind>(null);
   const [picker, setPicker] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -101,12 +98,11 @@ export function NewSessionComposer(): React.JSX.Element {
   const activeWorkerId = useDshStore((s) => s.activeWorkerId);
   const openWorker = useDshStore((s) => s.openWorker);
 
-  // 加载工作区 + 上次选择 + 最近使用（#8）
+  // 加载工作区 + 上次选择（沿用上次目录）
   useEffect(() => {
     void (async () => {
-      const [list, last, recent] = await Promise.all([listWorkspaces(), readLastWorkspace(), readRecentWorkspaces()]);
+      const [list, last] = await Promise.all([listWorkspaces(), readLastWorkspace()]);
       setWorkspaces(list);
-      setRecentPaths(recent);
       const saved = last !== null ? list.find((w) => w.path === last) : undefined;
       if (saved !== undefined) setPath(saved.path);
       else if (list[0] !== undefined) setPath(list[0].path);
@@ -119,7 +115,6 @@ export function NewSessionComposer(): React.JSX.Element {
   const rememberWorkspace = (p: string): void => {
     setPath(p)
     void saveLastWorkspace(p)
-    void pushRecentWorkspace(p)
   }
 
   // /命令解析（覆盖层）
@@ -144,10 +139,6 @@ export function NewSessionComposer(): React.JSX.Element {
   const pathLabel = path.length > 0 ? path.split("/").filter(Boolean).pop() ?? path : "选择工作区"
   const activeWorkerName = workers.find((w) => w.workerId === activeWorkerId)?.name ?? '选择电脑'
   const models = modelCatalog.length > 0 ? modelCatalog : FALLBACK_MODELS
-  const recentWorkspaces = recentPaths
-    .map((p) => workspaces.find((w) => w.path === p))
-    .filter((w): w is { id: string; path: string; title: string } => w !== undefined)
-    .filter((w) => w.path !== path)
 
   const pickDirectory = (dir: string): void => {
     setBusy(true)
@@ -306,22 +297,14 @@ export function NewSessionComposer(): React.JSX.Element {
       </Sheet>
 
       <Sheet visible={sheet === "project"} title="选择工作区项目" onClose={() => setSheet(null)} scrollable snapPoints={["50%", "85%"]}>
-        {recentWorkspaces.length > 0 && (
-          <>
-            <Text style={[styles.recentLabel, { color: palette.textSecondary }]}>最近使用</Text>
-            {recentWorkspaces.map((w) => (
-              <SheetRow key={w.id} selected={path === w.path} onPress={() => { rememberWorkspace(w.path); setSheet(null) }} label={w.title} sub={w.path} icon="home" />
-            ))}
-            <View style={styles.sheetDivider} />
-          </>
-        )}
         {workspaces.map((w) => (
           <SheetRow key={w.id} selected={path === w.path} onPress={() => { rememberWorkspace(w.path); setSheet(null) }} label={w.title} sub={w.path} icon="home" />
         ))}
+        {workspaces.length === 0 && <Text style={[styles.modeDesc, { color: palette.textSecondary }]}>还没有工作区，点下方「新建工作区」添加</Text>}
         <View style={styles.sheetDivider} />
         <Pressable style={styles.addRow} onPress={() => { setSheet(null); setPicker(true) }}>
           <AppIcon name="plus" color={palette.brand} size={14} />
-          <Text style={[styles.addText, { color: palette.brand }]}>浏览电脑目录添加…</Text>
+          <Text style={[styles.addText, { color: palette.brand }]}>新建工作区（浏览电脑目录）</Text>
         </Pressable>
       </Sheet>
 

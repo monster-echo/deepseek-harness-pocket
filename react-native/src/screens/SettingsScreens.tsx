@@ -50,6 +50,7 @@ export function SettingsScreen() {
   const { text, palette } = usePreferences();
   const [modelSheet, setModelSheet] = useState(false);
   const [presetSheet, setPresetSheet] = useState(false);
+  const [pluginSheet, setPluginSheet] = useState(false);
   const queueSend = useDshStore((s) => s.queueSend);
   const setQueueSend = useDshStore((s) => s.setQueueSend);
   const visible = (item: SettingItem) => !item.policy
@@ -78,6 +79,11 @@ export function SettingsScreen() {
             <Text style={[agentStyles.rowLabel, { color: palette.text }]}>Agent 预设</Text>
             <AppIcon name="chevron-right" color={palette.textSecondary} size={16} />
           </Pressable>
+          <Pressable style={agentStyles.row} onPress={() => setPluginSheet(true)}>
+            <AppIcon name="settings" color={palette.textSecondary} size={16} />
+            <Text style={[agentStyles.rowLabel, { color: palette.text }]}>插件</Text>
+            <AppIcon name="chevron-right" color={palette.textSecondary} size={16} />
+          </Pressable>
           <ToggleRow label="排队发送" value={queueSend} onChange={setQueueSend} />
         </AppCard>
         {groups.map((group) => (
@@ -96,8 +102,32 @@ export function SettingsScreen() {
       </ScrollView>
       <ModelSheet visible={modelSheet} onClose={() => setModelSheet(false)} />
       <PresetSheet visible={presetSheet} onClose={() => setPresetSheet(false)} />
+      <PluginSheet visible={pluginSheet} onClose={() => setPluginSheet(false)} />
     </View>
   );
+}
+
+function PluginSheet({ visible, onClose }: Readonly<{ visible: boolean; onClose: () => void }>) {
+  const { palette } = usePreferences();
+  const [plugins, setPlugins] = useState<readonly { id: string; name: string; enabled: boolean }[]>([]);
+  const listPlugins = useDshStore((s) => s.listPlugins);
+  useEffect(() => {
+    if (!visible) return
+    void listPlugins().then(setPlugins)
+  }, [visible, listPlugins])
+  return (
+    <Sheet visible={visible} title={`插件（${plugins.length}）`} onClose={onClose} scrollable snapPoints={['55%', '85%']}>
+      {plugins.map((p) => (
+        <View key={p.id} style={[agentStyles.option, { borderColor: palette.border }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={[agentStyles.optionText, { color: palette.text }]}>{p.name}</Text>
+          </View>
+          <Text style={{ fontSize: 11, color: p.enabled ? palette.success : palette.textSecondary }}>{p.enabled ? '已启用' : '已停用'}</Text>
+        </View>
+      ))}
+      {plugins.length === 0 && <Text style={[agentStyles.hint, { color: palette.textSecondary }]}>插件列表为空（需活跃 worker）</Text>}
+    </Sheet>
+  )
 }
 
 function ModelSheet({ visible, onClose }: Readonly<{ visible: boolean; onClose: () => void }>) {

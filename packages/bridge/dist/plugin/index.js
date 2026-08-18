@@ -248,6 +248,22 @@ function createAdapter(ctx) {
         return false;
       }
     },
+    async listPlugins() {
+      try {
+        const plugins = [];
+        for (const entry of ctx.loader.entries()) {
+          if (entry.options.group !== void 0) continue;
+          plugins.push({
+            id: String(entry.id?.toString?.() ?? entry.id),
+            name: entry.options.name,
+            enabled: !entry.disabled
+          });
+        }
+        return plugins;
+      } catch {
+        return [];
+      }
+    },
     async createSession(cwd, route, agentPreset) {
       const registry = agents();
       if (registry === void 0) throw new Error("no agent factory (dsh \u672A\u8FD0\u884C agent loop)");
@@ -735,6 +751,11 @@ var BridgeHub = class {
         const ok = await this.adapter.deleteWorkspace(id);
         if (!ok) return fail("not-found", "workspace \u4E0D\u5B58\u5728\u6216\u65E0\u6CD5\u5220\u9664");
         return rpcSuccess(req.id, { ok: true });
+      }
+      case "plugins.list": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
+        if (denied) return denied;
+        return rpcSuccess(req.id, { plugins: await this.adapter.listPlugins() });
       }
       case "sessions.create": {
         const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");

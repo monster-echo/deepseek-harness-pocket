@@ -271,6 +271,12 @@ export class BridgeHub {
         return rpcSuccess(req.id, { ok: true })
       }
 
+      case 'plugins.list': {
+        const denied = denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled')
+        if (denied) return denied
+        return rpcSuccess(req.id, { plugins: await this.adapter.listPlugins() })
+      }
+
       case 'sessions.create': {
         const denied =
           denyIf(!this.capabilities.sessionCreate, 'unavailable', 'session create not enabled') ??

@@ -32,6 +32,7 @@ interface DshState {
   addWorkspace(path: string): Promise<{ id: string; path: string; title: string } | null>
   renameWorkspace(id: string, title: string): Promise<boolean>
   deleteWorkspace(id: string): Promise<boolean>
+  listPlugins(): Promise<readonly { id: string; name: string; enabled: boolean }[]>
   createSession(cwd: string, opts?: { reasoningEffort?: string; permission?: string }): Promise<string | null>
   forkSession(sessionId: string, boundary?: number): Promise<string | null>
   openSession(sessionId: string): Promise<void>
@@ -211,6 +212,15 @@ export const useDshStore = create<DshState>((set, get) => {
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
         return false
+      }
+    },
+
+    async listPlugins() {
+      if (client === null) return []
+      try {
+        return await client.listPlugins()
+      } catch {
+        return []
       }
     },
 

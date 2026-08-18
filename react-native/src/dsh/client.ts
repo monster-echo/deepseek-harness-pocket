@@ -166,6 +166,12 @@ export class DshClient {
     return response.ok
   }
 
+  async listPlugins(): Promise<readonly { id: string; name: string; enabled: boolean }[]> {
+    const response = await this.rpc('plugins', 'list', {})
+    if (!response.ok) return []
+    return (response.result as { plugins: { id: string; name: string; enabled: boolean }[] }).plugins
+  }
+
   async forkSession(sessionId: string, boundary?: number): Promise<string> {
     const response = await this.rpc('sessions', 'fork', {
       sessionId,

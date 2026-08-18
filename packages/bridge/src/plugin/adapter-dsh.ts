@@ -40,6 +40,9 @@ declare module '@deepseek-ai/cordis' {
       get(id: unknown): unknown
       list(): unknown[]
     }
+    loader: {
+      entries(): Iterable<{ id: unknown; options: { name: string; group?: unknown }; disabled: boolean }>
+    }
   }
 
   interface Events {
@@ -121,6 +124,8 @@ export interface DshAdapter {
   renameWorkspace(id: string, title: string): Promise<boolean>
   /** 删除 workspace 注册（dsh registry.delete） */
   deleteWorkspace(id: string): Promise<boolean>
+  /** 已加载插件列表（只读，cordis loader.entries） */
+  listPlugins(): Promise<readonly { id: string; name: string; enabled: boolean }[]>
   /** 在指定 cwd 创建新会话（M3）；返回 sessionId */
   createSession(cwd: string, route: { provider: string; model: string; reasoningEffort?: string }, agentPreset?: string): Promise<string>
   /** 从既有会话分叉（dsh fork：取平衡的已完成回合前缀作种子）并挂 agent；返回新 sessionId */
@@ -433,6 +438,23 @@ export function createAdapter(ctx: Context): DshAdapter {
         return await registry.delete(id)
       } catch {
         return false
+      }
+    },
+
+    async listPlugins() {
+      try {
+        const plugins: { id: string; name: string; enabled: boolean }[] = []
+        for (const entry of ctx.loader.entries()) {
+          if (entry.options.group !== undefined) continue
+          plugins.push({
+            id: String((entry.id as { toString(): string })?.toString?.() ?? entry.id),
+            name: entry.options.name,
+            enabled: !entry.disabled,
+          })
+        }
+        return plugins
+      } catch {
+        return []
       }
     },
 

@@ -186,7 +186,9 @@ function createAdapter(ctx) {
       if (!agent) throw new Error(`no live agent for session ${id}`);
       const message = createUserMessage({
         content: [{ type: "text", text }],
-        source: { kind: "plugin", plugin: "dsh-companion-bridge" }
+        // 正常用户消息（Web 端同款 source）；此前误用 plugin source，
+        // 导致 Web UI 把手机消息归类为 Context Injection
+        source: { kind: "user" }
       });
       agent.followup(message);
     },
@@ -687,12 +689,10 @@ var SNAPSHOT_SKIP_TYPES = /* @__PURE__ */ new Set([
   "request/context",
   "request/header",
   // 模型请求上下文快照，UI 不渲染
-  "agent/inbox/spliced",
+  "agent/inbox/spliced"
   // 收件箱投递记录
-  "permission/preset",
-  "sandbox/mode",
-  "approval/policy"
-  // 会话策略初始化
+  // permission/preset、sandbox/mode、approval/policy 保留：全值变更事件，
+  // App 折叠出当前权限档位（与 Web 端 projections 等价）
 ]);
 var SNAPSHOT_TEXT_LIMIT = 4e3;
 function truncateTexts(event) {

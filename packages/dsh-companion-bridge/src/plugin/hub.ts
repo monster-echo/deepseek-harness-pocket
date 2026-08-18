@@ -383,7 +383,8 @@ const SNAPSHOT_SKIP_TYPES = new Set([
   'assistant/chunk', // 回放由 assistant/message 定稿块重建；流式增量只在 live 推送
   'request/context', 'request/header', // 模型请求上下文快照，UI 不渲染
   'agent/inbox/spliced', // 收件箱投递记录
-  'permission/preset', 'sandbox/mode', 'approval/policy', // 会话策略初始化
+  // permission/preset、sandbox/mode、approval/policy 保留：全值变更事件，
+  // App 折叠出当前权限档位（与 Web 端 projections 等价）
 ])
 const SNAPSHOT_TEXT_LIMIT = 4000
 

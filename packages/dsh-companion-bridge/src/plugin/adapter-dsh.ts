@@ -331,7 +331,9 @@ export function createAdapter(ctx: Context): DshAdapter {
       if (!agent) throw new Error(`no live agent for session ${id}`)
       const message = createUserMessage({
         content: [{ type: 'text', text }],
-        source: { kind: 'plugin', plugin: 'dsh-companion-bridge' },
+        // 正常用户消息（Web 端同款 source）；此前误用 plugin source，
+        // 导致 Web UI 把手机消息归类为 Context Injection
+        source: { kind: 'user' },
       })
       agent.followup(message)
     },

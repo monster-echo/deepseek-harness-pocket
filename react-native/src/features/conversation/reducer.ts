@@ -51,6 +51,7 @@ export interface TimelineItem {
   // contextInjection（对齐 dsh ContextInjectionRow：非 user 来源的上下文注入）
   readonly producer?: string
   readonly contextForm?: string
+  readonly sections?: readonly { name: string; text: string }[]
 }
 
 /** 会话统计（对齐 dsh Web 顶栏 stats 行；缺失字段为 0/NaN，展示侧用「—」）。 */
@@ -278,6 +279,12 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       const source = data['source'] as { kind?: string; plugin?: string; form?: string; summary?: string } | undefined
       // 上下文注入：非 user 来源（dsh 里 plugin 注入 skill 目录/workspace 指令等）
       if (source !== undefined && source.kind !== undefined && source.kind !== 'user') {
+        const sectionsRaw = (source as { sections?: unknown }).sections
+        const sections = Array.isArray(sectionsRaw)
+          ? (sectionsRaw as { name?: unknown; text?: unknown }[]).flatMap((s) => (
+            typeof s?.name === 'string' && typeof s?.text === 'string' ? [{ name: s.name, text: s.text }] : []
+          ))
+          : undefined
         state.items.push({
           key: `ci${event.seq}`,
           kind: 'contextInjection',
@@ -285,6 +292,7 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
           producer: source.plugin ?? source.kind,
           contextForm: source.form,
           summary: typeof source.summary === 'string' ? source.summary : undefined,
+          sections,
           seq: event.seq,
         })
         break

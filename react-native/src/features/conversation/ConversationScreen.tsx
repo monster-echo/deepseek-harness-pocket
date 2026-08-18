@@ -64,14 +64,14 @@ export function ConversationScreen() {
         target={actionTarget}
         onClose={() => setActionTarget(null)}
       />
-      {/* 底部累计统计行（对齐 dsh Web stats 行） */}
-      <StatsLine />
       {/* 审批/提问接管输入区（dsh ApprovalPanel 模式）；否则升级版输入区 */}
       {pending !== undefined ? (
         <ServerRequestCard request={pending} />
       ) : (
         <ComposerBar />
       )}
+      {/* 底部累计统计行（对齐 dsh Web stats 行，置于输入区下方） */}
+      <StatsLine />
     </View>
   )
 }
@@ -132,11 +132,14 @@ function UserRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLongPre
   )
 }
 
-/** 上下文注入（对齐 dsh ContextInjectionRow）：非 user 来源的折叠行，标题 + 来源 + 摘要 + 展开 body。 */
+/** 上下文注入（对齐 dsh ContextInjectionRow）：非 user 来源的折叠行，标题 + 来源 + 摘要 + 展开 body（snapshot 展示 sections 分段）。 */
 function ContextInjectionRow({ item }: Readonly<{ item: TimelineItem }>) {
   const { palette } = usePreferences()
   const [open, setOpen] = useState(false)
   const label = item.contextForm === 'recall' ? '上下文召回' : '上下文注入'
+  const summary = item.summary !== undefined && item.summary.length > 0
+    ? item.summary
+    : (item.text !== undefined && item.text.length > 0 ? item.text.split('\n')[0] ?? '' : '')
   return (
     <Pressable style={[styles.ciRow, { borderColor: palette.border, backgroundColor: palette.surfaceMuted }]} onPress={() => setOpen(!open)}>
       <AppIcon name="globe" color={palette.textSecondary} size={14} />
@@ -145,11 +148,24 @@ function ContextInjectionRow({ item }: Readonly<{ item: TimelineItem }>) {
           <Text style={[styles.ciTitle, { color: palette.text }]}>{label}</Text>
           {item.producer !== undefined && <Text style={[styles.ciProducer, { color: palette.textSecondary }]} numberOfLines={1}>{item.producer}</Text>}
         </View>
-        {item.summary !== undefined && item.summary.length > 0 && (
-          <Text style={[styles.ciSummary, { color: palette.textSecondary }]} numberOfLines={open ? undefined : 1}>{item.summary}</Text>
+        {summary.length > 0 && (
+          <Text style={[styles.ciSummary, { color: palette.textSecondary }]} numberOfLines={open ? undefined : 1}>{summary}</Text>
         )}
-        {open && item.text !== undefined && item.text.length > 0 && (
-          <Text style={[styles.ciBody, { color: palette.textSecondary }]}>{item.text}</Text>
+        {open && (
+          <View style={styles.ciBody}>
+            {item.sections !== undefined && item.sections.length > 0 ? (
+              item.sections.map((s, i) => (
+                <View key={i} style={styles.ciSection}>
+                  <Text style={[styles.ciSectionName, { color: palette.brand, fontFamily: 'Menlo' }]}>{s.name}</Text>
+                  <Text style={[styles.ciSectionText, { color: palette.textSecondary }]}>{s.text}</Text>
+                </View>
+              ))
+            ) : (
+              item.text !== undefined && item.text.length > 0 && (
+                <Text style={[styles.ciSectionText, { color: palette.textSecondary }]}>{item.text}</Text>
+              )
+            )}
+          </View>
         )}
       </View>
       <AppIcon name="chevron-right" color={palette.textSecondary} size={14} />
@@ -547,12 +563,15 @@ const styles = StyleSheet.create({
   dsmlHint: { fontSize: 11, lineHeight: 15 },
   compactionRow: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'center' },
   compactionLabel: { fontSize: 12 },
-  ciRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'stretch' },
+  ciRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'stretch' },
   ciHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2 },
   ciTitle: { fontSize: 12, fontWeight: '600' },
   ciProducer: { flex: 1, fontSize: 11, fontFamily: 'Menlo' },
   ciSummary: { fontSize: 12, marginTop: 2 },
-  ciBody: { fontSize: 12, lineHeight: 17, marginTop: spacing.x1 },
+  ciBody: { marginTop: spacing.x1, gap: spacing.x1 },
+  ciSection: { paddingVertical: spacing.x1 },
+  ciSectionName: { fontSize: 11, fontWeight: '600' },
+  ciSectionText: { fontSize: 12, lineHeight: 17 },
   compactionBody: { fontSize: 12, lineHeight: 18, paddingTop: spacing.x1 },
   turnEndCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: 1, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'center' },
   turnEndText: { fontSize: 13, flexShrink: 1 },

@@ -1,14 +1,11 @@
 /**
- * Worker 侧边栏（层级：Worker → 工作区 → 会话）：
- *   - 顶层「我的电脑」：多 Worker 切换 + 常驻「添加电脑」
- *   - 当前 Worker 的工作区列表：每个工作区可「快速新建会话」（+）、长按重命名/删除
- *   - 工作区下的会话：语义标题 + human-readable 时间，按最后活动倒序
- *   - 顶部搜索框：实时过滤工作区与会话
- *   - 底部 footer：我的 / 设置（垂直，固定）
+ * Worker 侧边栏，自上而下：logo → 新会话 → 工作区 → 当前 worker → 当前 user → 设置。
+ *   - 无当前 worker：工作区区域提示「选择电脑」，点击进入配对/选择页（dsh.pair）
+ *   - 未登录：底部「我的」显示「登录」，点击去登录
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AppIcon } from '../../design-system/AppIcon';
 import { Sheet } from '../../design-system/Sheet';
 import { usePreferences } from '../../preferences/PreferencesProvider';
@@ -19,6 +16,7 @@ import { spacing, radii } from '../../theme/tokens';
 import { DirectoryPickerSheet } from './DirectoryPickerSheet';
 
 interface WorkspaceRow { id: string; path: string; title: string }
+const LOGO = require('../../../assets/brand/logo.png') // eslint-disable-line @typescript-eslint/no-require-imports
 
 /** human-readable 时间：刚刚 / N 分钟前 / 今天 HH:mm / 昨天 / MM-DD。 */
 function formatRelativeTime(ts: number): string {
@@ -40,7 +38,7 @@ function formatRelativeTime(ts: number): string {
 
 export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const { palette } = usePreferences();
-  const { navigate, showToast } = useApp();
+  const { navigate, user } = useApp();
   const [query, setQuery] = useState('');
   const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped');
   const [newSheet, setNewSheet] = useState<WorkspaceRow | null>(null);
@@ -51,6 +49,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
 
   const workers = useDshStore((s) => s.workers);
   const activeWorkerId = useDshStore((s) => s.activeWorkerId);
+  const activeWorker = useDshStore((s) => s.workers.find((w) => w.workerId === s.activeWorkerId));
   const sessions = useDshStore((s) => s.sessions);
   const activeSessionId = useDshStore((s) => s.activeSessionId);
   const openWorker = useDshStore((s) => s.openWorker);
@@ -66,8 +65,8 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
 
   const q = query.trim().toLowerCase()
   const online = workers.filter((w) => w.online).length
+  const signedIn = user !== null
 
-  // 会话按 cwd 分组；搜索词同时过滤会话标题/cwd 与工作区标题/路径
   const groups = useMemo(() => {
     const filtered = q.length === 0
       ? sessions
@@ -80,19 +79,20 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
       byCwd.set(cwd, list)
     }
     const wsByPath = new Map(workspaces.map((w) => [w.path, w]))
-    const entries = [...byCwd.entries()].sort((a, b) => b[1][0].lastActivityAt - a[1][0].lastActivityAt)
-    return entries.map(([cwd, list]) => {
-      const ws = wsByPath.get(cwd)
-      const visible = q.length === 0 || list.length > 0 || (ws !== undefined && (ws.title.toLowerCase().includes(q) || ws.path.toLowerCase().includes(q)))
-      return {
-        key: cwd,
-        workspace: ws ?? null,
-        title: ws?.title ?? (cwd.length > 0 ? cwd.split('/').filter(Boolean).pop() ?? cwd : '未分组'),
-        cwd,
-        sessions: list,
-        visible,
-      }
-    }).filter((g) => g.visible)
+    return [...byCwd.entries()].sort((a, b) => b[1][0].lastActivityAt - a[1][0].lastActivityAt)
+      .map(([cwd, list]) => {
+        const ws = wsByPath.get(cwd)
+        const visible = q.length === 0 || list.length > 0 || (ws !== undefined && (ws.title.toLowerCase().includes(q) || ws.path.toLowerCase().includes(q)))
+        return {
+          key: cwd,
+          workspace: ws ?? null,
+          title: ws?.title ?? (cwd.length > 0 ? cwd.split('/').filter(Boolean).pop() ?? cwd : '未分组'),
+          cwd,
+          sessions: list,
+          visible,
+        }
+      })
+      .filter((g) => g.visible)
   }, [sessions, workspaces, q])
 
   const doRename = (): void => {
@@ -100,9 +100,6 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
     void renameWorkspace(renameTarget.id, renameText.trim()).then((ok) => {
       if (ok) {
         setWorkspaces((prev) => prev.map((w) => (w.id === renameTarget.id ? { ...w, title: renameText.trim() } : w)))
-        showToast('工作区已重命名', 'success')
-      } else {
-        showToast('重命名失败', 'error')
       }
       setRenameTarget(null)
       setRenameText('')
@@ -112,45 +109,28 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const doDelete = (w: WorkspaceRow): void => {
     setActionTarget(null)
     void deleteWorkspace(w.id).then((ok) => {
-      if (ok) {
-        setWorkspaces((prev) => prev.filter((x) => x.id !== w.id))
-        showToast('工作区已删除', 'success')
-      } else {
-        showToast('删除失败', 'error')
-      }
+      if (ok) setWorkspaces((prev) => prev.filter((x) => x.id !== w.id))
     })
-  }
-
-  const quickCreate = (cwd: string): void => {
-    setNewSheet({ id: '', path: cwd, title: '' })
   }
 
   return (
     <View style={[styles.container, { backgroundColor: palette.surface }]}>
-      {/* Worker 切换器 */}
-      <View style={styles.sectionHeader}>
-        <Text style={[styles.sectionTitle, { color: palette.textSecondary }]}>我的电脑</Text>
-        <Text style={[styles.sectionMeta, { color: palette.textSecondary }]}>{online} 台在线</Text>
+      {/* 顶部：logo */}
+      <View style={styles.logoRow}>
+        <Image source={LOGO} style={styles.logo} accessibilityLabel="掌鲸 DSH Pocket" />
+        <Text style={[styles.logoName, { color: palette.text }]}>掌鲸 DSH Pocket</Text>
       </View>
-      <Pressable style={styles.addWorker} onPress={() => { onClose(); navigate('dsh.pair'); }}>
-        <AppIcon name="plus" color={palette.brand} size={18} />
-        <Text style={[styles.addWorkerText, { color: palette.brand }]}>添加电脑（Worker）</Text>
-      </Pressable>
-      {workers.map((worker) => (
-        <Pressable
-          key={worker.workerId}
-          style={[styles.workerRow, activeWorkerId === worker.workerId && { backgroundColor: palette.brandSoft }]}
-          onPress={() => { if (activeWorkerId !== worker.workerId) openWorker(worker.workerId) }}
-        >
-          <View style={[styles.dot, { backgroundColor: worker.online ? palette.success : palette.textSecondary }]} />
-          <View style={styles.workerText}>
-            <Text style={[styles.workerName, { color: palette.text }]} numberOfLines={1}>{worker.name}</Text>
-            <Text style={[styles.workerStatus, { color: palette.textSecondary }]}>{worker.online ? '在线' : '离线'}</Text>
-          </View>
-        </Pressable>
-      ))}
 
-      {/* 搜索框 + 视图切换 */}
+      {/* 新会话 */}
+      <Pressable
+        style={[styles.newSessionBtn, { backgroundColor: palette.brand }]}
+        onPress={() => (activeWorkerId !== null ? setNewSheet({ id: '', path: '', title: '' }) : navigate('dsh.pair'))}
+      >
+        <AppIcon name="plus" color="#FFFFFF" size={16} />
+        <Text style={styles.newSessionText}>新会话</Text>
+      </Pressable>
+
+      {/* 搜索 + 视图切换 */}
       <View style={styles.searchRow}>
         <View style={[styles.searchBox, { borderColor: palette.border, backgroundColor: palette.surfaceMuted, flex: 1 }]}>
           <AppIcon name="home" color={palette.textSecondary} size={14} />
@@ -175,83 +155,67 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
           hitSlop={8}
         >
           <AppIcon name={viewMode === 'grouped' ? 'home' : 'minus'} color={palette.textSecondary} size={14} />
-          <Text style={[styles.viewToggleText, { color: palette.textSecondary }]}>{viewMode === 'grouped' ? '分组' : '列表'}</Text>
         </Pressable>
       </View>
 
-      {/* 工作区 → 会话 */}
-      {activeWorkerId !== null && (
-        <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
-          {groups.length === 0 && (
-            <Text style={[styles.emptyText, { color: palette.textSecondary }]}>
-              {sessions.length === 0 ? '暂无会话' : '无匹配结果'}
-            </Text>
-          )}
-          {viewMode === 'flat' ? (
-            // 单列表：扁平按最近更新
-            [...sessions].sort((a, b) => b.lastActivityAt - a.lastActivityAt)
-              .filter((s) => q.length === 0 || s.title.toLowerCase().includes(q) || (s.cwd ?? '').toLowerCase().includes(q))
-              .map((session) => (
-                <Pressable
-                  key={session.id}
-                  style={[styles.sessionRow, activeSessionId === session.id && { backgroundColor: palette.brandSoft }]}
-                  onPress={() => { openSession(session.id); onClose(); }}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.sessionTitle, { color: palette.text }]} numberOfLines={1}>{session.title}</Text>
-                    <Text style={[styles.sessionTime, { color: palette.textSecondary }]}>{formatRelativeTime(session.lastActivityAt)}</Text>
-                  </View>
-                  {session.agentStatus === 'running' && <View style={[styles.dot, { backgroundColor: palette.warning }]} />}
-                </Pressable>
-              ))
-          ) : (
-            groups.map((group) => (
-              <View key={group.key}>
-                {/* 工作区行：标题 + 快速新建 + 长按重命名/删除 */}
-                <Pressable
-                  style={styles.workspaceRow}
-                  onLongPress={() => group.workspace !== null && setActionTarget(group.workspace)}
-                  delayLongPress={350}
-                >
-                  <AppIcon name="home" color={palette.textSecondary} size={13} />
-                  <Text style={[styles.workspaceTitle, { color: palette.textSecondary }]} numberOfLines={1}>
-                    {group.title}
-                  </Text>
-                  <Text style={[styles.workspaceCount, { color: palette.textSecondary }]}>{group.sessions.length}</Text>
-                  {group.workspace !== null && (
-                    <Pressable onPress={() => quickCreate(group.cwd)} hitSlop={8} style={styles.workspaceAdd}>
-                      <AppIcon name="plus" color={palette.brand} size={14} />
-                    </Pressable>
-                  )}
-                </Pressable>
-                {group.sessions.map((session) => (
+      {/* 工作区 → 会话（无 worker 时引导选择） */}
+      <View style={styles.midArea}>
+        {activeWorkerId === null ? (
+          <Pressable style={styles.noWorker} onPress={() => { onClose(); navigate('dsh.pair'); }}>
+            <AppIcon name="alert" color={palette.brand} size={20} />
+            <Text style={[styles.noWorkerText, { color: palette.text }]}>还没有选择电脑</Text>
+            <Text style={[styles.noWorkerSub, { color: palette.textSecondary }]}>点击选择或配对一台电脑</Text>
+          </Pressable>
+        ) : (
+          <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
+            {groups.length === 0 && (
+              <Text style={[styles.emptyText, { color: palette.textSecondary }]}>
+                {sessions.length === 0 ? '暂无会话' : '无匹配结果'}
+              </Text>
+            )}
+            {viewMode === 'flat' ? (
+              [...sessions].sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+                .filter((s) => q.length === 0 || s.title.toLowerCase().includes(q) || (s.cwd ?? '').toLowerCase().includes(q))
+                .map((session) => <SessionRow key={session.id} session={session} active={activeSessionId === session.id} onPress={() => { openSession(session.id); onClose(); }} />)
+            ) : (
+              groups.map((group) => (
+                <View key={group.key}>
                   <Pressable
-                    key={session.id}
-                    style={[styles.sessionRow, activeSessionId === session.id && { backgroundColor: palette.brandSoft }]}
-                    onPress={() => { openSession(session.id); onClose(); }}
+                    style={styles.workspaceRow}
+                    onLongPress={() => group.workspace !== null && setActionTarget(group.workspace)}
+                    delayLongPress={350}
                   >
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.sessionTitle, { color: palette.text }]} numberOfLines={1}>{session.title}</Text>
-                      <Text style={[styles.sessionTime, { color: palette.textSecondary }]}>{formatRelativeTime(session.lastActivityAt)}</Text>
-                    </View>
-                    {session.agentStatus === 'running' && <View style={[styles.dot, { backgroundColor: palette.warning }]} />}
+                    <AppIcon name="home" color={palette.textSecondary} size={13} />
+                    <Text style={[styles.workspaceTitle, { color: palette.textSecondary }]} numberOfLines={1}>{group.title}</Text>
+                    <Text style={[styles.workspaceCount, { color: palette.textSecondary }]}>{group.sessions.length}</Text>
+                    {group.workspace !== null && (
+                      <Pressable onPress={() => setNewSheet({ id: '', path: group.cwd, title: '' })} hitSlop={8} style={styles.workspaceAdd}>
+                        <AppIcon name="plus" color={palette.brand} size={14} />
+                      </Pressable>
+                    )}
                   </Pressable>
-                ))}
-              </View>
-            ))
-          )}
-        </ScrollView>
-      )}
+                  {group.sessions.map((session) => <SessionRow key={session.id} session={session} active={activeSessionId === session.id} onPress={() => { openSession(session.id); onClose(); }} />)}
+                </View>
+              ))
+            )}
+          </ScrollView>
+        )}
+      </View>
 
-      {/* 新建会话（可预选工作区） */}
+      {/* 底部：当前 worker → 当前 user → 设置 */}
+      <View style={[styles.footer, { borderTopColor: palette.border }]}>
+        <FooterEntry icon="settings" label={activeWorker !== undefined ? activeWorker.name : '选择电脑'} sub={activeWorker !== undefined ? (activeWorker.online ? '在线' : '离线') : undefined} onPress={() => { onClose(); navigate('dsh.pair'); }} />
+        <FooterEntry icon="user" label={signedIn ? '我的' : '登录'} onPress={() => { onClose(); navigate(signedIn ? 'profile.home' : 'auth.signIn'); }} />
+        <FooterEntry icon="settings" label="设置" onPress={() => { onClose(); navigate('settings.home'); }} />
+      </View>
+
+      {/* Sheets */}
       <NewSessionSheet
         visible={newSheet !== null}
-        presetWorkspace={newSheet ?? undefined}
+        presetWorkspace={newSheet && newSheet.path.length > 0 ? newSheet : undefined}
         onClose={() => setNewSheet(null)}
         onCreated={() => { setNewSheet(null); onClose(); }}
       />
-
-      {/* 工作区操作：重命名 / 删除 */}
       <Sheet visible={actionTarget !== null} title={actionTarget?.title ?? '工作区'} onClose={() => setActionTarget(null)} snapPoints={['50%']}>
         <Pressable style={[styles.actionRow, { borderColor: palette.border }]} onPress={() => { setRenameTarget(actionTarget); setRenameText(actionTarget?.title ?? ''); setActionTarget(null); }}>
           <AppIcon name="palette" color={palette.text} size={16} />
@@ -262,8 +226,6 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
           <Text style={[styles.actionText, { color: palette.error }]}>删除工作区</Text>
         </Pressable>
       </Sheet>
-
-      {/* 重命名输入 */}
       <Sheet visible={renameTarget !== null} title="重命名工作区" onClose={() => setRenameTarget(null)} snapPoints={['50%']}>
         <TextInput
           style={[styles.renameInput, { color: palette.text, borderColor: palette.border }]}
@@ -277,17 +239,37 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
           <Text style={styles.renameBtnText}>确定</Text>
         </Pressable>
       </Sheet>
-
-      {/* 底部入口 */}
-      <View style={[styles.footer, { borderTopColor: palette.border }]}>
-        <SidebarEntry icon="user" label="我的" onPress={() => { onClose(); navigate('profile.home'); }} />
-        <SidebarEntry icon="settings" label="设置" onPress={() => { onClose(); navigate('settings.home'); }} />
-      </View>
     </View>
   );
 }
 
-/** 新建会话：选 workspace → sessions.create（底部 Sheet ≥50%）。 */
+function SessionRow({ session, active, onPress }: Readonly<{ session: SessionListItem; active: boolean; onPress: () => void }>) {
+  const { palette } = usePreferences();
+  return (
+    <Pressable style={[styles.sessionRow, active && { backgroundColor: palette.brandSoft }]} onPress={onPress}>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.sessionTitle, { color: palette.text }]} numberOfLines={1}>{session.title}</Text>
+        <Text style={[styles.sessionTime, { color: palette.textSecondary }]}>{formatRelativeTime(session.lastActivityAt)}</Text>
+      </View>
+      {session.agentStatus === 'running' && <View style={[styles.dot, { backgroundColor: palette.warning }]} />}
+    </Pressable>
+  );
+}
+
+function FooterEntry({ icon, label, sub, onPress }: Readonly<{ icon: 'user' | 'settings'; label: string; sub?: string; onPress: () => void }>) {
+  const { palette } = usePreferences();
+  return (
+    <Pressable style={styles.entry} onPress={onPress}>
+      <AppIcon name={icon} color={palette.textSecondary} size={18} />
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.entryLabel, { color: palette.text }]}>{label}</Text>
+        {sub !== undefined && <Text style={[styles.entrySub, { color: palette.textSecondary }]}>{sub}</Text>}
+      </View>
+    </Pressable>
+  );
+}
+
+/** 新建会话：选 workspace → sessions.create。 */
 function NewSessionSheet({ visible, presetWorkspace, onClose, onCreated }: Readonly<{ visible: boolean; presetWorkspace?: WorkspaceRow; onClose: () => void; onCreated: () => void }>) {
   const { palette } = usePreferences();
   const [workspaces, setWorkspaces] = useState<readonly WorkspaceRow[]>([]);
@@ -297,7 +279,6 @@ function NewSessionSheet({ visible, presetWorkspace, onClose, onCreated }: Reado
   const listWorkspaces = useDshStore((s) => s.listWorkspaces);
   const createSession = useDshStore((s) => s.createSession);
   const addWorkspace = useDshStore((s) => s.addWorkspace);
-
   const [picker, setPicker] = useState(false)
 
   useEffect(() => {
@@ -320,11 +301,8 @@ function NewSessionSheet({ visible, presetWorkspace, onClose, onCreated }: Reado
     })
   }
 
-  // 快速新建：预选了工作区则直接创建
   useEffect(() => {
-    if (visible && presetWorkspace !== undefined && presetWorkspace.path.length > 0 && !busy) {
-      create(presetWorkspace.path)
-    }
+    if (visible && presetWorkspace !== undefined && presetWorkspace.path.length > 0 && !busy) create(presetWorkspace.path)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, presetWorkspace])
 
@@ -338,9 +316,7 @@ function NewSessionSheet({ visible, presetWorkspace, onClose, onCreated }: Reado
         setNewPath('')
         setWorkspaces((prev) => [...prev.filter((x) => x.id !== w.id), w])
         setError(null)
-      } else {
-        setError('添加失败：目录需是电脑上的绝对路径且存在')
-      }
+      } else setError('添加失败：目录需是电脑上的绝对路径且存在')
     })
   }
 
@@ -364,9 +340,7 @@ function NewSessionSheet({ visible, presetWorkspace, onClose, onCreated }: Reado
               setNewPath('')
               setWorkspaces((prev) => [...prev.filter((x) => x.id !== w.id), w])
               setError(null)
-            } else {
-              setError('添加失败：无法在电脑上创建该 workspace（目录不存在或无权限）')
-            }
+            } else setError('添加失败：无法在电脑上创建该 workspace（目录不存在或无权限）')
           })
         }}
       />
@@ -396,16 +370,6 @@ function NewSessionSheet({ visible, presetWorkspace, onClose, onCreated }: Reado
   )
 }
 
-function SidebarEntry({ icon, label, onPress }: Readonly<{ icon: 'user' | 'settings'; label: string; onPress: () => void }>) {
-  const { palette } = usePreferences();
-  return (
-    <Pressable style={styles.entry} onPress={onPress}>
-      <AppIcon name={icon} color={palette.textSecondary} size={18} />
-      <Text style={[styles.entryLabel, { color: palette.textSecondary }]}>{label}</Text>
-    </Pressable>
-  );
-}
-
 const sheetStyles = StyleSheet.create({
   hint: { fontSize: 13, marginBottom: spacing.x2 },
   list: {},
@@ -421,24 +385,22 @@ const sheetStyles = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: spacing.x8, paddingHorizontal: spacing.x3 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.x2, marginBottom: spacing.x1 },
-  sectionTitle: { fontSize: 12, paddingHorizontal: spacing.x2 },
-  sectionMeta: { fontSize: 11, marginLeft: 'auto', paddingRight: spacing.x1 },
-  addWorker: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, padding: spacing.x2, marginBottom: spacing.x1 },
-  addWorkerText: { fontSize: 14 },
-  workerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, padding: spacing.x2, borderRadius: radii.control },
-  dot: { width: 8, height: 8, borderRadius: 4 },
-  workerText: { flex: 1 },
-  workerName: { fontSize: 15 },
-  workerStatus: { fontSize: 12 },
-  searchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, marginTop: spacing.x2, marginBottom: spacing.x1 },
+  container: { flex: 1, paddingTop: spacing.x6, paddingHorizontal: spacing.x3 },
+  logoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, paddingHorizontal: spacing.x1, marginBottom: spacing.x2 },
+  logo: { width: 24, height: 24, borderRadius: 12 },
+  logoName: { fontSize: 15, fontWeight: '700' },
+  newSessionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.x1, borderRadius: radii.control, paddingVertical: spacing.x2, marginBottom: spacing.x2 },
+  newSessionText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, marginBottom: spacing.x1 },
   searchBox: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, paddingHorizontal: spacing.x2, paddingVertical: spacing.x1 },
   searchInput: { flex: 1, fontSize: 13, padding: 0 },
-  viewToggle: { flexDirection: 'row', alignItems: 'center', gap: spacing.x1, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, paddingHorizontal: spacing.x2, paddingVertical: spacing.x1 },
-  viewToggleText: { fontSize: 12 },
+  viewToggle: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, paddingHorizontal: spacing.x2, paddingVertical: spacing.x2 },
+  midArea: { flex: 1 },
   list: { flex: 1, marginTop: spacing.x1 },
   emptyText: { fontSize: 13, padding: spacing.x2 },
+  noWorker: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.x2 },
+  noWorkerText: { fontSize: 15, fontWeight: '600' },
+  noWorkerSub: { fontSize: 13 },
   workspaceRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, paddingVertical: spacing.x2, paddingHorizontal: spacing.x1, marginTop: spacing.x1 },
   workspaceTitle: { flex: 1, fontSize: 12, fontWeight: '600' },
   workspaceCount: { fontSize: 11 },
@@ -446,12 +408,14 @@ const styles = StyleSheet.create({
   sessionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, paddingVertical: spacing.x2, paddingHorizontal: spacing.x2, borderRadius: radii.control },
   sessionTitle: { fontSize: 14 },
   sessionTime: { fontSize: 11, marginTop: 1 },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  footer: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing.x1, gap: spacing.x1 },
+  entry: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, padding: spacing.x2, borderRadius: radii.control },
+  entryLabel: { fontSize: 14 },
+  entrySub: { fontSize: 11 },
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, marginBottom: spacing.x2 },
   actionText: { fontSize: 14 },
   renameInput: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, fontSize: 15, marginBottom: spacing.x3 },
   renameBtn: { borderRadius: radii.control, alignItems: 'center', paddingVertical: spacing.x3 },
   renameBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
-  footer: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing.x1, gap: spacing.x1 },
-  entry: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, padding: spacing.x2, borderRadius: radii.control },
-  entryLabel: { fontSize: 14 },
 });

@@ -5,13 +5,18 @@ node_modules/
 .hvigor/
 .idea/
 .vscode/
+.DS_Store
 **/local.properties
 **/signing-config.json
+# 环境变量（.env.example 保留入库）
+.env
+!.env.example
 # gateway 构建产物
 gateway/.next/
 gateway/dist-server/
 # app 原生构建产物
 react-native/ios/
 react-native/android/
-react-native/.env
+# pnpm 仓库：根目录 npm lockfile 残留不入库（react-native 子包由 npm 管理除外）
+/package-lock.json
 .gstack/

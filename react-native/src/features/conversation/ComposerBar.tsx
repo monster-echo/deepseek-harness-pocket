@@ -26,6 +26,10 @@ const PERMISSION_LABELS: Readonly<Record<string, string>> = {
   custom: '自定义',
 }
 
+const PRESET_LABELS: Readonly<Record<string, string>> = {
+  standard: '标准', code: '代码编排', minimal: '极简', cordis: 'Cordis',
+}
+
 /** worker 未下发模型目录时的回退目录（#10：deepseek-v4-flash / pro 双选）。 */
 const FALLBACK_MODELS: ReadonlyArray<{ id: string; name?: string }> = [
   { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
@@ -46,6 +50,7 @@ export function ComposerBar(): React.JSX.Element | null {
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [permissionOpen, setPermissionOpen] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
+  const [presetOpen, setPresetOpen] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
   const sendMessage = useDshStore((s) => s.sendMessage)
   const stopTurn = useDshStore((s) => s.stopTurn)
@@ -54,6 +59,7 @@ export function ComposerBar(): React.JSX.Element | null {
   const permission = useDshStore((s) => s.sessionView.permissionCurrent)
   const totalUsage = useDshStore((s) => s.sessionView.totalUsage)
   const newSessionDefaults = useDshStore((s) => s.newSessionDefaults)
+  const newSessionPreset = useDshStore((s) => s.newSessionPreset)
   const modelCatalog = useDshStore((s) => s.modelCatalog)
   const queueSend = useDshStore((s) => s.queueSend)
   const [pendingQueue, setPendingQueue] = useState<string[]>([])
@@ -96,6 +102,7 @@ export function ComposerBar(): React.JSX.Element | null {
   const canSend = text.trim().length > 0
   const modelLabel = newSessionDefaults !== null ? newSessionDefaults.model : 'deepseek-v4-flash'
   const permissionLabel = permission !== null ? (PERMISSION_LABELS[permission] ?? permission) : '权限'
+  const presetLabel = PRESET_LABELS[newSessionPreset.length > 0 ? newSessionPreset : 'standard'] ?? '标准'
   const models = modelCatalog.length > 0 ? modelCatalog : FALLBACK_MODELS
 
   // #20 上下文剩余量：used = 累计输入+输出，limit 取模型上下文窗口
@@ -123,8 +130,9 @@ export function ComposerBar(): React.JSX.Element | null {
         </View>
       )}
 
-      {/* 功能条：对齐 dsh Web「命令 / 访问模式 / 选择模型」 */}
+      {/* 功能条：模式 / 命令 / 访问模式 / 模型（对齐 new session 的 chip，session 隐藏 worker/工作区） */}
       <View style={styles.dockRow}>
+        <DockButton label={`${presetLabel} ▾`} active onPress={() => setPresetOpen(true)} />
         <DockButton label="命令" onPress={() => setCommandsOpen(true)} />
         <DockButton label={`访问模式：${permissionLabel}`} onPress={() => setPermissionOpen(true)} />
         <DockButton label={`模型：${modelLabel}`} onPress={() => setModelOpen(true)} />
@@ -168,6 +176,7 @@ export function ComposerBar(): React.JSX.Element | null {
         if (name === 'export' || name === 'feedback' || name === 'goal') { showToast(`/${name} 暂未实现`, 'info'); return }
         sendMessage(`/${name}`); showToast(`已执行 /${name}`, 'info')
       }} />
+      <PresetSheet visible={presetOpen} onClose={() => setPresetOpen(false)} />
       <PermissionSheet visible={permissionOpen} onClose={() => setPermissionOpen(false)} onChanged={(label) => showToast(`权限已切换为 ${label}`, 'info')} />
       <ModelSheet visible={modelOpen} onClose={() => setModelOpen(false)} models={models} currentModel={modelLabel} onChanged={(m) => showToast(`已选模型 ${m.id}`, 'info')} />
     </View>
@@ -294,15 +303,50 @@ function ModelSheet(props: Readonly<{ visible: boolean; onClose: () => void; mod
   )
 }
 
-/** dsh Web 功能条按钮：文字按钮，无底色。 */
-function DockButton(props: Readonly<{ label: string; onPress: () => void }>): React.JSX.Element {
+/** 模式（agent preset）选择：对齐 new session 的模式 chip。 */
+function PresetSheet(props: Readonly<{ visible: boolean; onClose: () => void }>) {
+  const { palette } = usePreferences()
+  const { showToast } = useApp()
+  const [presets, setPresets] = useState<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]>([])
+  const listPresets = useDshStore((s) => s.listPresets)
+  const setDefaults = useDshStore((s) => s.setNewSessionDefaults)
+  const current = useDshStore((s) => s.newSessionPreset)
+  useEffect(() => {
+    if (!props.visible) return
+    void listPresets().then(setPresets)
+  }, [props.visible, listPresets])
+  return (
+    <Sheet visible={props.visible} title="选择模式" onClose={props.onClose} scrollable snapPoints={['55%', '85%']}>
+      {presets.map((p) => {
+        const selected = (current.length > 0 ? current : 'standard') === p.id
+        return (
+          <Pressable
+            key={p.id}
+            style={[styles.optionRow, { borderColor: selected ? palette.brand : palette.border }]}
+            onPress={() => { setDefaults(null, p.id); showToast(`已切换模式：${p.name ?? p.id}`, 'info'); props.onClose(); }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.optionText, { color: palette.text }]}>{p.name ?? PRESET_LABELS[p.id] ?? p.id}{p.isDefault ? '（默认）' : ''}</Text>
+              {p.description !== undefined && <Text style={[styles.optionSub, { color: palette.textSecondary }]} numberOfLines={2}>{p.description}</Text>}
+            </View>
+            {selected && <AppIcon name="check" color={palette.brand} size={16} />}
+          </Pressable>
+        )
+      })}
+      {presets.length === 0 && <Text style={[styles.sheetHint, { color: palette.textSecondary }]}>preset 目录为空（需活跃 worker）</Text>}
+    </Sheet>
+  )
+}
+
+/** dsh Web 功能条按钮：文字按钮，无底色（active 时品牌色高亮）。 */
+function DockButton(props: Readonly<{ label: string; active?: boolean; onPress: () => void }>): React.JSX.Element {
   const { palette } = usePreferences()
   return (
     <Pressable
       style={({ pressed }) => [styles.dockButton, pressed && { opacity: 0.6 }]}
       onPress={props.onPress}
     >
-      <Text style={[styles.dockText, { color: palette.textSecondary }]}>{props.label}</Text>
+      <Text style={[styles.dockText, { color: props.active === true ? palette.brand : palette.textSecondary }]}>{props.label}</Text>
     </Pressable>
   )
 }

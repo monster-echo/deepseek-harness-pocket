@@ -135,7 +135,16 @@ function createAdapter(ctx) {
       const current = agent?.options !== void 0 && typeof agent.options.provider === "string" && typeof agent.options.model === "string" ? { provider: agent.options.provider, model: agent.options.model } : null;
       if (llm === void 0) return { providers: [], current };
       try {
-        return { providers: llm.listProviders(), current };
+        const providers = [];
+        for (const p of llm.listProviders()) {
+          let models = [];
+          try {
+            models = await llm.listModels(p.id);
+          } catch {
+          }
+          providers.push({ id: p.id, ...p.name !== void 0 ? { name: p.name } : {}, models });
+        }
+        return { providers, current };
       } catch {
         return { providers: [], current };
       }

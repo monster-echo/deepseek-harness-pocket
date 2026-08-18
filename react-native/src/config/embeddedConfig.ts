@@ -40,18 +40,7 @@ export const embeddedConfig: RuntimeConfig = {
     tagline: '把 DeepSeek Harness 装进口袋',
     primaryColor: '#B03C3C',
   },
-  splash: {
-    id: 'embedded',
-    title: '把 DeepSeek Harness 装进口袋',
-    description: '电脑开机的 dsh Worker，随时装进手机口袋。',
-    badge: '预览版',
-    actionLabel: '开始使用',
-    imageUrl: null,
-    videoUrl: null,
-    linkUrl: null,
-    skippable: true,
-    durationSeconds: 5,
-  },
+  splash: null,
   auth: {
     providers: [
       { id: 'password', enabled: true, platforms: ['ios', 'android', 'harmonyos', 'web'] },

@@ -29,13 +29,13 @@ const PERMISSION_LABELS: Readonly<Record<string, string>> = {
 /** worker 未下发模型目录时的回退目录（#10：deepseek-v4-flash / pro 双选）。 */
 const FALLBACK_MODELS: ReadonlyArray<{ id: string; name?: string }> = [
   { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-  { id: 'deepseek-pro', name: 'DeepSeek Pro' },
+  { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
 ]
 
 /** 模型上下文窗口映射（#20 圆环的 limit；未知模型取默认）。 */
 const CONTEXT_LIMITS: Readonly<Record<string, number>> = {
   'deepseek-v4-flash': 128_000,
-  'deepseek-pro': 128_000,
+  'deepseek-v4-pro': 128_000,
 }
 const DEFAULT_CONTEXT_LIMIT = 128_000
 

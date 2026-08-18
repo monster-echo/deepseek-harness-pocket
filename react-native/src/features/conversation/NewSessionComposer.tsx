@@ -59,7 +59,7 @@ const REASONING: ReadonlyArray<{ id: string; label: string; sub: string; desc: s
 /** worker 未下发模型目录时的回退双模型（#10）。 */
 const FALLBACK_MODELS: ReadonlyArray<{ id: string; name?: string }> = [
   { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
-  { id: "deepseek-pro", name: "DeepSeek Pro" },
+  { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
 ];
 
 const COMMAND_KINDS: Readonly<Record<string, "direct" | "text" | "modal">> = {

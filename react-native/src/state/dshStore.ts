@@ -68,14 +68,21 @@ export const useDshStore = create<DshState>((set, get) => {
       onStatus: (status) => set({ gatewayStatus: status }),
       onPresence: (workers) => {
         set({ workers })
-        // gateway 重启/断线恢复后：自动恢复此前活跃 Worker 的隧道
         const state = get()
+        const online = workers.filter((w) => w.online)
+        // gateway 重启/断线恢复后：自动恢复此前活跃 Worker 的隧道
         if (
           state.activeWorkerId !== null
           && state.workerHandshake !== null
-          && workers.some((w) => w.workerId === state.activeWorkerId && w.online)
+          && online.some((w) => w.workerId === state.activeWorkerId)
         ) {
           gateway!.openWorker(state.activeWorkerId)
+          return
+        }
+        // 首次连上且只有一个在线 Worker：走 store.openWorker 自动打开（它会 set activeWorkerId，
+        // 否则 onTunnelFrame 因 activeWorkerId 为 null 丢弃所有回帧 → handshake 超时 → 会话/工作区全空）
+        if (state.activeWorkerId === null && online.length === 1) {
+          state.openWorker(online[0]!.workerId)
         }
       },
       onPush: (title) => set({ notice: title }),

@@ -267,7 +267,10 @@ export function createAdapter(ctx: Context): DshAdapter {
 
     async listModels(sessionId) {
       const llm = ctx.get('llm') as
-        | { listProviders(): readonly { id: string; models: readonly { id: string; name?: string }[] }[] }
+        | {
+            listProviders(): readonly { id: string; name?: string }[]
+            listModels(provider: string): Promise<readonly { id: string; name?: string }[]>
+          }
         | undefined
       const registry = agents()
       const agent = registry?.get(sessionId as SessionId) as { options?: { provider?: string; model?: string } } | undefined
@@ -276,7 +279,18 @@ export function createAdapter(ctx: Context): DshAdapter {
         : null
       if (llm === undefined) return { providers: [], current }
       try {
-        return { providers: llm.listProviders(), current }
+        // dsh 的 listProviders() 只返回 {id,name}，模型需按 provider 异步 listModels()
+        const providers: { id: string; name?: string; models: readonly { id: string; name?: string }[] }[] = []
+        for (const p of llm.listProviders()) {
+          let models: readonly { id: string; name?: string }[] = []
+          try {
+            models = await llm.listModels(p.id)
+          } catch {
+            // 单个 provider 目录查询失败按空处理，不影响其它 provider
+          }
+          providers.push({ id: p.id, ...(p.name !== undefined ? { name: p.name } : {}), models })
+        }
+        return { providers, current }
       } catch {
         return { providers: [], current }
       }

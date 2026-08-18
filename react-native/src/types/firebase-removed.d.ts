@@ -21,3 +21,19 @@ declare module '@react-native-firebase/crashlytics' {
   export function setAttribute(instance: unknown, key: string, value: string): Promise<void>
   export function recordError(instance: unknown, error: Error): Promise<void>
 }
+
+declare module 'react-native-syntax-highlighter' {
+  import React from 'react'
+  const SyntaxHighlighter: React.ComponentType<{
+    language?: string
+    style?: unknown
+    highlighter?: 'prism' | 'hljs'
+    fontSize?: number
+    children: string
+  }>
+  export default SyntaxHighlighter
+}
+
+declare module 'react-syntax-highlighter/styles/hljs' {
+  export const docco: unknown
+}

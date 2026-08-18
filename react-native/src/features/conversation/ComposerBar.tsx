@@ -394,7 +394,7 @@ const styles = StyleSheet.create({
   thumbText: { color: '#FFFFFF', fontSize: 12 },
   thumbRemove: { position: 'absolute', top: 2, right: 2, width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center' },
   inputShell: { flexDirection: 'row', alignItems: 'flex-end', marginHorizontal: spacing.x3, borderRadius: radii.card, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: spacing.x2 },
-  input: { flex: 1, minHeight: 44, maxHeight: 120, paddingVertical: spacing.x2, fontSize: 15 },
+  input: { flex: 1, minHeight: 40, maxHeight: 120, paddingVertical: spacing.x2, fontSize: 15, textAlignVertical: 'center' },
   sendInline: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginVertical: 5 },
   stopSquare: { width: 12, height: 12, borderRadius: 3 },
   statsLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.x1 },

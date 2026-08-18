@@ -9,6 +9,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
+import SyntaxHighlighter from 'react-native-syntax-highlighter';
+import { docco } from 'react-syntax-highlighter/styles/hljs';
 import * as Clipboard from 'expo-clipboard';
 import { AppIcon, IconName } from '../../design-system/AppIcon';
 import { Sheet } from '../../design-system/Sheet';
@@ -178,7 +180,7 @@ function AssistantRow({ item, onLongPress }: Readonly<{ item: TimelineItem; onLo
   const blocks = item.blocks ?? []
   return (
     <Pressable onLongPress={() => onLongPress(item)} delayLongPress={350}>
-    <View style={[styles.assistantBubble, { backgroundColor: palette.surface }]}>
+    <View style={styles.assistantBubble}>
       {blocks.map((block, i) => (
         <AssistantBlockView key={i} block={block} streaming={item.streaming === true} />
       ))}
@@ -216,7 +218,7 @@ function AssistantBlockView({ block, streaming }: Readonly<{ block: AssistantBlo
       return (
         <View style={styles.dsmlGroup}>
           {prose.length > 0 && (
-            <Markdown style={markdownStyle(palette)}>{prose}</Markdown>
+            <Markdown style={markdownStyle(palette)} rules={markdownRules}>{prose}</Markdown>
           )}
           {calls.map((call, i) => (
             <DsmlToolCard key={i} call={call} />
@@ -227,18 +229,21 @@ function AssistantBlockView({ block, streaming }: Readonly<{ block: AssistantBlo
         </View>
       )
     }
-    return <Markdown style={markdownStyle(palette)}>{block.text}</Markdown>
+    return <Markdown style={markdownStyle(palette)} rules={markdownRules}>{block.text}</Markdown>
   }
   const lines = block.text.split('\n').filter((l) => l.trim().length > 0)
   const summary = streaming ? lines[lines.length - 1] ?? '' : lines[0] ?? ''
   return (
-    <Pressable style={[styles.thinkRow, { borderColor: palette.border }]} onPress={() => setOpen(!open)}>
-      <Text style={[styles.thinkLabel, { color: palette.textSecondary }]}>
-        思考 {open ? '▾' : '▸'} · {lines.length > 0 ? '' : '…'}
-      </Text>
-      <Text style={[styles.thinkSummary, { color: palette.textSecondary }]} numberOfLines={open ? undefined : 1}>
-        {summary.length > 0 ? summary : `${block.text.length} 字`}
-      </Text>
+    <Pressable style={[styles.thinkRow, { backgroundColor: palette.surfaceMuted }]} onPress={() => setOpen(!open)}>
+      <View style={styles.thinkHead}>
+        <AppIcon name="chevron-right" color={palette.textSecondary} size={14} />
+        <Text style={[styles.thinkLabel, { color: palette.textSecondary }]}>思考</Text>
+        {!open && (
+          <Text style={[styles.thinkSummary, { color: palette.textSecondary }]} numberOfLines={1}>
+            {summary.length > 0 ? summary : `${block.text.length} 字`}
+          </Text>
+        )}
+      </View>
       {open && (
         <Text style={[styles.thinkBody, { color: palette.textSecondary }]}>{block.text}</Text>
       )}
@@ -279,6 +284,18 @@ function markdownStyle(palette: Palette) {
     td: { color: palette.text, padding: spacing.x2, borderColor: palette.border, borderRightWidth: StyleSheet.hairlineWidth },
     tr: { borderColor: palette.border, borderBottomWidth: StyleSheet.hairlineWidth },
   }
+}
+
+/** 代码块高亮（react-native-syntax-highlighter，prism 引擎）。 */
+const markdownRules = {
+  fence: (node: { content: string; sourceInfo?: string }, _children: unknown, _parent: unknown, _styles: unknown): React.JSX.Element => {
+    const language = (node.sourceInfo ?? '').trim() || 'text'
+    return (
+      <SyntaxHighlighter language={language} style={docco} highlighter="prism" fontSize={12}>
+        {node.content}
+      </SyntaxHighlighter>
+    )
+  },
 }
 
 /** DSML 文本协议工具调用：内联卡（未执行态）。 */
@@ -542,11 +559,12 @@ const styles = StyleSheet.create({
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },
   userBubble: { maxWidth: '80%', borderRadius: radii.card, padding: spacing.x3, borderBottomRightRadius: radii.small },
   userText: { fontSize: 15, lineHeight: 22 },
-  assistantBubble: { alignSelf: 'flex-start', maxWidth: '90%', borderRadius: radii.card, padding: spacing.x3, borderBottomLeftRadius: radii.small, gap: spacing.x2 },
+  assistantBubble: { alignSelf: 'flex-start', maxWidth: '100%', gap: spacing.x2 },
   assistantText: { fontSize: 15, lineHeight: 22 },
-  thinkRow: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, gap: spacing.x1 },
-  thinkLabel: { fontSize: 12 },
-  thinkSummary: { fontSize: 13 },
+  thinkRow: { borderRadius: radii.control, padding: spacing.x2, gap: spacing.x1 },
+  thinkHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.x1 },
+  thinkLabel: { fontSize: 12, fontWeight: '600' },
+  thinkSummary: { flex: 1, fontSize: 12 },
   thinkBody: { fontSize: 12, lineHeight: 18, paddingTop: spacing.x1 },
   stoppedMark: { fontSize: 12, alignSelf: 'flex-end' },
   usageLine: { fontSize: 11, alignSelf: 'flex-end' },

@@ -15,6 +15,7 @@ import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
 import type { AssistantBlock, TimelineItem, ToolStatus } from './reducer';
+import { splitDsml, cutAtDsmlStart, type DsmlToolCall } from './dsml';
 
 export function ConversationScreen() {
   const { palette } = usePreferences();
@@ -126,32 +127,28 @@ function AssistantBlockView({ block, streaming }: Readonly<{ block: AssistantBlo
     if (streaming) {
       return (
         <Text style={[styles.assistantText, { color: palette.text }]}>
-          {block.text}
+          {cutAtDsmlStart(block.text)}
           {' ▍'}
         </Text>
       )
     }
-    return (
-      <Markdown
-        style={{
-          body: { color: palette.text, fontSize: 15, lineHeight: 22 },
-          strong: { color: palette.text },
-          link: { color: palette.brand },
-          code_inline: {
-            backgroundColor: palette.surfaceMuted, color: palette.text,
-            fontFamily: 'Menlo', fontSize: 13,
-          },
-          fence: {
-            backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderWidth: StyleSheet.hairlineWidth,
-            fontFamily: 'Menlo', fontSize: 12, color: palette.text, borderRadius: 8, padding: 8,
-          },
-          bullet_list_icon: { color: palette.textSecondary },
-          blockquote: { backgroundColor: palette.surfaceMuted, borderRadius: 8, paddingLeft: 8 },
-        }}
-      >
-        {block.text}
-      </Markdown>
-    )
+    const { prose, calls } = splitDsml(block.text)
+    if (calls.length > 0) {
+      return (
+        <View style={styles.dsmlGroup}>
+          {prose.length > 0 && (
+            <Markdown style={markdownStyle(palette)}>{prose}</Markdown>
+          )}
+          {calls.map((call, i) => (
+            <DsmlToolCard key={i} call={call} />
+          ))}
+          <Text style={[styles.dsmlHint, { color: palette.textSecondary }]}>
+            以上工具调用由模型以文本协议输出、未被 dsh 执行（上游 adapter 未解析 DSML）
+          </Text>
+        </View>
+      )
+    }
+    return <Markdown style={markdownStyle(palette)}>{block.text}</Markdown>
   }
   const lines = block.text.split('\n').filter((l) => l.trim().length > 0)
   const summary = streaming ? lines[lines.length - 1] ?? '' : lines[0] ?? ''
@@ -167,6 +164,47 @@ function AssistantBlockView({ block, streaming }: Readonly<{ block: AssistantBlo
         <Text style={[styles.thinkBody, { color: palette.textSecondary }]}>{block.text}</Text>
       )}
     </Pressable>
+  )
+}
+
+type Palette = ReturnType<typeof usePreferences>['palette']
+
+function markdownStyle(palette: Palette) {
+  return {
+    body: { color: palette.text, fontSize: 15, lineHeight: 22 },
+    strong: { color: palette.text },
+    link: { color: palette.brand },
+    code_inline: {
+      backgroundColor: palette.surfaceMuted, color: palette.text,
+      fontFamily: 'Menlo', fontSize: 13,
+    },
+    fence: {
+      backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderWidth: StyleSheet.hairlineWidth,
+      fontFamily: 'Menlo', fontSize: 12, color: palette.text, borderRadius: 8, padding: 8,
+    },
+    bullet_list_icon: { color: palette.textSecondary },
+    blockquote: { backgroundColor: palette.surfaceMuted, borderRadius: 8, paddingLeft: 8 },
+  }
+}
+
+/** DSML 文本协议工具调用：内联卡（未执行态）。 */
+function DsmlToolCard({ call }: Readonly<{ call: DsmlToolCall }>) {
+  const { palette } = usePreferences()
+  const [open, setOpen] = useState(false)
+  return (
+    <View style={[styles.toolCard, { borderColor: palette.border, backgroundColor: palette.surfaceMuted }]}>
+      <Pressable style={styles.toolHead} onPress={() => setOpen(!open)}>
+        <View style={[styles.stateDot, { backgroundColor: palette.warning }]} />
+        <Text style={[styles.toolVariant, { color: palette.text }]}>{call.name}</Text>
+        <Text style={[styles.toolSummary, { color: palette.textSecondary }]} numberOfLines={1}>{call.summary}</Text>
+        <Text style={[styles.toolStatus, { color: palette.warning }]}>{open ? '▾' : '▸'} 未执行</Text>
+      </Pressable>
+      {open && (
+        <View style={styles.toolBody}>
+          <Text style={[styles.mono, { color: palette.text }]}>{call.raw}</Text>
+        </View>
+      )}
+    </View>
   )
 }
 
@@ -471,6 +509,8 @@ const styles = StyleSheet.create({
   toolBodyLabel: { fontSize: 11 },
   mono: { fontSize: 11, fontFamily: 'Menlo', lineHeight: 16 },
   turnEnd: { fontSize: 12, textAlign: 'center', paddingVertical: spacing.x1 },
+  dsmlGroup: { gap: spacing.x2 },
+  dsmlHint: { fontSize: 11, lineHeight: 15 },
   compactionRow: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, alignSelf: 'center' },
   compactionLabel: { fontSize: 12 },
   compactionBody: { fontSize: 12, lineHeight: 18, paddingTop: spacing.x1 },

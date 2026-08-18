@@ -14,3 +14,4 @@ gateway/dist-server/
 react-native/ios/
 react-native/android/
 react-native/.env
+.gstack/

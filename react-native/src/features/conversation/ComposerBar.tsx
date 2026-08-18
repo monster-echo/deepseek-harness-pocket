@@ -100,6 +100,7 @@ export function ComposerBar(props: Readonly<{
     && !images.some((img) => img.uploading)
   const modelLabel = newSessionDefaults !== null ? newSessionDefaults.model.replace('deepseek-', '') : 'v4-flash'
   const presetLabel = PRESET_LABELS[newSessionPreset.length > 0 ? newSessionPreset : 'standard'] ?? newSessionPreset
+  const permissionLabel = permission !== null ? (PERMISSION_LABELS[permission] ?? permission) : '权限'
 
   return (
     <View style={[styles.container, { backgroundColor: palette.surface, borderTopColor: palette.border }]}>
@@ -119,13 +120,16 @@ export function ComposerBar(props: Readonly<{
         </View>
       )}
 
-      {/* 胶囊工具行 */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillRow}>
-        <Pill icon="chevron-right" label="命令" onPress={() => props.onOpenMenu('commands')} />
-        <Pill icon="palette" label={`模式 · ${presetLabel}`} onPress={() => props.onOpenMenu('preset')} />
-        <Pill icon="image" label="相册" onPress={() => void addImages('library')} />
-        <Pill icon="plus" label="拍照" onPress={() => void addImages('camera')} />
-      </ScrollView>
+      {/* 功能条（对齐 dsh Web composer：模式 / 命令 / 访问模式 / 模型 / 附件） */}
+      <View style={styles.dockRow}>
+        <DockButton label={`${presetLabel} ▾`} active onPress={() => props.onOpenMenu('preset')} />
+        <DockButton label="命令" onPress={() => props.onOpenMenu('commands')} />
+        <DockButton label={`${permissionLabel} ▾`} onPress={() => props.onOpenMenu('permission')} />
+        <DockButton label={`${modelLabel} ▾`} onPress={() => props.onOpenMenu('model')} />
+        <View style={{ flex: 1 }} />
+        <DockButton label="📷" onPress={() => void addImages('camera')} />
+        <DockButton label="🖼" onPress={() => void addImages('library')} />
+      </View>
 
       {/* 附件缩略图 */}
       {images.length > 0 && (
@@ -142,53 +146,52 @@ export function ComposerBar(props: Readonly<{
         </ScrollView>
       )}
 
-      {/* 输入行 */}
-      <View style={styles.inputRow}>
+      {/* 输入区（一体框，发送/停止内嵌右侧，对齐 dsh Web） */}
+      <View style={[styles.inputShell, { borderColor: palette.border, backgroundColor: palette.surfaceMuted }]}>
         <TextInput
-          style={[styles.input, { color: palette.text, backgroundColor: palette.surfaceMuted }]}
-          placeholder="发送消息…（/ 唤起命令）"
+          style={[styles.input, { color: palette.text }]}
+          placeholder="描述你想要构建的内容…"
           placeholderTextColor={palette.textSecondary}
           value={text}
           onChangeText={setText}
           multiline
         />
         {running ? (
-          <Pressable style={[styles.send, { backgroundColor: palette.surfaceMuted }]} onPress={() => void stopTurn()}>
+          <Pressable style={styles.sendInline} onPress={() => void stopTurn()} hitSlop={6}>
             <View style={[styles.stopSquare, { backgroundColor: palette.error }]} />
           </Pressable>
         ) : (
           <Pressable
-            style={[styles.send, { backgroundColor: canSend ? palette.brand : palette.surfaceMuted }]}
+            style={[styles.sendInline, { backgroundColor: canSend ? palette.brand : palette.surfaceMuted }]}
             onPress={submit}
             disabled={!canSend}
           >
-            <AppIcon name="chevron-right" color={canSend ? '#FFFFFF' : palette.textSecondary} size={20} />
+            <AppIcon name="chevron-right" color={canSend ? '#FFFFFF' : palette.textSecondary} size={18} />
           </Pressable>
         )}
       </View>
 
-      {/* 状态行 */}
-      <Pressable style={styles.statusRow} onPress={() => props.onOpenMenu('permission')}>
-        <View style={[styles.statusDot, { backgroundColor: permission === 'danger-full-access' ? palette.error : permission === 'read-only' ? palette.textSecondary : palette.success }]} />
-        <Text style={[styles.statusText, { color: palette.textSecondary }]}>
-          {permission !== null ? (PERMISSION_LABELS[permission] ?? permission) : '权限'} · {modelLabel}
-          {totalUsage.input > 0 || totalUsage.output > 0 ? ` · ${compact(totalUsage.input)} in / ${compact(totalUsage.output)} out` : ''}
+      {/* StatsLine（对齐 dsh Web composer dock：回合与用量统计） */}
+      {(totalUsage.input > 0 || totalUsage.output > 0) && (
+        <Text style={[styles.statsLine, { color: palette.textSecondary }]}>
+          {totalUsage.input > 0 ? `${compact(totalUsage.input)} in · ${compact(totalUsage.output)} out` : ''}
         </Text>
-        <AppIcon name="chevron-right" color={palette.textSecondary} size={12} />
-      </Pressable>
+      )}
     </View>
   )
 }
 
-function Pill(props: Readonly<{ icon: IconName; label: string; onPress: () => void }>): React.JSX.Element {
+/** dsh Web 功能条按钮：文字按钮，无底色（active 表示可下拉）。 */
+function DockButton(props: Readonly<{ label: string; active?: boolean; onPress: () => void }>): React.JSX.Element {
   const { palette } = usePreferences()
   return (
     <Pressable
-      style={({ pressed }) => [styles.pill, { backgroundColor: palette.surfaceMuted }, pressed && { opacity: 0.7 }]}
+      style={({ pressed }) => [styles.dockButton, pressed && { opacity: 0.6 }]}
       onPress={props.onPress}
     >
-      <AppIcon name={props.icon} color={palette.brand} size={13} />
-      <Text style={[styles.pillText, { color: palette.text }]}>{props.label}</Text>
+      <Text style={[styles.dockText, { color: props.active === true ? palette.brand : palette.textSecondary }]}>
+        {props.label}
+      </Text>
     </Pressable>
   )
 }
@@ -206,20 +209,18 @@ const styles = StyleSheet.create({
   suggestRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, paddingHorizontal: spacing.x3, paddingVertical: spacing.x2 },
   suggestName: { fontSize: 13 },
   suggestDesc: { flex: 1, fontSize: 12 },
-  pillRow: { flexDirection: 'row', gap: spacing.x2, paddingHorizontal: spacing.x3 },
-  pill: { flexDirection: 'row', alignItems: 'center', gap: spacing.x1, paddingHorizontal: spacing.x3, paddingVertical: spacing.x1, borderRadius: radii.round },
-  pillText: { fontSize: 13 },
+  dockRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x3, paddingHorizontal: spacing.x4, flexWrap: 'wrap' },
+  dockButton: { paddingVertical: 2 },
+  dockText: { fontSize: 13 },
   thumbRow: { flexDirection: 'row', gap: spacing.x2, paddingHorizontal: spacing.x3 },
   thumbWrap: { width: 56, height: 56, borderRadius: radii.control, borderWidth: 1, overflow: 'hidden' },
   thumb: { width: '100%', height: '100%' },
   thumbOverlay: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, alignItems: 'center', justifyContent: 'center' },
   thumbText: { color: '#FFFFFF', fontSize: 12 },
   thumbRemove: { position: 'absolute', top: 2, right: 2, width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center' },
-  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.x2, paddingHorizontal: spacing.x3 },
-  input: { flex: 1, minHeight: 44, maxHeight: 120, borderRadius: radii.card, padding: spacing.x2, paddingTop: spacing.x2, fontSize: 15 },
-  send: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  stopSquare: { width: 14, height: 14, borderRadius: 3 },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x1, paddingHorizontal: spacing.x4, paddingVertical: 2 },
-  statusDot: { width: 7, height: 7, borderRadius: 4 },
-  statusText: { fontSize: 11, flex: 1 },
+  inputShell: { flexDirection: 'row', alignItems: 'flex-end', marginHorizontal: spacing.x3, borderRadius: radii.card, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: spacing.x2 },
+  input: { flex: 1, minHeight: 44, maxHeight: 120, paddingVertical: spacing.x2, fontSize: 15 },
+  sendInline: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginVertical: 5 },
+  stopSquare: { width: 12, height: 12, borderRadius: 3 },
+  statsLine: { fontSize: 11, textAlign: 'center' },
 })

@@ -49,6 +49,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const [renameTarget, setRenameTarget] = useState<WorkspaceRow | null>(null);
   const [renameText, setRenameText] = useState('');
   const [workspaces, setWorkspaces] = useState<readonly WorkspaceRow[]>([]);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   const workers = useDshStore((s) => s.workers);
   const activeWorkerId = useDshStore((s) => s.activeWorkerId);
@@ -200,9 +201,11 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
                 <View key={group.key}>
                   <Pressable
                     style={styles.workspaceRow}
+                    onPress={() => setCollapsed((c) => ({ ...c, [group.key]: !c[group.key] }))}
                     onLongPress={() => group.workspace !== null && setActionTarget(group.workspace)}
                     delayLongPress={350}
                   >
+                    <Text style={[styles.workspaceCaret, { color: palette.textSecondary }]}>{collapsed[group.key] ? '▸' : '▾'}</Text>
                     <AppIcon name="folder" color={palette.textSecondary} size={13} />
                     <Text style={[styles.workspaceTitle, { color: palette.textSecondary }]} numberOfLines={1}>{group.title}</Text>
                     <Text style={[styles.workspaceCount, { color: palette.textSecondary }]}>{group.sessions.length}</Text>
@@ -212,7 +215,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
                       </Pressable>
                     )}
                   </Pressable>
-                  {group.sessions.map((session) => <SessionRow key={session.id} session={session} active={activeSessionId === session.id} onPress={() => { openSession(session.id); onClose(); }} onLongPress={() => togglePinSession(session.id)} pinned={pinnedSessionIds.includes(session.id)} />)}
+                  {!collapsed[group.key] && group.sessions.map((session) => <SessionRow key={session.id} session={session} active={activeSessionId === session.id} onPress={() => { openSession(session.id); onClose(); }} onLongPress={() => togglePinSession(session.id)} pinned={pinnedSessionIds.includes(session.id)} />)}
                 </View>
               ))
             )}
@@ -442,6 +445,7 @@ const styles = StyleSheet.create({
   noWorkerText: { fontSize: 15, fontWeight: '600' },
   noWorkerSub: { fontSize: 13 },
   workspaceRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, paddingVertical: spacing.x2, paddingHorizontal: spacing.x1, marginTop: spacing.x1 },
+  workspaceCaret: { fontSize: 10, width: 12 },
   workspaceTitle: { flex: 1, fontSize: 12, fontWeight: '600' },
   workspaceCount: { fontSize: 11 },
   workspaceAdd: { padding: spacing.x1 },

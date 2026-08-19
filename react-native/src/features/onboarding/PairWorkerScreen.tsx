@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { AppIcon } from '../../design-system/AppIcon';
 import { Sheet } from '../../design-system/Sheet';
 import { usePreferences } from '../../preferences/PreferencesProvider';
@@ -77,11 +78,21 @@ export function PairWorkerScreen() {
 
 function AddWorkerForm({ onDone }: Readonly<{ onDone: () => void }>) {
   const { palette } = usePreferences();
+  const { showToast } = useApp();
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
   const connectGateway = useDshStore((s) => s.connectGateway);
+
+  const copyCommand = (command: string): void => {
+    void Clipboard.setStringAsync(command).then(() => {
+      setCopied(command)
+      showToast('已复制命令', 'success')
+      setTimeout(() => setCopied((c) => (c === command ? null : c)), 2000)
+    })
+  };
 
   const bind = async (): Promise<void> => {
     if (!/^\d{6}$/.test(code)) {
@@ -104,10 +115,17 @@ function AddWorkerForm({ onDone }: Readonly<{ onDone: () => void }>) {
   return (
     <View style={styles.formBody}>
       {INSTALL_STEPS.map((step) => (
-        <View key={step.command} style={[styles.step, { borderColor: palette.border, backgroundColor: palette.surface }]}>
+        <Pressable
+          key={step.command}
+          style={({ pressed }) => [styles.step, { borderColor: palette.border, backgroundColor: palette.surface }, pressed && { opacity: 0.7 }]}
+          onPress={() => copyCommand(step.command)}
+        >
           <Text style={[styles.stepTitle, { color: palette.text }]}>{step.title}</Text>
-          <Text style={[styles.stepCommand, { color: palette.brand }]} selectable>{step.command}</Text>
-        </View>
+          <View style={styles.stepCommandRow}>
+            <Text style={[styles.stepCommand, { color: palette.brand }]} selectable>{step.command}</Text>
+            <AppIcon name={copied === step.command ? 'check' : 'copy'} color={palette.brand} size={13} />
+          </View>
+        </Pressable>
       ))}
       <Text style={[styles.hint, { color: palette.textSecondary }]}>
         电脑终端会打印二维码与 6 位配对码；此处先手输配对码完成绑定（扫码即将上线）。
@@ -161,7 +179,8 @@ const styles = StyleSheet.create({
   workerStatus: { fontSize: 12, marginTop: 2 },
   step: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.card, padding: spacing.x3, gap: spacing.x2 },
   stepTitle: { fontSize: 14 },
-  stepCommand: { fontSize: 13, fontFamily: 'Menlo' },
+  stepCommandRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2 },
+  stepCommand: { fontSize: 13, fontFamily: 'Menlo', flex: 1 },
   hint: { fontSize: 13, lineHeight: 20 },
   formCard: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.card, padding: spacing.x3, gap: spacing.x2, marginTop: spacing.x2 },
   codeInput: { borderWidth: 1, borderRadius: radii.control, padding: spacing.x3, fontSize: 22, letterSpacing: 8, textAlign: 'center' },

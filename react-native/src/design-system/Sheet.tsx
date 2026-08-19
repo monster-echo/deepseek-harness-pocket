@@ -6,7 +6,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { BottomSheetModal, BottomSheetScrollView, BottomSheetView } from '@gorhom/bottom-sheet';
+import { BottomSheetBackdrop, BottomSheetModal, BottomSheetScrollView, BottomSheetView } from '@gorhom/bottom-sheet';
 import { AppIcon } from './AppIcon';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { spacing } from '../theme/tokens';
@@ -49,6 +49,9 @@ export function Sheet(props: Readonly<SheetProps>): React.JSX.Element {
       ref={ref}
       snapPoints={snapPoints}
       enablePanDownToClose
+      backdropComponent={(bp) => (
+        <BottomSheetBackdrop {...bp} opacity={0.5} appearsOnIndex={0} disappearsOnIndex={-1} onPress={close} />
+      )}
       handleIndicatorStyle={{ backgroundColor: palette.border, width: 40 }}
       backgroundStyle={{ backgroundColor: palette.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24 }}
       keyboardBehavior="interactive"

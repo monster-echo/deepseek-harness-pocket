@@ -207,7 +207,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
                     onLongPress={() => group.workspace !== null && setActionTarget(group.workspace)}
                     delayLongPress={350}
                   >
-                    <AppIcon name="home" color={palette.textSecondary} size={13} />
+                    <AppIcon name="folder" color={palette.textSecondary} size={13} />
                     <Text style={[styles.workspaceTitle, { color: palette.textSecondary }]} numberOfLines={1}>{group.title}</Text>
                     <Text style={[styles.workspaceCount, { color: palette.textSecondary }]}>{group.sessions.length}</Text>
                     {group.workspace !== null && (

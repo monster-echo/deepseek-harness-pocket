@@ -9,6 +9,7 @@ export type IconName =
   | 'chevron-right'
   | 'close'
   | 'crown'
+  | 'folder'
   | 'gift'
   | 'globe'
   | 'home'
@@ -41,6 +42,7 @@ const paths: Record<Exclude<IconName, 'user'>, string[]> = {
   'chevron-right': ['m9 18 6-6-6-6'],
   close: ['M18 6 6 18', 'M6 6l12 12'],
   crown: ['m3 6 4 5 5-7 5 7 4-5-2 13H5L3 6Z', 'M5 19h14'],
+  folder: ['M4 5a2 2 0 0 1 2-2h4l2 2h7a1 1 0 0 1 1 1v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5Z'],
   gift: [
     'M5 8h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z',
     'M12 8v13',

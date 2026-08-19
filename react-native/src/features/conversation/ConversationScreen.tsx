@@ -50,8 +50,10 @@ export function ConversationScreen() {
     // 对齐 dsh Web 新建会话页：标题 + 选择工作区 + 功能条 + 大输入区（首条消息即建会话）
     return (
       <View style={[styles.container, { backgroundColor: palette.background }]}>
-        <NewSessionHeader />
-        <Composer mode="new" />
+        <View style={[styles.containerSession]}>
+          <NewSessionHeader />
+          <Composer mode="new" />
+        </View>
       </View>
     );
   }
@@ -107,7 +109,11 @@ function NewSessionHeader(): React.JSX.Element {
   const { palette, dark } = usePreferences();
   return (
     <View style={styles.titleRow}>
-      <Image source={dark ? LOGO_DARK : LOGO} style={styles.logo} accessibilityLabel="掌鲸 DSH Pocket" />
+      <Image
+        source={dark ? LOGO_DARK : LOGO}
+        style={styles.logo}
+        accessibilityLabel="掌鲸 DSH Pocket"
+      />
       <Text style={[styles.title, { color: palette.text }]}>探索未至之境</Text>
       <View style={[styles.badge, { backgroundColor: palette.brandSoft }]}>
         <Text style={[styles.badgeText, { color: palette.brand }]}>预览版</Text>
@@ -159,24 +165,22 @@ function StatsLine() {
       ? Math.round((stats.decodeTokens / stats.decodeMs) * 1000)
       : 0;
   const parts: string[] = [];
-  parts.push(`${stats.turns} 轮 · ${stats.steps} 步`);
+  parts.push(`${stats.turns} 轮 ${stats.steps} 步`);
   parts.push(
-    `LLM ${fmtMs(stats.llmMs)}${stats.toolMs > 0 ? ` · 工具 ${fmtMs(stats.toolMs)}` : ""}`,
+    `LLM ${fmtMs(stats.llmMs)}${stats.toolMs > 0 ? ` 工具 ${fmtMs(stats.toolMs)}` : ""}`,
   );
   parts.push(
-    `首 token ${fmtMs(avgTtft)} · ${tokPerSec > 0 ? `${tokPerSec}` : "—"} tok/s`,
+    `首 token ${fmtMs(avgTtft)} ${tokPerSec > 0 ? `${tokPerSec}` : "—"} tok/s`,
   );
   if (Number.isFinite(stats.cacheHitPct))
     parts.push(`缓存命中 ${Math.round(stats.cacheHitPct)}%`);
-  parts.push(
-    `输入 ${fmtTok(totalUsage.input)} · 输出 ${fmtTok(totalUsage.output)}`,
-  );
+  parts.push(`${fmtTok(totalUsage.input)} / ${fmtTok(totalUsage.output)}`);
   return (
     <Text
       style={[styles.statsBar, { color: palette.textSecondary }]}
       numberOfLines={2}
     >
-      {parts.join("  ｜  ")}
+      {parts.join(" ｜ ")}
     </Text>
   );
 }
@@ -191,12 +195,14 @@ function UserRow({
   const { palette } = usePreferences();
   return (
     <View style={styles.userRow}>
-      <Pressable onLongPress={() => onLongPress(item)} delayLongPress={350}>
-        <View style={[styles.userBubble, { backgroundColor: palette.brand }]}>
-          <Text style={[styles.userText, { color: "#FFFFFF" }]}>
-            {item.text}
-          </Text>
-        </View>
+      <Pressable
+        onLongPress={() => onLongPress(item)}
+        delayLongPress={350}
+        style={[styles.userBubble, { backgroundColor: palette.brand }]}
+      >
+        <Text numberOfLines={1} style={[styles.userText, { color: "#FFFFFF" }]}>
+          {item.text}
+        </Text>
       </Pressable>
     </View>
   );
@@ -294,31 +300,33 @@ function AssistantRow({
   const { palette } = usePreferences();
   const blocks = item.blocks ?? [];
   return (
-    <Pressable onLongPress={() => onLongPress(item)} delayLongPress={350}>
-      <View style={styles.assistantBubble}>
-        {blocks.map((block, i) => (
-          <AssistantBlockView
-            key={i}
-            block={block}
-            streaming={item.streaming === true}
-          />
-        ))}
-        {blocks.length === 0 && item.streaming === true && (
-          <Text style={[styles.thinkSummary, { color: palette.textSecondary }]}>
-            思考中…
-          </Text>
-        )}
-        {item.stopped === true && (
-          <Text style={[styles.stoppedMark, { color: palette.warning }]}>
-            已停止
-          </Text>
-        )}
-        {item.usage !== undefined && (
-          <Text style={[styles.usageLine, { color: palette.textSecondary }]}>
-            {item.usage.input} in · {item.usage.output} out
-          </Text>
-        )}
-      </View>
+    <Pressable
+      onLongPress={() => onLongPress(item)}
+      delayLongPress={350}
+      style={styles.assistantBubble}
+    >
+      {blocks.map((block, i) => (
+        <AssistantBlockView
+          key={i}
+          block={block}
+          streaming={item.streaming === true}
+        />
+      ))}
+      {blocks.length === 0 && item.streaming === true && (
+        <Text style={[styles.thinkSummary, { color: palette.textSecondary }]}>
+          思考中…
+        </Text>
+      )}
+      {item.stopped === true && (
+        <Text style={[styles.stoppedMark, { color: palette.warning }]}>
+          已停止
+        </Text>
+      )}
+      {item.usage !== undefined && (
+        <Text style={[styles.usageLine, { color: palette.textSecondary }]}>
+          {item.usage.input} in · {item.usage.output} out
+        </Text>
+      )}
     </Pressable>
   );
 }
@@ -935,8 +943,7 @@ function MessageActionSheet(
         {text.slice(0, 80)}
       </Text>
       <SheetAction label={copied ? "已复制 ✓" : "复制全文"} onPress={copy} />
-      <SheetAction label="从这里分支（fork 新会话）" onPress={fork} />
-      <SheetAction label="取消" onPress={props.onClose} muted />
+      <SheetAction label="fork 新会话" onPress={fork} />
     </Sheet>
   );
 }
@@ -981,7 +988,18 @@ const sheetStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.x2, paddingTop: spacing.x4, marginBottom: spacing.x3 },
+  containerSession: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.x2,
+    paddingTop: spacing.x4,
+    marginBottom: spacing.x3,
+  },
   logo: { width: 28, height: 28, borderRadius: 14 },
   title: { fontSize: 22, fontWeight: "700" },
   badge: { paddingHorizontal: spacing.x2, paddingVertical: 2, borderRadius: 6 },
@@ -1002,7 +1020,13 @@ const styles = StyleSheet.create({
   },
   noticeText: { fontSize: 13 },
   timeline: { flex: 1 },
-  userRow: { flexDirection: "row", justifyContent: "flex-end" },
+  userRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    flexWrap: "nowrap", // 允许换行
+    alignItems: "center", // 垂直居中
+    flexShrink: 0,
+  },
   userBubble: {
     maxWidth: "80%",
     borderRadius: radii.card,

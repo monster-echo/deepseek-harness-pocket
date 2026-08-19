@@ -3,3 +3,7 @@ packages:
   - gateway
   - e2e
 # react-native/ 由 npm 单独管理（Expo 工具链与 package-lock 约定，与 geekread 一致）
+
+# pnpm 11：允许 esbuild 运行 postinstall（默认忽略会报 ERR_PNPM_IGNORED_BUILDS）
+allowBuilds:
+  esbuild: true

@@ -1,0 +1,20 @@
+services:
+  gateway:
+    image: deepseek-harness-pocket/gateway:0.1.0
+    container_name: dsh-gateway
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - global_network
+    ports:
+      - "3781:3781"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3781/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  global_network:
+    external: true

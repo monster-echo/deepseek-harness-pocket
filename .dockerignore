@@ -1,0 +1,20 @@
+# 构建上下文精简（Dockerfile 只 COPY 特定路径，其余排除）
+.git
+node_modules
+**/node_modules
+**/.next
+**/dist-server
+**/dist
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+react-native
+gateway/.next
+gateway/node_modules
+e2e
+.gstack
+.mobileui
+.vscode
+docs
+.github
+*.log

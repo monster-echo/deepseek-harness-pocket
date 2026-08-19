@@ -87,35 +87,31 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
     const filtered = q.length === 0
       ? sessions
       : sessions.filter((s) => s.title.toLowerCase().includes(q) || (s.cwd ?? '').toLowerCase().includes(q))
-    const byCwd = new Map<string, SessionListItem[]>()
+    // 按 workspace 注册表分组（对齐 dsh Web），cwd 不在任何 workspace 的 session 归「未分组」
+    const wsByPath = new Map(workspaces.map((w) => [w.path, w]))
+    const byWsPath = new Map<string, SessionListItem[]>()
+    const ungrouped: SessionListItem[] = []
     for (const s of filtered) {
       const cwd = s.cwd ?? ''
-      const list = byCwd.get(cwd) ?? []
-      list.push(s)
-      byCwd.set(cwd, list)
+      const ws = wsByPath.get(cwd)
+      if (ws !== undefined) {
+        const list = byWsPath.get(ws.path) ?? []
+        list.push(s)
+        byWsPath.set(ws.path, list)
+      } else {
+        ungrouped.push(s)
+      }
     }
-    const sortSessions = sortList
-    for (const [cwd, list] of byCwd) byCwd.set(cwd, sortSessions(list))
-    const wsByPath = new Map(workspaces.map((w) => [w.path, w]))
-    return [...byCwd.entries()].sort((a, b) => {
-      const ap = a[1].some((s) => pinnedSessionIds.includes(s.id)) ? 1 : 0
-      const bp = b[1].some((s) => pinnedSessionIds.includes(s.id)) ? 1 : 0
-      if (sorting === 'manual' && ap !== bp) return bp - ap
-      return b[1][0].lastActivityAt - a[1][0].lastActivityAt
-    })
-      .map(([cwd, list]) => {
-        const ws = wsByPath.get(cwd)
-        const visible = q.length === 0 || list.length > 0 || (ws !== undefined && (ws.title.toLowerCase().includes(q) || ws.path.toLowerCase().includes(q)))
-        return {
-          key: cwd,
-          workspace: ws ?? null,
-          title: ws?.title ?? (cwd.length > 0 ? cwd.split('/').filter(Boolean).pop() ?? cwd : '未分组'),
-          cwd,
-          sessions: list,
-          visible,
-        }
-      })
-      .filter((g) => g.visible)
+    const result: { key: string; workspace: WorkspaceRow | null; title: string; cwd: string; sessions: SessionListItem[]; visible: boolean }[] = []
+    // workspace 组：按注册表顺序
+    for (const ws of workspaces) {
+      const list = byWsPath.get(ws.path) ?? []
+      const visible = q.length === 0 || list.length > 0 || ws.title.toLowerCase().includes(q) || ws.path.toLowerCase().includes(q)
+      result.push({ key: ws.path, workspace: ws, title: ws.title, cwd: ws.path, sessions: sortList(list), visible })
+    }
+    // 未分组：cwd 不在任何 workspace（仅在有未分组 session 时显示）
+    result.push({ key: '__ungrouped__', workspace: null, title: '未分组', cwd: '', sessions: sortList(ungrouped), visible: ungrouped.length > 0 })
+    return result.filter((g) => g.visible)
   }, [sessions, workspaces, q, sorting, pinnedSessionIds])
 
   const doRename = (): void => {

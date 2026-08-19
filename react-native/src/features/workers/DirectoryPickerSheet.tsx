@@ -146,7 +146,7 @@ export function DirectoryPickerSheet(
         >
           {!loading && dirs.length > 0 && (
             <Text style={[styles.count, { color: palette.textSecondary }]}>
-              共 {dirs.length} 个子目录（上下滚动查看）
+              共 {dirs.length} 个子目录
             </Text>
           )}
         </View>
@@ -208,7 +208,12 @@ export function DirectoryPickerSheet(
           </Text>
           <Pressable
             style={[styles.pickButton, { backgroundColor: palette.brand }]}
-            onPress={() => props.onPicked(current)}
+            onPress={() => {
+              props.onPicked(current);
+
+              // 选择后关闭
+              props.onClose();
+            }}
           >
             <Text style={styles.pickText}>选这个目录</Text>
           </Pressable>

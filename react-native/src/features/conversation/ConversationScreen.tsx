@@ -20,8 +20,7 @@ import { useDshStore } from '../../state/dshStore';
 import { spacing, radii } from '../../theme/tokens';
 import type { AssistantBlock, TimelineItem, ToolStatus } from './reducer';
 import { splitDsml, cutAtDsmlStart, type DsmlToolCall } from './dsml';
-import { ComposerBar } from './ComposerBar';
-import { NewSessionComposer } from './NewSessionComposer';
+import { Composer } from './Composer';
 
 export function ConversationScreen() {
   const { palette } = usePreferences();
@@ -40,7 +39,7 @@ export function ConversationScreen() {
     // 对齐 dsh Web 新建会话页：选择工作区 + 功能条 + 大输入区（首条消息即建会话）
     return (
       <View style={[styles.container, { backgroundColor: palette.background }]}>
-        <NewSessionComposer />
+        <Composer mode="new" />
       </View>
     )
   }
@@ -71,7 +70,7 @@ export function ConversationScreen() {
       {pending !== undefined ? (
         <ServerRequestCard request={pending} />
       ) : (
-        <ComposerBar />
+        <Composer mode="session" />
       )}
       {/* 底部累计统计行（对齐 dsh Web stats 行，置于输入区下方） */}
       <StatsLine />

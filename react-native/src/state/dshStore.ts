@@ -19,7 +19,7 @@ interface DshState {
   sessionView: SessionView
   serverRequests: readonly ServerRequest[]
   notice: string | null
-  /** worker 模型目录缓存（NewSessionComposer 的模型列表） */
+  /** worker 模型目录缓存（Composer 的模型列表） */
   modelCatalog: readonly { id: string; name?: string }[]
 
   connectGateway(): void
@@ -37,7 +37,7 @@ interface DshState {
   createSession(cwd: string, opts?: { reasoningEffort?: string; permission?: string }): Promise<string | null>
   forkSession(sessionId: string, boundary?: number): Promise<string | null>
   openSession(sessionId: string): Promise<void>
-  /** 开始新会话：清 activeSessionId，主区域显示新建会话首屏（NewSessionComposer） */
+  /** 开始新会话：清 activeSessionId，主区域显示新建会话首屏（Composer） */
   startNewSession(): void
   sendMessage(text: string, images?: readonly unknown[]): Promise<void>
   uploadImage(dataB64: string, mediaType: string, name?: string): Promise<unknown | null>

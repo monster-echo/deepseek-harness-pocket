@@ -276,12 +276,6 @@ export function Composer(props: Readonly<{ mode: 'new' | 'session' }>): React.JS
         </View>
       ) : (
         <>
-          {/* 功能条：命令 / 访问模式 / 模型（对齐 dsh Web session composer） */}
-          <View style={styles.dockRow}>
-            <DockButton label="命令" onPress={() => setSheet("commands")} />
-            <DockButton label={`访问模式：${permissionLabel}`} onPress={() => setSheet("permission")} />
-            <DockButton label={`模型：${modelFull}`} onPress={() => setSheet("model")} />
-          </View>
           {suggestions.length > 0 && (
             <View style={[styles.suggestBox, { backgroundColor: palette.surface, borderColor: palette.border }]}>
               {suggestions.map((cmd) => (
@@ -293,6 +287,12 @@ export function Composer(props: Readonly<{ mode: 'new' | 'session' }>): React.JS
             </View>
           )}
           <ComposerInput text={text} onChangeText={setText} onSubmit={submit} onStop={() => void stopTurn()} running={running} canSend={canSend} />
+          {/* 功能条：命令 / 访问模式 / 模型（输入框下方，对齐 dsh Web 底部按钮行） */}
+          <View style={styles.dockRow}>
+            <DockButton label="命令" onPress={() => setSheet("commands")} />
+            <DockButton label={`访问模式：${permissionLabel}`} onPress={() => setSheet("permission")} />
+            <DockButton label={`模型：${modelFull}`} onPress={() => setSheet("model")} />
+          </View>
           {(usedTokens > 0 || contextPct > 0) && (
             <Pressable style={styles.statsLine} onPress={() => setContextOpen(true)}>
               <Svg width={18} height={18} viewBox="0 0 20 20">

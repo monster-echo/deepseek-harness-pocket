@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { AppIcon, IconName } from "../../design-system/AppIcon";
 import { Sheet } from "../../design-system/Sheet";
@@ -17,9 +17,6 @@ import { readLastWorkspace, saveLastWorkspace } from "../../data/storage";
 import { DirectoryPickerSheet } from "../workers/DirectoryPickerSheet";
 import { CommandPaletteSheet } from "./CommandPaletteSheet";
 import { ComposerInput } from "./ComposerInput";
-
-const LOGO = require("../../../assets/brand/logo.png"); // eslint-disable-line @typescript-eslint/no-require-imports
-const LOGO_DARK = require("../../../assets/brand/logo-dark.png"); // eslint-disable-line @typescript-eslint/no-require-imports
 
 const MODES: ReadonlyArray<{ id: string; name: string; desc: string }> = [
   { id: "standard", name: "标准模式", desc: "功能完整的编码 Agent，支持文件编辑、Shell、文件与网页检索、Skills、计划、目标、子代理和工作流。" },
@@ -58,7 +55,7 @@ const DEFAULT_CONTEXT_LIMIT = 128_000;
 type SheetKind = "worker" | "project" | "mode" | "commands" | "permission" | "model" | null;
 
 export function Composer(props: Readonly<{ mode: 'new' | 'session' }>): React.JSX.Element {
-  const { palette, dark } = usePreferences();
+  const { palette } = usePreferences();
   const { showToast } = useApp();
   const isNew = props.mode === 'new';
 
@@ -208,16 +205,6 @@ export function Composer(props: Readonly<{ mode: 'new' | 'session' }>): React.JS
 
   return (
     <View style={[isNew ? styles.container : styles.containerSession, { backgroundColor: palette.background }]}>
-      {isNew && (
-        <View style={styles.titleRow}>
-          <Image source={dark ? LOGO_DARK : LOGO} style={styles.logo} accessibilityLabel="掌鲸 DSH Pocket" />
-          <Text style={[styles.title, { color: palette.text }]}>探索未至之境</Text>
-          <View style={[styles.badge, { backgroundColor: palette.brandSoft }]}>
-            <Text style={[styles.badgeText, { color: palette.brand }]}>预览版</Text>
-          </View>
-        </View>
-      )}
-
       {/* chip 行：new 显示电脑/工作区/模式（居中）；session 只显示模式（靠左） */}
       <View style={[styles.selectorRow, !isNew && { justifyContent: 'flex-start', paddingHorizontal: spacing.x3 }]}>
         {isNew && <Chip icon="home" label={activeWorkerName} onPress={() => setSheet("worker")} />}
@@ -556,11 +543,6 @@ function compact(n: number): string {
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.x4 },
   containerSession: { flex: 1, justifyContent: "flex-end", paddingTop: spacing.x3 },
-  titleRow: { flexDirection: "row", alignItems: "center", gap: spacing.x2, marginBottom: spacing.x4 },
-  logo: { width: 28, height: 28, borderRadius: 14 },
-  title: { fontSize: 22, fontWeight: "700" },
-  badge: { paddingHorizontal: spacing.x2, paddingVertical: 2, borderRadius: 6 },
-  badgeText: { fontSize: 11, fontWeight: "500" },
   selectorRow: { flexDirection: "row", gap: spacing.x2, marginBottom: spacing.x3, alignSelf: "stretch", justifyContent: "center", flexWrap: "wrap" },
   dockRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x3, paddingHorizontal: spacing.x4, paddingBottom: spacing.x2, flexWrap: 'wrap' },
   dockButton: { paddingVertical: 2 },

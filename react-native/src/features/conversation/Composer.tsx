@@ -207,7 +207,7 @@ export function Composer(props: Readonly<{ mode: 'new' | 'session' }>): React.JS
   const CIRC = 2 * Math.PI * R;
 
   return (
-    <View style={[styles.container, { backgroundColor: palette.background }]}>
+    <View style={[isNew ? styles.container : styles.containerSession, { backgroundColor: palette.background }]}>
       {isNew && (
         <View style={styles.titleRow}>
           <Image source={dark ? LOGO_DARK : LOGO} style={styles.logo} accessibilityLabel="掌鲸 DSH Pocket" />
@@ -218,8 +218,8 @@ export function Composer(props: Readonly<{ mode: 'new' | 'session' }>): React.JS
         </View>
       )}
 
-      {/* chip 行：new 显示电脑/工作区/模式；session 只显示模式 */}
-      <View style={styles.selectorRow}>
+      {/* chip 行：new 显示电脑/工作区/模式（居中）；session 只显示模式（靠左） */}
+      <View style={[styles.selectorRow, !isNew && { justifyContent: 'flex-start', paddingHorizontal: spacing.x3 }]}>
         {isNew && <Chip icon="home" label={activeWorkerName} onPress={() => setSheet("worker")} />}
         {isNew && <Chip icon="home" label={pathLabel} onPress={() => setSheet("project")} />}
         <Chip icon="crown" label={modeName} onPress={() => setSheet("mode")} />
@@ -555,6 +555,7 @@ function compact(n: number): string {
 
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.x4 },
+  containerSession: { flex: 1, justifyContent: "flex-end", paddingTop: spacing.x3 },
   titleRow: { flexDirection: "row", alignItems: "center", gap: spacing.x2, marginBottom: spacing.x4 },
   logo: { width: 28, height: 28, borderRadius: 14 },
   title: { fontSize: 22, fontWeight: "700" },

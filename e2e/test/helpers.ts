@@ -217,7 +217,8 @@ export interface RunningGateway {
 export async function startTestGateway(): Promise<RunningGateway> {
   const config: GatewayConfig = {
     port: 0, hostname: '127.0.0.1', databaseUrl: 'unused',
-    authVerifyUrl: '', authVerifyToken: '', expoAccessToken: '', nodeEnv: 'development',
+    authJwksUrl: '', authIssuer: 'https://auth.zhongbei.tech', authAudience: 'dsh-pocket',
+    expoAccessToken: '', nodeEnv: 'development',
   }
   const store = makeMemoryStore()
   const gateway = new Gateway(

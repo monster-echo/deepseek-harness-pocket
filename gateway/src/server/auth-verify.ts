@@ -1,15 +1,14 @@
 /**
- * 掌鲸 DSH Pocket session 校验：调用 auth.zhongbei.tech 内部校验端点。
+ * 掌鲸 DSH Pocket session 校验：jose 本地验签 RS256 JWT。
  *
- * 端点契约（M2 前由 auth 侧提供）：
- *   POST <AUTH_VERIFY_URL>
- *   Authorization: Bearer <AUTH_VERIFY_TOKEN>   （可选共享密钥）
- *   { "token": "<掌鲸 DSH Pocket session token>" }
- *   → 200 { "userId": "...", "appId": "..." } | 401
+ * auth 只签发、经 JWKS 端点分发公钥；gateway 拉取公钥后离线验签，
+ * 不依赖 auth 在线（auth 宕机不影响已签发会话）。密钥轮换由
+ * createRemoteJWKSet 自动处理（按 kid 匹配 + 定期刷新缓存）。
  *
- * 端点未上线期间的策略见 config.devAuthBypass（仅 development）。
+ * 开发模式放行策略见 config.devAuthBypass（仅 development）。
  */
 
+import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { devAuthBypass, type GatewayConfig } from './config.js'
 
 export interface VerifiedUser {
@@ -18,30 +17,23 @@ export interface VerifiedUser {
 }
 
 export function createAuthVerifier(config: GatewayConfig): (token: string) => Promise<VerifiedUser | null> {
+  const jwks = config.authJwksUrl.length > 0
+    ? createRemoteJWKSet(new URL(config.authJwksUrl))
+    : null
   return async (token: string): Promise<VerifiedUser | null> => {
     const bypass = devAuthBypass(config, token)
     if (bypass !== null) return { userId: bypass, appId: null }
-    if (config.authVerifyUrl.length === 0) {
-      return null // 生产未配置端点 = 拒绝
-    }
+    if (jwks === null) return null // 生产未配置 JWKS = 拒绝
     try {
-      const response = await fetch(config.authVerifyUrl, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(config.authVerifyToken.length > 0
-            ? { authorization: `Bearer ${config.authVerifyToken}` }
-            : {}),
-        },
-        body: JSON.stringify({ token }),
-        signal: AbortSignal.timeout(5000),
+      const { payload } = await jwtVerify(token, jwks, {
+        issuer: config.authIssuer,
+        audience: config.authAudience,
       })
-      if (!response.ok) return null
-      const data = (await response.json()) as { userId?: unknown; appId?: unknown }
-      if (typeof data.userId !== 'string' || data.userId.length === 0) return null
+      const userId = payload.sub
+      if (typeof userId !== 'string' || userId.length === 0) return null
       return {
-        userId: data.userId,
-        appId: typeof data.appId === 'string' ? data.appId : null,
+        userId,
+        appId: typeof payload.app_id === 'string' ? payload.app_id : null,
       }
     } catch {
       return null

@@ -29,8 +29,9 @@ function makeConfig(): GatewayConfig {
     port: 3781,
     hostname: '0.0.0.0',
     databaseUrl: 'postgres://unused',
-    authVerifyUrl: '',
-    authVerifyToken: '',
+    authJwksUrl: '',
+    authIssuer: 'https://auth.zhongbei.tech',
+    authAudience: 'dsh-pocket',
     expoAccessToken: '',
     nodeEnv: 'development',
   }

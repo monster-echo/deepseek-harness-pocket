@@ -276,6 +276,12 @@ export function Composer(props: Readonly<{ mode: 'new' | 'session' }>): React.JS
         </View>
       ) : (
         <>
+          {/* 功能条：命令 / 访问模式 / 模型（对齐 dsh Web session composer） */}
+          <View style={styles.dockRow}>
+            <DockButton label="命令" onPress={() => setSheet("commands")} />
+            <DockButton label={`访问模式：${permissionLabel}`} onPress={() => setSheet("permission")} />
+            <DockButton label={`模型：${modelFull}`} onPress={() => setSheet("model")} />
+          </View>
           {suggestions.length > 0 && (
             <View style={[styles.suggestBox, { backgroundColor: palette.surface, borderColor: palette.border }]}>
               {suggestions.map((cmd) => (
@@ -354,6 +360,15 @@ function Chip(props: Readonly<{ icon: IconName; label: string; onPress: () => vo
       <AppIcon name={props.icon} color={palette.textSecondary} size={14} />
       <Text style={[styles.chipText, { color: palette.text }]} numberOfLines={1}>{props.label}</Text>
       <Text style={[styles.chev, { color: palette.textSecondary }]}>▾</Text>
+    </Pressable>
+  );
+}
+
+function DockButton(props: Readonly<{ label: string; onPress: () => void }>): React.JSX.Element {
+  const { palette } = usePreferences();
+  return (
+    <Pressable style={({ pressed }) => [styles.dockButton, pressed && { opacity: 0.6 }]} onPress={props.onPress}>
+      <Text style={[styles.dockText, { color: palette.textSecondary }]}>{props.label}</Text>
     </Pressable>
   );
 }
@@ -546,6 +561,9 @@ const styles = StyleSheet.create({
   badge: { paddingHorizontal: spacing.x2, paddingVertical: 2, borderRadius: 6 },
   badgeText: { fontSize: 11, fontWeight: "500" },
   selectorRow: { flexDirection: "row", gap: spacing.x2, marginBottom: spacing.x3, alignSelf: "stretch", justifyContent: "center", flexWrap: "wrap" },
+  dockRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x3, paddingHorizontal: spacing.x4, paddingBottom: spacing.x2, flexWrap: 'wrap' },
+  dockButton: { paddingVertical: 2 },
+  dockText: { fontSize: 13 },
   chip: { flexDirection: "row", alignItems: "center", gap: spacing.x1, paddingHorizontal: spacing.x3, paddingVertical: spacing.x2, borderRadius: radii.control },
   chipText: { fontSize: 13, maxWidth: 130 },
   chev: { fontSize: 11 },

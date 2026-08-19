@@ -18,7 +18,12 @@ export interface VerifiedUser {
 
 export function createAuthVerifier(config: GatewayConfig): (token: string) => Promise<VerifiedUser | null> {
   const jwks = config.authJwksUrl.length > 0
-    ? createRemoteJWKSet(new URL(config.authJwksUrl))
+    ? createRemoteJWKSet(new URL(config.authJwksUrl), {
+        // gateway 与 auth 跨地域（如新加坡 → 广州），首次拉取 TLS+SSR 冷启动
+        // 常超 jose 默认 5s；放宽到 15s，仅影响首次/刷新，后续走本地缓存。
+        timeoutDuration: 15_000,
+        cooldownDuration: 10_000,
+      })
     : null
   return async (token: string): Promise<VerifiedUser | null> => {
     const bypass = devAuthBypass(config, token)

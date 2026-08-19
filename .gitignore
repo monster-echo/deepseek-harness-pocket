@@ -20,3 +20,4 @@ react-native/android/
 # pnpm 仓库：根目录 npm lockfile 残留不入库（react-native 子包由 npm 管理除外）
 /package-lock.json
 .gstack/
+*.tsbuildinfo

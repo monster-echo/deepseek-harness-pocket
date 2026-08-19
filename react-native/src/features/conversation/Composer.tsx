@@ -379,7 +379,7 @@ export function Composer(
       >
         {isNew && (
           <Chip
-            icon="home"
+            icon="monitor"
             label={activeWorkerName}
             onPress={() => setSheet("worker")}
           />

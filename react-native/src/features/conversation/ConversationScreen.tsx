@@ -541,7 +541,12 @@ function markdownRules(palette: Palette, dark: boolean) {
             >
               {language}
             </Text>
-            <Pressable onPress={() => copyCode(node.content)} hitSlop={8}>
+            <Pressable
+              onPress={() => copyCode(node.content)}
+              hitSlop={8}
+              style={styles.codeCopyBtn}
+            >
+              <AppIcon name="copy" color={palette.brand} size={12} />
               <Text style={[styles.codeCopy, { color: palette.brand }]}>
                 复制
               </Text>
@@ -612,12 +617,12 @@ const TOOL_STATUS_LABEL: Record<ToolStatus, string> = {
   stopped: "已停止",
 };
 const TOOL_ICON: Record<string, IconName> = {
-  Bash: "globe",
-  Read: "check",
-  Write: "plus",
-  Edit: "palette",
-  Search: "globe",
-  Code: "palette",
+  Bash: "terminal",
+  Read: "file-text",
+  Write: "file-text",
+  Edit: "edit",
+  Search: "search",
+  Code: "code",
   Tool: "settings",
 };
 
@@ -1114,6 +1119,7 @@ const styles = StyleSheet.create({
   },
   codeLang: { fontSize: 11 },
   codeCopy: { fontSize: 12, fontWeight: "600" },
+  codeCopyBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
   compactionBody: { fontSize: 12, lineHeight: 18, paddingTop: spacing.x1 },
   turnEndCard: {
     flexDirection: "row",

@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { apiClient, setAnonymousIdReader, setPlatformHeader, setRefreshTokenReader, setSessionTokenReader } from '../data/apiClient';
 import { MockPaymentProvider } from '../payment/mockPaymentProvider';
-import { signUpAndGetToken } from './testServer';
+import { signUpAndGetToken, hasE2eServer } from './testServer';
 
-describe('purchase flow (real server)', () => {
+describe.skipIf(!hasE2eServer)('purchase flow (real server)', () => {
   let token: string;
   beforeAll(async () => {
     setPlatformHeader('ios');

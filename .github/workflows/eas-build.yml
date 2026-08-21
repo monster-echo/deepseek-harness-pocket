@@ -1,0 +1,46 @@
+name: EAS Build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: react-native
+    env:
+      # 发布身份（与 gradle 发布 workflow 一致）：app_id 与 environment 必填，
+      # API/Gateway 基地址生产必填。取值优先 Variables，其次 Secrets。
+      EXPO_PUBLIC_APP_ID: ${{ vars.APP_ID || secrets.APP_ID }}
+      EXPO_PUBLIC_APP_ENVIRONMENT: ${{ vars.APP_ENVIRONMENT || secrets.APP_ENVIRONMENT || 'production' }}
+      EXPO_PUBLIC_API_URL: ${{ vars.API_URL || secrets.API_URL }}
+      EXPO_PUBLIC_GATEWAY_URL: ${{ vars.GATEWAY_URL || secrets.GATEWAY_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: react-native/package-lock.json
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - name: Verify app identity
+        run: |
+          for v in EXPO_PUBLIC_APP_ID EXPO_PUBLIC_API_URL EXPO_PUBLIC_GATEWAY_URL; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v 未配置：请在仓库 Variables 或 Secrets 中设置后再发布，不能为空。"
+              exit 1
+            fi
+          done
+          echo "Publishing app_id=$EXPO_PUBLIC_APP_ID environment=$EXPO_PUBLIC_APP_ENVIRONMENT"
+      - run: npm ci --legacy-peer-deps
+      - name: EAS build (iOS + Android)
+        run: eas build --platform all --profile production --non-interactive

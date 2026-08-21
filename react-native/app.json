@@ -61,7 +61,16 @@
             "DEFAULT"
           ]
         }
+      ],
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
       ]
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "cad81535-4374-4c46-88c1-2697e73e7127"
+      }
+    },
+    "owner": "rwecho007"
   }
 }

@@ -21,3 +21,6 @@ react-native/android/
 /package-lock.json
 .gstack/
 *.tsbuildinfo
+# 根目录 stray EAS 文件（eas 命令误从根目录运行时生成；真实配置在 react-native/）
+/app.json
+/eas.json

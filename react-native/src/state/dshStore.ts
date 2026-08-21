@@ -19,8 +19,8 @@ interface DshState {
   sessionView: SessionView
   serverRequests: readonly ServerRequest[]
   notice: string | null
-  /** worker 模型目录缓存（Composer 的模型列表） */
-  modelCatalog: readonly { id: string; name?: string }[]
+  /** worker 模型目录缓存（Composer 的模型列表）；inputModalities 用于图片能力提示 */
+  modelCatalog: readonly { id: string; name?: string; inputModalities?: readonly ('text' | 'image')[] }[]
 
   connectGateway(): void
   disconnectGateway(): void
@@ -46,7 +46,7 @@ interface DshState {
   permissionOptions(): Promise<{ names: string[]; default: string }>
   setPermission(preset: string): Promise<void>
   listCommands(): Promise<readonly { name: string; description: string }[]>
-  listModels(): Promise<{ providers: readonly { id: string; models: readonly { id: string; name?: string }[] }[]; current: { provider: string; model: string } | null }>
+  listModels(): Promise<{ providers: readonly { id: string; name?: string; models: readonly { id: string; name?: string; inputModalities?: readonly ('text' | 'image')[] }[] }[]; current: { provider: string; model: string } | null }>
   listPresets(): Promise<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]>
   /** 新会话默认：模型路由与 agent preset（发起端记录） */
   newSessionDefaults: { provider: string; model: string } | null

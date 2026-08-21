@@ -222,10 +222,10 @@ export class DshClient {
     return (response.result as { commands: { name: string; description: string }[] }).commands
   }
 
-  async listModels(sessionId: string): Promise<{ providers: readonly { id: string; models: readonly { id: string; name?: string }[] }[]; current: { provider: string; model: string } | null }> {
+  async listModels(sessionId: string): Promise<{ providers: readonly { id: string; name?: string; models: readonly { id: string; name?: string; inputModalities?: readonly ('text' | 'image')[] }[] }[]; current: { provider: string; model: string } | null }> {
     const response = await this.rpc('models', 'list', sessionId.length > 0 ? { sessionId } : {})
     if (!response.ok) throw new Error(response.error.message)
-    return response.result as { providers: readonly { id: string; models: readonly { id: string; name?: string }[] }[]; current: { provider: string; model: string } | null }
+    return response.result as { providers: readonly { id: string; name?: string; models: readonly { id: string; name?: string; inputModalities?: readonly ('text' | 'image')[] }[] }[]; current: { provider: string; model: string } | null }
   }
 
   async listPresets(): Promise<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]> {

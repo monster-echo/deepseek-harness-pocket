@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
+import type { ImageAttachmentRef, ImageMediaType, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 import type { DshSessionEvent } from '@deepseek-harness-pocket/bridge-protocol'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
@@ -103,6 +104,17 @@ export interface AdapterCaps {
   readonly userQuestions: boolean
 }
 
+/** 模型目录条目（dsh listModels 投影）。 */
+export interface ModelInfo {
+  readonly id: string
+  readonly name?: string
+  /**
+   * dsh ModelModality 投影：模型接受的输入模态（'text' | 'image'）。
+   * 缺省表示「未知 / 未声明」，消费者据此不得拒绝，仅可用于 UI 能力提示。
+   */
+  readonly inputModalities?: readonly ('text' | 'image')[]
+}
+
 export interface DshAdapter {
   readonly caps: AdapterCaps
   dshVersion(): string | null
@@ -113,8 +125,8 @@ export interface DshAdapter {
   setPermission(sessionId: string, preset: string): Promise<void>
   /** 会话可用斜杠命令目录 */
   listCommands(sessionId: string): Promise<readonly { name: string; description: string }[]>
-  /** 模型目录（provider/模型列表）+ 会话当前选择 */
-  listModels(sessionId: string): Promise<{ providers: readonly { id: string; models: readonly { id: string; name?: string }[] }[]; current: { provider: string; model: string } | null }>
+  /** 模型目录（provider/模型列表，含输入模态）+ 会话当前选择 */
+  listModels(sessionId: string): Promise<{ providers: readonly { id: string; name?: string; models: readonly ModelInfo[] }[]; current: { provider: string; model: string } | null }>
   /** agent preset 目录（standard/code/minimal/…） */
   listPresets(): Promise<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]>
   /** 列目录（仅目录，隐藏目录排后）；供手机端目录树浏览 */
@@ -140,7 +152,7 @@ export interface DshAdapter {
   openSession(id: string, route: { provider: string; model: string }): Promise<void>
   sendUserMessage(id: string, text: string, imageRefs?: readonly unknown[]): Promise<void>
   /** 图片字节入 dsh 附件库（ref 可拼进用户消息 content） */
-  uploadImage(dataB64: string, mediaType: string, name?: string): Promise<unknown>
+  uploadImage(dataB64: string, mediaType: string, name?: string): Promise<ImageAttachmentRef>
   stopTurn(id: string): Promise<void>
   /** 订阅事件流；返回退订函数 */
   onEvent(handler: (sessionId: string, event: DshSessionEvent) => void): () => void
@@ -312,7 +324,7 @@ export function createAdapter(ctx: Context): DshAdapter {
       const llm = ctx.get('llm') as
         | {
             listProviders(): readonly { id: string; name?: string }[]
-            listModels(provider: string): Promise<readonly { id: string; name?: string }[]>
+            listModels(provider: string): Promise<readonly ModelInfo[]>
           }
         | undefined
       const registry = agents()
@@ -323,9 +335,9 @@ export function createAdapter(ctx: Context): DshAdapter {
       if (llm === undefined) return { providers: [], current }
       try {
         // dsh 的 listProviders() 只返回 {id,name}，模型需按 provider 异步 listModels()
-        const providers: { id: string; name?: string; models: readonly { id: string; name?: string }[] }[] = []
+        const providers: { id: string; name?: string; models: readonly ModelInfo[] }[] = []
         for (const p of llm.listProviders()) {
-          let models: readonly { id: string; name?: string }[] = []
+          let models: readonly ModelInfo[] = []
           try {
             models = await llm.listModels(p.id)
           } catch {
@@ -593,11 +605,17 @@ export function createAdapter(ctx: Context): DshAdapter {
 
     async uploadImage(dataB64, mediaType, name) {
       const store = ctx.get('attachments') as
-        | { saveImage(input: { data: Uint8Array; mediaType: string; name?: string }): Promise<unknown> }
+        | { saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef> }
         | undefined
       if (store === undefined) throw new Error('附件服务不可用')
       const bytes = Buffer.from(dataB64, 'base64')
-      return await store.saveImage({ data: new Uint8Array(bytes), mediaType, ...(name !== undefined ? { name } : {}) })
+      // mediaType 由 dsh 附加入口按解码字节校验（AttachmentError 拒绝非法格式），
+      // 此处仅做静态收窄，真实合法性交给 attachments.saveImage 的 admission。
+      return await store.saveImage({
+        data: new Uint8Array(bytes),
+        mediaType: mediaType as ImageMediaType,
+        ...(name !== undefined ? { name } : {}),
+      })
     },
 
     async stopTurn(id) {

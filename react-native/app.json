@@ -39,7 +39,10 @@
       "bundleIdentifier": "top.rwecho.dshcompanion",
       "associatedDomains": [
         "applinks:auth.zhongbei.tech"
-      ]
+      ],
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "top.rwecho.dshcompanion",

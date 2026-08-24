@@ -144,86 +144,89 @@ class _VersionsPageState extends ConsumerState<VersionsPage> {
           title: '托管版本',
           trailing: IconButton(
             tooltip: '重新扫描',
-            onPressed: () => ref.invalidate(installedDshProvider),
+            onPressed: () {
+              ref.invalidate(installedDshProvider);
+              ref.invalidate(availableDshProvider);
+            },
             icon: const Icon(Icons.refresh, size: 18),
           ),
           child: installedAsync.when(
-            data: (list) => list.isEmpty
-                ? const Text('尚未安装托管版本，从下方列表安装')
-                : Column(
+            data: (list) => Column(
+              children: [
+                if (list.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Text(
+                      '尚未安装托管版本，从下方安装',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).hintColor),
+                    ),
+                  )
+                else
+                  for (final d in list)
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(d.version),
+                      subtitle: Text(
+                        '${_fmtDate(d.installedAt)} · ${d.binPath}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (settings.dshMode == 'managed' && settings.managedVersion == d.version)
+                            const Chip(label: Text('使用中'), visualDensity: VisualDensity.compact)
+                          else
+                            TextButton(
+                              onPressed: () => _useManaged(d.version),
+                              child: const Text('使用'),
+                            ),
+                          IconButton(
+                            tooltip: '删除',
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            onPressed: (settings.dshMode == 'managed' && settings.managedVersion == d.version) || runningVersion.isNotEmpty && d.version == runningVersion
+                                ? null
+                                : () => _run('已删除 ${d.version}', () => ref.read(runtimeServiceProvider).remove(d.version)),
+                          ),
+                        ],
+                      ),
+                    ),
+                const Divider(height: 20),
+                availableAsync.when(
+                  data: (versions) => _InstallPanel(
+                    versions: versions,
+                    installed: list,
+                    busy: _busy,
+                    installing: _installingVersion,
+                    onInstall: (v) async {
+                      setState(() => _installingVersion = v);
+                      try {
+                        await _run('已安装 $v', () => ref.read(runtimeServiceProvider).install(v, ref.read(settingsProvider).registry));
+                      } finally {
+                        if (mounted) setState(() => _installingVersion = null);
+                      }
+                    },
+                    onInstalled: _useManaged,
+                  ),
+                  loading: () => const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator())),
+                  error: (e, _) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final d in list)
-                        ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(d.version),
-                          subtitle: Text(
-                            '${_fmtDate(d.installedAt)} · ${d.binPath}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (settings.dshMode == 'managed' && settings.managedVersion == d.version)
-                                const Chip(label: Text('使用中'), visualDensity: VisualDensity.compact)
-                              else
-                                TextButton(
-                                  onPressed: () => _useManaged(d.version),
-                                  child: const Text('使用'),
-                                ),
-                              IconButton(
-                                tooltip: '删除',
-                                icon: const Icon(Icons.delete_outline, size: 18),
-                                onPressed: (settings.dshMode == 'managed' && settings.managedVersion == d.version) || runningVersion.isNotEmpty && d.version == runningVersion
-                                    ? null
-                                    : () => _run('已删除 ${d.version}', () => ref.read(runtimeServiceProvider).remove(d.version)),
-                              ),
-                            ],
-                          ),
-                        ),
+                      Text('获取失败：$e'),
+                      const SizedBox(height: 6),
+                      Text(
+                        '请稍后重试；也可修改 ~/.deepseek-harness-pocket/desktop-settings.json 里的 registry',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     ],
                   ),
-            loading: () => const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator())),
-            error: (e, _) => Text('扫描失败：$e'),
-          ),
-        ),
-        SectionCard(
-          title: '安装新版本',
-          trailing: IconButton(
-            tooltip: '刷新可用版本（npm registry）',
-            onPressed: () => ref.invalidate(availableDshProvider),
-            icon: const Icon(Icons.cloud_outlined, size: 18),
-          ),
-          child: availableAsync.when(
-            data: (versions) => _InstallPanel(
-              versions: versions,
-              installed: installedAsync.value ?? const [],
-              busy: _busy,
-              installing: _installingVersion,
-              onInstall: (v) async {
-                setState(() => _installingVersion = v);
-                try {
-                  await _run('已安装 $v', () => ref.read(runtimeServiceProvider).install(v, ref.read(settingsProvider).registry));
-                } finally {
-                  if (mounted) setState(() => _installingVersion = null);
-                }
-              },
-              onInstalled: _useManaged,
-            ),
-            loading: () => const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator())),
-            error: (e, _) => Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('获取失败：$e'),
-                const SizedBox(height: 6),
-                Text(
-                  '请稍后重试；也可修改 ~/.deepseek-harness-pocket/desktop-settings.json 里的 registry',
-                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
+            loading: () => const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator())),
+            error: (e, _) => Text('扫描失败：$e'),
           ),
         ),
       ],

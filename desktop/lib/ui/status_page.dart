@@ -69,7 +69,7 @@ class _StatusPageState extends ConsumerState<StatusPage> {
                   children: [
                     Expanded(
                       child: FilledButton.icon(
-                        onPressed: _busy
+                        onPressed: _busy || st.running
                             ? null
                             : () => _run('已启动', () async {
                                   final svc = ref.read(workerServiceProvider);
@@ -82,7 +82,7 @@ class _StatusPageState extends ConsumerState<StatusPage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: _busy
+                        onPressed: _busy || !st.running
                             ? null
                             : () => _run('已停止', () => ref.read(workerServiceProvider).stop()),
                         icon: const Icon(Icons.stop),
@@ -92,7 +92,7 @@ class _StatusPageState extends ConsumerState<StatusPage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: _busy
+                        onPressed: _busy || !st.running
                             ? null
                             : () => _run('已重启', () => ref.read(workerServiceProvider).restart(ref.read(settingsProvider))),
                         icon: const Icon(Icons.refresh),
@@ -153,7 +153,6 @@ class _StatusPageState extends ConsumerState<StatusPage> {
                         ],
                       ),
                       const SizedBox(height: 6),
-                      InfoRow('直连地址', payload.lanUrl ?? '（无局域网地址）', copyable: true),
                       InfoRow('主机指纹', payload.fingerprint, copyable: true),
                       const SizedBox(height: 4),
                       Text(
@@ -166,7 +165,26 @@ class _StatusPageState extends ConsumerState<StatusPage> {
             error: (e, _) => Text('配对信息读取失败：$e'),
           ),
         ),
+        const _AppVersionFooter(),
       ],
+    );
+  }
+}
+
+class _AppVersionFooter extends ConsumerWidget {
+  const _AppVersionFooter();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final appInfo = ref.watch(appInfoProvider);
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Center(
+        child: Text(
+          'DSH Pocket Worker v${appInfo.value?.version ?? '…'}',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).hintColor),
+        ),
+      ),
     );
   }
 }

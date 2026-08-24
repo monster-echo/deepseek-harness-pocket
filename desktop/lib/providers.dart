@@ -75,9 +75,15 @@ final workerStatusProvider = StreamProvider<WorkerStatus>((ref) async* {
 
 // ---------- 配对 ----------
 
+/// 运行态布尔派生：tick 值相同（identical）不通知下游，
+/// 配对信息只在 启动/停止 翻转时重取，二维码不再每 2 秒闪刷。
+final workerRunningProvider = Provider<bool>(
+  (ref) => ref.watch(workerStatusProvider).value?.running ?? false,
+);
+
 final pairingProvider = FutureProvider<PairingPayload?>((ref) async {
-  // worker 启停后重新取（lanUrl/gateway 可能变）
-  ref.watch(workerStatusProvider);
+  // 只在运行状态翻转时重取；rotate/启停动作后由 UI 手动 invalidate
+  ref.watch(workerRunningProvider);
   final svc = ref.watch(workerServiceProvider);
   final s = ref.watch(settingsProvider);
   try {

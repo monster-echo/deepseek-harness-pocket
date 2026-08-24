@@ -7,7 +7,6 @@ import 'package:window_manager/window_manager.dart';
 
 import 'providers.dart';
 import 'ui/logs_page.dart';
-import 'ui/settings_page.dart';
 import 'ui/status_page.dart';
 import 'ui/versions_page.dart';
 
@@ -67,7 +66,6 @@ class _DshAppState extends ConsumerState<DshApp> with WindowListener {
                   StatusPage(),
                   VersionsPage(),
                   LogsPage(),
-                  SettingsPage(),
                 ],
               ),
             ),
@@ -80,7 +78,6 @@ class _DshAppState extends ConsumerState<DshApp> with WindowListener {
             NavigationDestination(icon: Icon(Icons.monitor_heart_outlined), selectedIcon: Icon(Icons.monitor_heart), label: '状态'),
             NavigationDestination(icon: Icon(Icons.layers_outlined), selectedIcon: Icon(Icons.layers), label: '版本'),
             NavigationDestination(icon: Icon(Icons.article_outlined), selectedIcon: Icon(Icons.article), label: '日志'),
-            NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: '设置'),
           ],
         ),
       ),

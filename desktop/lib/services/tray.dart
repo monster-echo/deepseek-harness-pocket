@@ -1,4 +1,7 @@
-/// 托盘常驻：图标 + 菜单（打开/启动/停止/退出）。
+/// 托盘常驻：状态行 + 菜单（打开/启动/停止/检查更新/开机启动/退出）。
+///
+/// 菜单与 tooltip 随 worker 运行态刷新（只在翻转时重建，不随轮询 tick 抖动）；
+/// 退出 = 停止 worker 再退出（固定行为）；关窗只是收托盘（app.dart）。
 library;
 
 import 'dart:io' show Platform;
@@ -28,20 +31,39 @@ class TrayController with TrayListener {
     } else {
       await trayManager.setIcon('assets/tray_icon.png');
     }
-    await trayManager.setToolTip('DSH Pocket Worker');
+    await _refreshMenu();
+    trayManager.addListener(this);
+    // 运行态翻转 / 自启开关变化 → 重建菜单（workerRunningProvider 值不变时不通知）
+    _container.listen<AsyncValue<WorkerStatus>>(
+      workerStatusProvider,
+      (_, _) => _refreshMenu(),
+    );
+    _container.listen<AsyncValue<bool>>(
+      autostartEnabledProvider,
+      (_, _) => _refreshMenu(),
+    );
+  }
+
+  Future<void> _refreshMenu() async {
+    final running = _container.read(workerStatusProvider).value?.running ?? false;
+    final autostart = _container.read(autostartEnabledProvider).value ?? false;
+    await trayManager.setToolTip('DSH Pocket Worker — ${running ? '运行中' : '已停止'}');
     await trayManager.setContextMenu(
       Menu(
         items: [
-          MenuItem(key: 'open', label: '打开面板'),
+          MenuItem(key: 'status', label: 'Worker：${running ? '运行中' : '已停止'}', disabled: true),
           MenuItem.separator(),
-          MenuItem(key: 'start', label: '启动 Worker'),
-          MenuItem(key: 'stop', label: '停止 Worker'),
+          MenuItem(key: 'open', label: '打开面板'),
+          MenuItem(key: 'start', label: '启动 Worker', disabled: running),
+          MenuItem(key: 'stop', label: '停止 Worker', disabled: !running),
+          MenuItem.separator(),
+          MenuItem(key: 'update', label: '检查更新'),
+          MenuItem.checkbox(key: 'autostart', label: '开机启动', checked: autostart),
           MenuItem.separator(),
           MenuItem(key: 'quit', label: '退出'),
         ],
       ),
     );
-    trayManager.addListener(this);
   }
 
   @override
@@ -64,6 +86,17 @@ class TrayController with TrayListener {
         await _runWorkerAction((svc, s) => svc.start(s));
       case 'stop':
         await _runWorkerAction((svc, _) => svc.stop());
+      case 'update':
+        try {
+          await _container.read(updaterServiceProvider).checkNow();
+        } catch (_) {}
+      case 'autostart':
+        final notifier = _container.read(autostartEnabledProvider.notifier);
+        final current = _container.read(autostartEnabledProvider).value ?? false;
+        try {
+          await notifier.set(!current);
+        } catch (_) {}
+        await _refreshMenu();
       case 'quit':
         await quitApp();
     }
@@ -80,14 +113,11 @@ class TrayController with TrayListener {
     }
   }
 
-  /// 真正退出：按设置决定是否连带停 worker。
+  /// 真正退出：停止 worker（固定行为）后退出。
   Future<void> quitApp() async {
-    final s = _container.read(settingsProvider);
-    if (s.stopWorkerOnExit) {
-      try {
-        await _container.read(workerServiceProvider).stop();
-      } catch (_) {}
-    }
+    try {
+      await _container.read(workerServiceProvider).stop();
+    } catch (_) {}
     await windowManager.destroy();
   }
 }

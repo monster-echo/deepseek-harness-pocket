@@ -47,18 +47,17 @@ Future<void> _bootstrap(ProviderContainer container) async {
     await container.read(updaterServiceProvider).init();
   } catch (_) {}
 
+  // 固定逻辑：应用启动即确保 worker 在运行（不提供开关）
   final settings = container.read(settingsProvider);
-  if (settings.autoStartWorker) {
-    await Future<void>.delayed(const Duration(milliseconds: 800));
-    try {
-      final st = await container.read(workerServiceProvider).status();
-      if (!st.running) {
-        await container.read(workerServiceProvider).start(settings);
-      }
-    } on SidecarMissingException {
-      // UI 顶部有横幅
-    } catch (_) {}
-    container.invalidate(workerStatusProvider);
-    container.invalidate(pairingProvider);
-  }
+  await Future<void>.delayed(const Duration(milliseconds: 800));
+  try {
+    final st = await container.read(workerServiceProvider).status();
+    if (!st.running) {
+      await container.read(workerServiceProvider).start(settings);
+    }
+  } on SidecarMissingException {
+    // UI 顶部有横幅
+  } catch (_) {}
+  container.invalidate(workerStatusProvider);
+  container.invalidate(pairingProvider);
 }

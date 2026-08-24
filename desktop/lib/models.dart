@@ -18,8 +18,6 @@ class AppSettings {
     required this.dshMode,
     required this.managedVersion,
     required this.customDshPath,
-    required this.autoStartWorker,
-    required this.stopWorkerOnExit,
   });
 
   static const defaultGatewayUrl = 'wss://dsh-pocket.zhongbei.tech/gw/worker';
@@ -37,9 +35,6 @@ class AppSettings {
   String managedVersion;
   String customDshPath;
 
-  bool autoStartWorker;
-  bool stopWorkerOnExit;
-
   factory AppSettings.defaults() => AppSettings(
         gatewayUrl: defaultGatewayUrl,
         workerName: '',
@@ -50,8 +45,6 @@ class AppSettings {
         dshMode: 'system',
         managedVersion: '',
         customDshPath: '',
-        autoStartWorker: true,
-        stopWorkerOnExit: false,
       );
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
@@ -66,8 +59,6 @@ class AppSettings {
       dshMode: (json['dshMode'] as String?) ?? d.dshMode,
       managedVersion: (json['managedVersion'] as String?) ?? d.managedVersion,
       customDshPath: (json['customDshPath'] as String?) ?? d.customDshPath,
-      autoStartWorker: (json['autoStartWorker'] as bool?) ?? d.autoStartWorker,
-      stopWorkerOnExit: (json['stopWorkerOnExit'] as bool?) ?? d.stopWorkerOnExit,
     );
   }
 
@@ -82,8 +73,6 @@ class AppSettings {
         'dshMode': dshMode,
         'managedVersion': managedVersion,
         'customDshPath': customDshPath,
-        'autoStartWorker': autoStartWorker,
-        'stopWorkerOnExit': stopWorkerOnExit,
       };
 
   AppSettings copyWith({
@@ -96,8 +85,6 @@ class AppSettings {
     String? dshMode,
     String? managedVersion,
     String? customDshPath,
-    bool? autoStartWorker,
-    bool? stopWorkerOnExit,
   }) =>
       AppSettings(
         gatewayUrl: gatewayUrl ?? this.gatewayUrl,
@@ -109,8 +96,6 @@ class AppSettings {
         dshMode: dshMode ?? this.dshMode,
         managedVersion: managedVersion ?? this.managedVersion,
         customDshPath: customDshPath ?? this.customDshPath,
-        autoStartWorker: autoStartWorker ?? this.autoStartWorker,
-        stopWorkerOnExit: stopWorkerOnExit ?? this.stopWorkerOnExit,
       );
 
   /// 解析当前选择的 dsh 可执行路径；null = 交给 dshc 从 PATH 解析。

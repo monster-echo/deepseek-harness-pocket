@@ -144,7 +144,8 @@ jobs:
           VER="${{ steps.ver.outputs.version }}"
           RELEASE_DIR="build/windows/x64/runner/Release"
           powershell -NoProfile -Command "Compress-Archive -Path '$RELEASE_DIR/*' -DestinationPath 'DSH-Pocket-Worker-$VER-windows-x64.zip' -Force"
-          iscc //DAppVersion="$VER" //DSourceDir="$RELEASE_DIR" windows/installer.iss
+          # MSYS_NO_PATHCONV：值里含 / 时 git-bash 会把 //D 整个原样传给 iscc（Unknown option）
+          MSYS_NO_PATHCONV=1 iscc /DAppVersion="$VER" /DSourceDir="$RELEASE_DIR" windows/installer.iss
           ls -la "DSH-Pocket-Worker-Setup-$VER.exe"
       - name: Sign setup (WinSparkle DSA)
         env:

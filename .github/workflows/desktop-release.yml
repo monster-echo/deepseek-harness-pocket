@@ -193,10 +193,10 @@ jobs:
           ED_LEN="$(cat dist/macos-zip-length.txt)"
           DSA_SIG="$(cat dist/windows-dsa-signature.txt)"
           EXE_LEN="$(cat dist/windows-exe-length.txt)"
-          desktop/tool/make-appcast.py macos --version "$VER" --build "$BUILD" \
+          python3 desktop/tool/make-appcast.py macos --version "$VER" --build "$BUILD" \
             --url "$BASE/$MAC_ZIP" --signature "$ED_SIG" --length "$ED_LEN" \
             --out dist/appcast-macos.xml
-          desktop/tool/make-appcast.py windows --version "$VER" --build "$BUILD" \
+          python3 desktop/tool/make-appcast.py windows --version "$VER" --build "$BUILD" \
             --url "$BASE/$WIN_EXE" --signature "$DSA_SIG" --length "$EXE_LEN" \
             --out dist/appcast-windows.xml
           cat dist/appcast-macos.xml

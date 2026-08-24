@@ -4,6 +4,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 export function resolveDshBin(explicit?: string): string {
   if (explicit !== undefined && explicit.length > 0) {
@@ -24,8 +25,21 @@ export function selfBin(): string {
   return process.argv[1] ?? 'dshc'
 }
 
+/** 粗粒度 semver 比较（只看 major.minor.patch，rc 后缀忽略）。返回 -1|0|1。 */
+export function compareVersion(a: string, b: string): number {
+  const pa = a.trim().replace(/^v/, '').split(/[.-]/).map(Number)
+  const pb = b.trim().replace(/^v/, '').split(/[.-]/).map(Number)
+  for (let i = 0; i < 3; i++) {
+    const x = pa[i] ?? 0
+    const y = pb[i] ?? 0
+    if (x !== y) return x < y ? -1 : 1
+  }
+  return 0
+}
+
 /** 本 npm 包根目录（plugin add file: 规格用）。 */
 export function packageRoot(): string {
   // dist/cli/runtime.js → dist/cli → dist → <package root>
-  return new URL('../..', import.meta.url).pathname
+  // fileURLToPath：应用包路径含空格（DSH%20Pocket%20Worker.app）时必须解码
+  return fileURLToPath(new URL('../..', import.meta.url))
 }

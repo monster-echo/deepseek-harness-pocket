@@ -369,7 +369,11 @@ function createAdapter(ctx) {
       const store = ctx.get("attachments");
       if (store === void 0) throw new Error("\u9644\u4EF6\u670D\u52A1\u4E0D\u53EF\u7528");
       const bytes = Buffer.from(dataB64, "base64");
-      return await store.saveImage({ data: new Uint8Array(bytes), mediaType, ...name2 !== void 0 ? { name: name2 } : {} });
+      return await store.saveImage({
+        data: new Uint8Array(bytes),
+        mediaType,
+        ...name2 !== void 0 ? { name: name2 } : {}
+      });
     },
     async stopTurn(id) {
       const agent = agents()?.get(id);

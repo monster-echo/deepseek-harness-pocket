@@ -8,6 +8,22 @@ import { dirname } from 'node:path'
 import { selfBin } from './runtime.js'
 
 const STOP_FLAG = 'dshc.stop-flag'
+const RUN_INFO = 'run.json'
+
+/** 本次 supervisor 运行元数据（写入 run.json，桌面端状态页用）。 */
+export interface RunInfo {
+  readonly dshBin: string
+  readonly dshVersion: string
+  readonly gatewayUrl: string
+  readonly port: number
+  readonly host: string
+  readonly name: string
+}
+
+interface StoredRunInfo extends RunInfo {
+  readonly pid: number
+  readonly startedAt: number
+}
 
 export function dshcDir(): string {
   const dir = `${process.env['HOME'] ?? '.'}/.deepseek-harness-pocket`
@@ -21,6 +37,21 @@ export function logFile(): string {
 
 export function pidFile(): string {
   return `${dshcDir()}/dshc.pid`
+}
+
+export function runInfoFile(): string {
+  return `${dshcDir()}/${RUN_INFO}`
+}
+
+/** 读取 run.json（supervisor 未运行/残留损坏时返回 undefined）。 */
+export function readRunInfo(): StoredRunInfo | undefined {
+  const file = runInfoFile()
+  if (!existsSync(file)) return undefined
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as StoredRunInfo
+  } catch {
+    return undefined
+  }
 }
 
 export function isRunning(): number | null {
@@ -44,8 +75,14 @@ function log(line: string): void {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** 前台守护循环：崩溃退避重启，直到 SIGINT/SIGTERM 或 stop-flag 出现。 */
-export async function supervise(dshBin: string, args: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
+export async function supervise(
+  dshBin: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  info: RunInfo,
+): Promise<void> {
   writeFileSync(pidFile(), `${process.pid}\n`)
+  writeFileSync(runInfoFile(), `${JSON.stringify({ ...info, pid: process.pid, startedAt: Date.now() }, undefined, 2)}\n`)
   let stopping = false
   let child: ChildProcess | undefined
 
@@ -60,6 +97,7 @@ export async function supervise(dshBin: string, args: readonly string[], env: No
       }, 5000)
     }
     rmSync(pidFile(), { force: true })
+    rmSync(runInfoFile(), { force: true })
     setTimeout(() => process.exit(0), 5500)
   }
   process.on('SIGINT', () => stop('SIGINT'))
@@ -94,6 +132,7 @@ export async function supervise(dshBin: string, args: readonly string[], env: No
   }
   clearInterval(flagTimer)
   rmSync(pidFile(), { force: true })
+  rmSync(runInfoFile(), { force: true })
   process.exit(0)
 }
 

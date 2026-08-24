@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 // src/cli/index.ts
+import { spawnSync as spawnSync4 } from "node:child_process";
 import { hostname, networkInterfaces } from "node:os";
 
 // src/plugin/state.ts
@@ -84,6 +85,7 @@ function printPairing(payload) {
 // src/cli/runtime.ts
 import { spawnSync } from "node:child_process";
 import { existsSync as existsSync2 } from "node:fs";
+import { fileURLToPath } from "node:url";
 function resolveDshBin(explicit) {
   if (explicit !== void 0 && explicit.length > 0) {
     if (!existsSync2(explicit)) throw new Error(`\u6307\u5B9A\u7684 dsh \u4E0D\u5B58\u5728: ${explicit}`);
@@ -100,8 +102,18 @@ function resolveDshBin(explicit) {
 function selfBin() {
   return process.argv[1] ?? "dshc";
 }
+function compareVersion(a, b) {
+  const pa = a.trim().replace(/^v/, "").split(/[.-]/).map(Number);
+  const pb = b.trim().replace(/^v/, "").split(/[.-]/).map(Number);
+  for (let i = 0; i < 3; i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
 function packageRoot() {
-  return new URL("../..", import.meta.url).pathname;
+  return fileURLToPath(new URL("../..", import.meta.url));
 }
 
 // src/cli/profile.ts
@@ -200,6 +212,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync3, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname2 } from "node:path";
 var STOP_FLAG = "dshc.stop-flag";
+var RUN_INFO = "run.json";
 function dshcDir() {
   const dir = `${process.env["HOME"] ?? "."}/.deepseek-harness-pocket`;
   mkdirSync3(dir, { recursive: true });
@@ -210,6 +223,18 @@ function logFile() {
 }
 function pidFile() {
   return `${dshcDir()}/dshc.pid`;
+}
+function runInfoFile() {
+  return `${dshcDir()}/${RUN_INFO}`;
+}
+function readRunInfo() {
+  const file = runInfoFile();
+  if (!existsSync4(file)) return void 0;
+  try {
+    return JSON.parse(readFileSync3(file, "utf8"));
+  } catch {
+    return void 0;
+  }
 }
 function isRunning() {
   if (!existsSync4(pidFile())) return null;
@@ -229,8 +254,10 @@ function log(line) {
 `);
 }
 var sleep = (ms) => new Promise((resolve3) => setTimeout(resolve3, ms));
-async function supervise(dshBin, args, env) {
+async function supervise(dshBin, args, env, info) {
   writeFileSync3(pidFile(), `${process.pid}
+`);
+  writeFileSync3(runInfoFile(), `${JSON.stringify({ ...info, pid: process.pid, startedAt: Date.now() }, void 0, 2)}
 `);
   let stopping = false;
   let child;
@@ -245,6 +272,7 @@ async function supervise(dshBin, args, env) {
       }, 5e3);
     }
     rmSync(pidFile(), { force: true });
+    rmSync(runInfoFile(), { force: true });
     setTimeout(() => process.exit(0), 5500);
   };
   process.on("SIGINT", () => stop("SIGINT"));
@@ -278,6 +306,7 @@ async function supervise(dshBin, args, env) {
   }
   clearInterval(flagTimer);
   rmSync(pidFile(), { force: true });
+  rmSync(runInfoFile(), { force: true });
   process.exit(0);
 }
 function detachSpawn(extraArgs) {
@@ -382,7 +411,9 @@ function parseArgs(argv) {
     caps: "m2",
     name: "",
     dsh: void 0,
-    detached: false
+    detached: false,
+    json: false,
+    quiet: false
   };
   const args = [...argv];
   const command = args.shift() ?? "help";
@@ -414,6 +445,12 @@ function parseArgs(argv) {
         break;
       case "--detached":
         options.detached = true;
+        break;
+      case "--json":
+        options.json = true;
+        break;
+      case "--quiet":
+        options.quiet = true;
         break;
       default:
         throw new Error(`\u672A\u77E5\u53C2\u6570 ${flag}`);
@@ -450,6 +487,11 @@ function qrPayload(gatewayUrl, port) {
     code: state.pairingCode
   };
 }
+function probeDshVersion(dshBin) {
+  const result = spawnSync4(dshBin, ["--version"], { stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" });
+  if (result.status !== 0 || typeof result.stdout !== "string") return "";
+  return result.stdout.trim().split("\n")[0] ?? "";
+}
 async function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
   const stateFile = defaultStateFile();
@@ -475,7 +517,7 @@ async function main() {
         workerName: name,
         stateFile
       });
-      printPairing(qrPayload(options.gateway, options.port));
+      if (!options.quiet) printPairing(qrPayload(options.gateway, options.port));
       if (options.detached) {
         const args = [
           "--gateway",
@@ -489,27 +531,57 @@ async function main() {
         ];
         if (options.name.length > 0) args.push("--name", options.name);
         if (options.dsh !== void 0) args.push("--dsh", options.dsh);
+        if (options.quiet) args.push("--quiet");
         const pid = detachSpawn(args);
         process.stdout.write(`[dshc] \u540E\u53F0\u8FD0\u884C\u4E2D (pid ${pid})\uFF0C\u65E5\u5FD7: ${logFile()}
 `);
         process.exit(0);
       }
-      await supervise(dshBin, ["--profile", COMPANION_PROFILE], { ...process.env });
+      const dshVersion = probeDshVersion(dshBin);
+      const dshArgs = ["--profile", COMPANION_PROFILE];
+      if (compareVersion(dshVersion, "0.1.1") >= 0) dshArgs.push("--no-open");
+      await supervise(dshBin, dshArgs, { ...process.env }, {
+        dshBin,
+        dshVersion,
+        gatewayUrl: options.gateway,
+        port: options.port,
+        host: options.host,
+        name
+      });
       break;
     }
     case "stop": {
       const pid = isRunning();
       if (pid === null) {
-        process.stdout.write("[dshc] \u672A\u5728\u8FD0\u884C\n");
+        if (options.json) process.stdout.write(`${JSON.stringify({ stopped: false, running: false })}
+`);
+        else process.stdout.write("[dshc] \u672A\u5728\u8FD0\u884C\n");
         process.exit(0);
       }
       requestStop();
-      process.stdout.write(`[dshc] \u5DF2\u8BF7\u6C42\u505C\u6B62 (pid ${pid})\uFF1B\u82E5 5 \u79D2\u672A\u9000\u51FA: kill ${pid}
+      if (options.json) process.stdout.write(`${JSON.stringify({ stopped: true, running: true, pid })}
+`);
+      else process.stdout.write(`[dshc] \u5DF2\u8BF7\u6C42\u505C\u6B62 (pid ${pid})\uFF1B\u82E5 5 \u79D2\u672A\u9000\u51FA: kill ${pid}
 `);
       break;
     }
     case "status": {
       const pid = isRunning();
+      if (options.json) {
+        const run = readRunInfo();
+        process.stdout.write(`${JSON.stringify({
+          running: pid !== null,
+          pid: pid ?? void 0,
+          run: run ?? void 0,
+          profileDir: profileDir(COMPANION_PROFILE),
+          stateFile,
+          pidFile: pidFile(),
+          logFile: logFile(),
+          home: dshcDir()
+        }, void 0, 2)}
+`);
+        break;
+      }
       process.stdout.write(
         pid === null ? "dshc: \u672A\u8FD0\u884C\n" : `dshc: \u8FD0\u884C\u4E2D (pid ${pid})\uFF0C\u65E5\u5FD7 ${logFile()}
 `
@@ -529,7 +601,10 @@ home: ${dshcDir()}
       break;
     }
     case "qr": {
-      printPairing(qrPayload(options.gateway, options.port));
+      const payload = qrPayload(options.gateway, options.port);
+      if (options.json) process.stdout.write(`${JSON.stringify(payload)}
+`);
+      else printPairing(payload);
       break;
     }
     case "install": {
@@ -552,9 +627,9 @@ home: ${dshcDir()}
           "\u547D\u4EE4:",
           "  install [--gateway wss://\u2026]   \u5B89\u88C5\u5F00\u673A\u81EA\u542F\uFF08\u5E76\u542F\u52A8\uFF09",
           "  uninstall                     \u79FB\u9664\u81EA\u542F",
-          "  start [--gateway \u2026] [--port 3780] [--caps m2] [--detached]",
+          "  start [--gateway \u2026] [--port 3780] [--caps m2] [--detached] [--quiet]",
           "                                \u62C9\u8D77\u5E76\u5B88\u62A4 dsh\uFF0C\u6253\u5370\u914D\u5BF9\u4E8C\u7EF4\u7801",
-          "  stop / status / token / qr"
+          "  stop / status [--json] / token / qr [--json]"
         ].join("\n")
       );
       if (command !== "help") process.exit(64);

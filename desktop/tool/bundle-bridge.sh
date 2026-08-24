@@ -25,8 +25,20 @@ else
 fi
 [[ -f "$NPM_CLI" ]] || { echo "[bridge] sidecar node 缺失，先运行 fetch-node.sh $TARGET" >&2; exit 1; }
 
+# pnpm：统一用 sidecar 自带的（fetch-node.sh 已装），CI 上没有全局 pnpm
+PNPM=""
+for P in "$SC/node/lib/node_modules/pnpm/bin/pnpm.cjs" "$SC/node/node_modules/pnpm/bin/pnpm.cjs"; do
+  if [[ -f "$P" ]]; then PNPM="$P"; break; fi
+done
+[[ -n "$PNPM" ]] || { echo "[bridge] sidecar pnpm 缺失，先运行 fetch-node.sh $TARGET" >&2; exit 1; }
+
 echo "[bridge] 构建 packages/bridge"
-pnpm --dir "$ROOT/packages/bridge" build
+# CI 全新 checkout 没有 node_modules；--filter 只装 bridge 及其 workspace 依赖（跳过 gateway/e2e）
+(
+  cd "$ROOT"
+  "$NODE_BIN" "$PNPM" --filter "@deepseek-harness-pocket/bridge..." install --frozen-lockfile --prefer-offline
+)
+"$NODE_BIN" "$PNPM" --dir "$ROOT/packages/bridge" run build
 
 BR="$SC/bridge"
 echo "[bridge] 暂存到 $BR"

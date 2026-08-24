@@ -1,0 +1,204 @@
+name: desktop-release
+
+# 桌面端发布：tag desktop-v<版本> 触发（或手动 dispatch）。
+# 产物：macOS zip(Sparkle 更新用)/dmg、Windows Inno 安装器/zip、双平台 appcast。
+#
+# 需要的 GitHub Secrets（一次性配置，见 desktop/README.md）：
+#   SPARKLE_ED_PRIVATE_KEY      macOS EdDSA 私钥（~/.deepseek-harness-pocket/keys/sparkle-ed-private.key 内容）
+#   WINSPARKLE_DSA_PRIVATE_KEY  Windows DSA 私钥（winsparkle-dsa-priv.pem 内容）
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 0.1.0）'
+        required: true
+      dry_run:
+        description: '只构建不出 Release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: '3.44.6'
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: desktop
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      build: ${{ steps.ver.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/desktop-v* ]]; then
+            echo "version=${GITHUB_REF_NAME#desktop-v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "build=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Prepare sidecar
+        run: tool/build-sidecar.sh darwin-arm64
+        env:
+          NODE_MIRROR: https://nodejs.org/dist
+          NPM_REGISTRY: https://registry.npmjs.org
+      - name: Build app
+        run: |
+          flutter config --enable-macos-desktop
+          flutter build macos --release \
+            --build-name="${{ steps.ver.outputs.version }}" \
+            --build-number="${{ steps.ver.outputs.build }}"
+      - name: Package zip + dmg
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          APP="build/macos/Build/Products/Release/DSH Pocket Worker.app"
+          ZIP="DSH-Pocket-Worker-$VER-macos-arm64.zip"
+          DMG="DSH-Pocket-Worker-$VER-macos-arm64.dmg"
+          ditto -c -k --keepParent "$APP" "$ZIP"
+          hdiutil create -volname "DSH Pocket Worker" -srcfolder "$APP" -ov -format UDZO "$DMG"
+          echo "ZIP_PATH=$ZIP" >> "$GITHUB_ENV"
+          echo "DMG_PATH=$DMG" >> "$GITHUB_ENV"
+      - name: Sign zip (Sparkle EdDSA)
+        env:
+          SPARKLE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          printf '%s' "$SPARKLE_KEY" > ed.key
+          chmod 600 ed.key
+          SIGN_BIN="macos/Pods/Sparkle/bin/sign_update"
+          SIG="$("$SIGN_BIN" --ed-key-file ed.key -p "$ZIP_PATH")"
+          LEN="$(stat -f%z "$ZIP_PATH")"
+          printf '%s' "$SIG" > macos-ed-signature.txt
+          printf '%s' "$LEN" > macos-zip-length.txt
+          rm -f ed.key
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos
+          path: |
+            DSH-Pocket-Worker-*.zip
+            DSH-Pocket-Worker-*.dmg
+            macos-ed-signature.txt
+            macos-zip-length.txt
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/desktop-v* ]]; then
+            echo "version=${GITHUB_REF_NAME#desktop-v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Install Inno Setup
+        shell: bash
+        working-directory: .
+        run: choco install innosetup -y --no-progress
+      - name: Prepare sidecar
+        run: tool/build-sidecar.sh windows-x64
+        env:
+          NODE_MIRROR: https://nodejs.org/dist
+          NPM_REGISTRY: https://registry.npmjs.org
+      - name: Build app
+        run: |
+          flutter config --enable-windows-desktop
+          flutter build windows --release \
+            --build-name="${{ steps.ver.outputs.version }}" \
+            --build-number="${{ github.run_number }}"
+      - name: Package setup + zip
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          RELEASE_DIR="build/windows/x64/runner/Release"
+          powershell -NoProfile -Command "Compress-Archive -Path '$RELEASE_DIR/*' -DestinationPath 'DSH-Pocket-Worker-$VER-windows-x64.zip' -Force"
+          iscc //DAppVersion="$VER" //DSourceDir="$RELEASE_DIR" windows/installer.iss
+          ls -la "DSH-Pocket-Worker-Setup-$VER.exe"
+      - name: Sign setup (WinSparkle DSA)
+        env:
+          DSA_KEY: ${{ secrets.WINSPARKLE_DSA_PRIVATE_KEY }}
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          printf '%s' "$DSA_KEY" > dsa_priv.pem
+          SIG="$(openssl dgst -sha1 -binary < "DSH-Pocket-Worker-Setup-$VER.exe" | openssl dgst -sha1 -sign dsa_priv.pem | openssl enc -base64)"
+          LEN="$(stat -c%s "DSH-Pocket-Worker-Setup-$VER.exe")"
+          printf '%s' "$SIG" > windows-dsa-signature.txt
+          printf '%s' "$LEN" > windows-exe-length.txt
+          rm -f dsa_priv.pem
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: |
+            DSH-Pocket-Worker-*.zip
+            DSH-Pocket-Worker-Setup-*.exe
+            windows-dsa-signature.txt
+            windows-exe-length.txt
+          if-no-files-found: error
+
+  release:
+    needs: [macos, windows]
+    if: ${{ github.ref_type == 'tag' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Make appcasts
+        run: |
+          VER="${{ needs.macos.outputs.version }}"
+          BUILD="${{ needs.macos.outputs.build }}"
+          TAG="$GITHUB_REF_NAME"
+          BASE="https://github.com/monster-echo/deepseek-harness-pocket/releases/download/$TAG"
+          MAC_ZIP="DSH-Pocket-Worker-$VER-macos-arm64.zip"
+          WIN_EXE="DSH-Pocket-Worker-Setup-$VER.exe"
+          ED_SIG="$(cat dist/macos-ed-signature.txt)"
+          ED_LEN="$(cat dist/macos-zip-length.txt)"
+          DSA_SIG="$(cat dist/windows-dsa-signature.txt)"
+          EXE_LEN="$(cat dist/windows-exe-length.txt)"
+          desktop/tool/make-appcast.py macos --version "$VER" --build "$BUILD" \
+            --url "$BASE/$MAC_ZIP" --signature "$ED_SIG" --length "$ED_LEN" \
+            --out dist/appcast-macos.xml
+          desktop/tool/make-appcast.py windows --version "$VER" --build "$BUILD" \
+            --url "$BASE/$WIN_EXE" --signature "$DSA_SIG" --length "$EXE_LEN" \
+            --out dist/appcast-windows.xml
+          cat dist/appcast-macos.xml
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${{ needs.macos.outputs.version }}"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "DSH Pocket Worker $VER" \
+            --generate-notes \
+            dist/DSH-Pocket-Worker-$VER-macos-arm64.zip \
+            dist/DSH-Pocket-Worker-$VER-macos-arm64.dmg \
+            dist/DSH-Pocket-Worker-$VER-windows-x64.zip \
+            "dist/DSH-Pocket-Worker-Setup-$VER.exe" \
+            dist/appcast-macos.xml \
+            dist/appcast-windows.xml

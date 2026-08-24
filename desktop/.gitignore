@@ -1,0 +1,19 @@
+# Flutter
+.dart_tool/
+.packages
+build/
+flutter_assets/
+.pub-cache/
+.pub/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# sidecar 产物（构建时由 tool/ 脚本生成，不入库）
+node-sidecar/
+
+# 本地环境
+.env
+*.log

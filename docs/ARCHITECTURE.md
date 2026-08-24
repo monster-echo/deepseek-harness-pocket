@@ -15,7 +15,10 @@ Gateway (gateway/, Next.js + 自定义 server 承载 WS, 自有 PG)
   └─ 通知 → Expo Push；用量记录（计费预留）
          ▲ outbound wss uplink（断线重连）
 电脑 ×N = Worker (packages/bridge/)
-  ├─ dshc CLI：install(开机自启)/start(拉起守护 dsh)/stop/status/token/qr
+  ├─ dshc CLI：install(开机自启)/start(拉起守护 dsh)/stop/status/token/qr（--json 供 GUI）
+  ├─ 桌面 GUI（desktop/，Flutter macOS/Windows）：
+  │    spawn 内置 node sidecar → dshc；托管 dsh 多版本（runtimes/dsh/<版本>）；
+  │    开机自启（登录项）+ 托盘常驻 + auto_updater（GitHub Releases appcast）
   └─ cordis 插件（dsh 内运行）：/mobile 协议服务端
        ├─ 直连模式 node:http :3780（或 shareWebServer 挂 ctx.webServer）
        ├─ uplink 模式反连 gateway
@@ -29,6 +32,7 @@ Gateway (gateway/, Next.js + 自定义 server 承载 WS, 自有 PG)
 - `packages/bridge`：peer 依赖 cordis；导出插件 + `dshc` bin
 - `gateway`：Next.js 16 自定义 server（WS upgrade），PostgreSQL
 - `react-native/`：npm 单独管理（Expo 工具链约定），只依赖协议包
+- `desktop/`：Flutter 单独管理（不进 pnpm workspace）；worker 逻辑仍唯一收敛在 dshc，GUI 只是壳
 
 ## 协议要点
 

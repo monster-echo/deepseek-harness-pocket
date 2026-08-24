@@ -76,5 +76,5 @@ feed 稳定地址：`https://github.com/monster-echo/deepseek-harness-pocket/rel
 
 - **macOS**：仅 arm64 包；沙箱已关闭（要 spawn 内置 node 子进程、共享 `~/.deepseek-harness-pocket`）；未签名（Gatekeeper 首次右键打开），后续有 Developer ID 再签名公证
 - **Windows**：`dsh-pocket-worker.exe` + Inno 安装器（per-user 安装免管理员）；更新时 WinSparkle 下载 setup.exe 运行
-- sidecar 进 app 包：macOS 走 Xcode「Copy node sidecar」Run Script phase；Windows 走 `windows/runner/CMakeLists.txt` 的 `install(DIRECTORY …)`
+- sidecar 进 app 包：macOS 走 Xcode「Copy node sidecar」Run Script phase；Windows 由发布流水线在 `flutter build` 后拷进 Release 目录（`Bundle sidecar` 步骤）
 - `dsh plugin` 需要 pnpm：sidecar node 前缀里装了 pnpm（fetch-node.sh），spawn 时 PATH 前置

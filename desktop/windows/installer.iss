@@ -1,6 +1,6 @@
 ; DSH Pocket Worker Windows 安装器（Inno Setup）
-; CI: iscc /DAppVersion=<版本> /DSourceDir=<Release 目录> installer.iss
-; 本地: iscc /DAppVersion=0.1.0 /DSourceDir=..\build\windows\x64\runner\Release installer.iss
+; 从 desktop/ 目录运行（相对 OutputDir 按 iscc 进程 CWD 解析）：
+; CI: iscc /DAppVersion=<版本> /DSourceDir=<绝对 Release 目录> windows/installer.iss
 
 #ifndef AppVersion
 #define AppVersion "0.1.0"
@@ -19,7 +19,7 @@ DefaultDirName={autopf}\DSH Pocket Worker
 DefaultGroupName=DSH Pocket Worker
 UninstallDisplayName=DSH Pocket Worker
 OutputBaseFilename=DSH-Pocket-Worker-Setup-{#AppVersion}
-OutputDir=..\..\..\
+OutputDir=.
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

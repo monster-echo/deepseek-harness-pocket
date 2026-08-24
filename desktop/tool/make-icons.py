@@ -73,6 +73,33 @@ def glyph_icon(size: int, color: tuple) -> Image.Image:
     return out
 
 
+def dmg_background() -> Image.Image:
+    """DMG 安装窗口背景（660x400）：品牌红底 + 两个图标位 + 拖拽提示。"""
+    from PIL import ImageDraw, ImageFont
+    w, h = 660, 400
+    img = Image.new('RGB', (w, h), BRAND_RED[:3])
+    draw = ImageDraw.Draw(img, 'RGBA')
+    # 两个图标「落位」提示框（白色 14% 圆角描边），与 workflow 里设置的图标坐标一致
+    for cx in (160, 500):
+        box = (cx - 64, 170 - 64, cx + 64, 170 + 64)
+        draw.rounded_rectangle(box, radius=28, outline=(255, 255, 255, 90), width=3)
+    # 中间箭头 →
+    ax, ay = 350, 170  # 箭头中心
+    draw.polygon(
+        [(300, ay - 14), (368, ay - 14), (368, ay - 30), (400, ay), (368, ay + 30), (368, ay + 14), (300, ay + 14)],
+        fill=(255, 255, 255, 220),
+    )
+    # 底部提示（PingFang 本地渲染；产物入库，CI 不需要字体）
+    try:
+        font = ImageFont.truetype('/System/Library/Fonts/PingFang.ttc', 22)
+    except OSError:
+        font = ImageFont.load_default()
+    text = '将左侧图标拖到右侧 Applications 文件夹完成安装'
+    bbox = draw.textbbox((0, 0), text, font=font)
+    draw.text(((w - (bbox[2] - bbox[0])) / 2, 330), text, fill=(255, 255, 255, 230), font=font)
+    return img
+
+
 def main() -> None:
     # macOS AppIcon
     iconset = ROOT / 'macos/Runner/Assets.xcassets/AppIcon.appiconset'
@@ -86,6 +113,9 @@ def main() -> None:
     # 托盘
     glyph_icon(32, BRAND_RED).save(ROOT / 'assets/tray_icon.png')
     glyph_icon(32, BLACK).save(ROOT / 'assets/tray_icon_mac.png')
+
+    # DMG 安装窗口背景
+    dmg_background().save(ROOT / 'assets/dmg-background.png')
     print('icons generated under', ROOT)
 
 

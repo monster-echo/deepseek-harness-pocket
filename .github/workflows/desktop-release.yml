@@ -68,7 +68,32 @@ jobs:
           ZIP="DSH-Pocket-Worker-$VER-macos-arm64.zip"
           DMG="DSH-Pocket-Worker-$VER-macos-arm64.dmg"
           ditto -c -k --keepParent "$APP" "$ZIP"
-          hdiutil create -volname "DSH Pocket Worker" -srcfolder "$APP" -ov -format UDZO "$DMG"
+          # dmg：app + Applications 快捷方式的拖拽安装布局（样式设置失败不影响可用性）
+          STAGE="dmg-stage"
+          rm -rf "$STAGE" && mkdir -p "$STAGE/.background"
+          cp -R "$APP" "$STAGE/"
+          cp assets/dmg-background.png "$STAGE/.background/background.png"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "DSH Pocket Worker" -srcfolder "$STAGE" -ov -format UDRW template.dmg
+          DEV="$(hdiutil attach -readwrite -noverify -noautoopen template.dmg | grep -o '^/dev/disk[0-9]*' | tail -1)"
+          osascript <<'AS' || echo "[dmg] 窗口样式设置跳过（无 GUI 会话/权限），dmg 仍可拖拽安装"
+            tell application "Finder"
+              tell disk "DSH Pocket Worker"
+                open
+                set current view of container window to icon view
+                set toolbar visible of container window to false
+                set icon size of the icon view options of container window to 110
+                set background picture of the icon view options of container window to file ".background:background.png"
+                set position of item "DSH Pocket Worker.app" of container window to {160, 170}
+                set position of item "Applications" of container window to {500, 170}
+                set bounds of container window to {100, 100, 760, 500}
+                close
+              end tell
+            end tell
+          AS
+          hdiutil detach "$DEV" -force
+          hdiutil convert template.dmg -format UDZO -o "$DMG"
+          rm -f template.dmg
           echo "ZIP_PATH=$ZIP" >> "$GITHUB_ENV"
           echo "DMG_PATH=$DMG" >> "$GITHUB_ENV"
       - name: Sign zip (Sparkle EdDSA)

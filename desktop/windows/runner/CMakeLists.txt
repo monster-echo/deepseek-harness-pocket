@@ -39,12 +39,6 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
 
-# Bundle the node sidecar (populated by desktop/tool/build-sidecar.sh windows-x64).
-# Fails the build when missing so packaging never silently ships without node.
-set(NODE_SIDECAR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../node-sidecar/windows-x64")
-if(EXISTS "${NODE_SIDECAR_DIR}/node/node.exe" AND EXISTS "${NODE_SIDECAR_DIR}/bridge/dist")
-  install(DIRECTORY "${NODE_SIDECAR_DIR}/node" "${NODE_SIDECAR_DIR}/bridge"
-          DESTINATION "node-sidecar")
-else()
-  message(FATAL_ERROR "node sidecar missing: run desktop/tool/build-sidecar.sh windows-x64 first")
-endif()
+# node sidecar（node + bridge）不在这里 install（CI 上 CMake file(INSTALL) 对
+# node 发行版大量小文件不可靠且错误被 MSBuild 吞掉）；由发布流水线在
+# flutter build 之后拷进 build/windows/x64/runner/Release/node-sidecar/。

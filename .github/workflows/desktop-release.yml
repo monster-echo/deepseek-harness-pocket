@@ -86,11 +86,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-macos
+          # upload-artifact 不认 defaults.run.working-directory，路径相对仓库根
           path: |
-            DSH-Pocket-Worker-*.zip
-            DSH-Pocket-Worker-*.dmg
-            macos-ed-signature.txt
-            macos-zip-length.txt
+            desktop/DSH-Pocket-Worker-*.zip
+            desktop/DSH-Pocket-Worker-*.dmg
+            desktop/macos-ed-signature.txt
+            desktop/macos-zip-length.txt
           if-no-files-found: error
 
   windows:
@@ -131,6 +132,13 @@ jobs:
           flutter build windows --release \
             --build-name="${{ steps.ver.outputs.version }}" \
             --build-number="${{ github.run_number }}"
+      - name: Bundle sidecar
+        run: |
+          RELEASE_DIR="build/windows/x64/runner/Release"
+          [[ -f node-sidecar/windows-x64/node/node.exe && -d node-sidecar/windows-x64/bridge/dist ]] \
+            || { echo "node sidecar 缺失" >&2; exit 1; }
+          powershell -NoProfile -Command "New-Item -ItemType Directory -Force '$RELEASE_DIR/node-sidecar' | Out-Null; Copy-Item -Recurse -Force node-sidecar/windows-x64/node '$RELEASE_DIR/node-sidecar/node'; Copy-Item -Recurse -Force node-sidecar/windows-x64/bridge '$RELEASE_DIR/node-sidecar/bridge'"
+          ls "$RELEASE_DIR/node-sidecar"
       - name: Package setup + zip
         run: |
           VER="${{ steps.ver.outputs.version }}"
@@ -152,11 +160,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-windows
+          # upload-artifact 不认 defaults.run.working-directory，路径相对仓库根
           path: |
-            DSH-Pocket-Worker-*.zip
-            DSH-Pocket-Worker-Setup-*.exe
-            windows-dsa-signature.txt
-            windows-exe-length.txt
+            desktop/DSH-Pocket-Worker-*.zip
+            desktop/DSH-Pocket-Worker-Setup-*.exe
+            desktop/windows-dsa-signature.txt
+            desktop/windows-exe-length.txt
           if-no-files-found: error
 
   release:

@@ -40,7 +40,7 @@ class AppSettings {
         workerName: '',
         host: '0.0.0.0',
         port: 3780,
-        caps: 'm2',
+        caps: 'm3', // 手机端创建会话/作品预览需要 m3（artifacts）
         registry: defaultRegistry,
         dshMode: 'system',
         managedVersion: '',

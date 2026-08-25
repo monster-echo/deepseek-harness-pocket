@@ -49,6 +49,43 @@ function toEvent(raw) {
 function createAdapter(ctx) {
   const persistence = () => ctx.get("sessionPersistence");
   const agents = () => ctx.get("agents");
+  const presets = () => ctx.get("agentPresets");
+  const composePreset = async (requested) => {
+    const service = presets();
+    if (service === void 0) return {};
+    const resolvedId = (await service.resolve(requested)).id;
+    return {
+      agentPreset: resolvedId,
+      setup: async (agentCtx) => {
+        await service.mount(agentCtx, resolvedId);
+      }
+    };
+  };
+  const presetOfSession = async (id) => {
+    const live = ctx.sessions.get(id);
+    if (live !== void 0) {
+      if (live.header.agentPreset !== void 0) return live.header.agentPreset;
+      for (let i = live.events.length - 1; i >= 0; i -= 1) {
+        const e = live.events[i];
+        if (e.type === "agent-preset/selected" && typeof e.data?.agentPreset === "string") return e.data.agentPreset;
+      }
+      return void 0;
+    }
+    const per = persistence();
+    if (per) {
+      try {
+        const { meta, events } = await per.readFrom(id, 0);
+        const fromMeta = meta?.agentPreset;
+        if (fromMeta !== void 0) return fromMeta;
+        for (let i = events.length - 1; i >= 0; i -= 1) {
+          const e = events[i];
+          if (e.type === "agent-preset/selected" && typeof e.data?.agentPreset === "string") return e.data.agentPreset;
+        }
+      } catch {
+      }
+    }
+    return void 0;
+  };
   const caps = {
     persistence: persistence() !== void 0,
     agents: agents() !== void 0,
@@ -125,17 +162,17 @@ function createAdapter(ctx) {
       return [...summaries.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     },
     async permissionOptions() {
-      const presets = ctx.get("permissionPresets");
-      if (presets === void 0) return { names: [], default: "" };
-      return { names: presets.names, default: presets.defaultPreset };
+      const presets2 = ctx.get("permissionPresets");
+      if (presets2 === void 0) return { names: [], default: "" };
+      return { names: presets2.names, default: presets2.defaultPreset };
     },
     async setPermission(sessionId, preset) {
-      const presets = ctx.get("permissionPresets");
+      const presets2 = ctx.get("permissionPresets");
       const session = ctx.sessions.get(sessionId);
-      if (presets === void 0 || session === void 0) {
+      if (presets2 === void 0 || session === void 0) {
         throw new Error("\u6743\u9650\u670D\u52A1\u4E0D\u53EF\u7528\u6216\u4F1A\u8BDD\u4E0D\u5B58\u5728");
       }
-      presets.set(session, preset);
+      presets2.set(session, preset);
     },
     async listCommands(sessionId) {
       const commands = ctx.get("commands");
@@ -170,10 +207,10 @@ function createAdapter(ctx) {
       }
     },
     async listPresets() {
-      const presets = ctx.get("agentPresets");
-      if (presets === void 0) return [];
+      const presets2 = ctx.get("agentPresets");
+      if (presets2 === void 0) return [];
       try {
-        const list = await presets.list();
+        const list = await presets2.list();
         return list.map((entry) => ({
           id: entry.id,
           ...entry.name !== void 0 ? { name: entry.name } : {},
@@ -200,7 +237,7 @@ function createAdapter(ctx) {
         const target = await fs.resolve(path);
         const entries = await fs.listDir(target);
         const base = path.endsWith("/") ? path.slice(0, -1) : path;
-        return entries.filter((e) => e.type === "directory").map((e) => ({ name: e.name, path: `${base}/${e.name}` })).sort((a, b) => {
+        return entries.filter((e) => e.type === "directory" || e.type === "file").map((e) => ({ name: e.name, path: `${base}/${e.name}`, type: e.type })).sort((a, b) => {
           const ah = a.name.startsWith(".");
           const bh = b.name.startsWith(".");
           if (ah !== bh) return ah ? 1 : -1;
@@ -212,6 +249,24 @@ function createAdapter(ctx) {
     },
     homePath() {
       return homedir();
+    },
+    async statFile(path) {
+      const fs = ctx.get("fs");
+      if (fs === void 0) return null;
+      try {
+        return await fs.stat(await fs.resolve(path)) ?? null;
+      } catch {
+        return null;
+      }
+    },
+    async readFile(path, maxBytes) {
+      const fs = ctx.get("fs");
+      if (fs === void 0) return null;
+      try {
+        return await fs.readBytes(await fs.resolve(path), void 0, maxBytes);
+      } catch {
+        return null;
+      }
     },
     async addWorkspace(path) {
       const registry = ctx.get("workspaceRegistry");
@@ -287,14 +342,16 @@ function createAdapter(ctx) {
     async createSession(cwd, route, agentPreset) {
       const registry = agents();
       if (registry === void 0) throw new Error("no agent factory (dsh \u672A\u8FD0\u884C agent loop)");
+      const composed = await composePreset(agentPreset);
       const handle = await registry.create({
-        sessionId: randomUUID(),
-        meta: agentPreset !== void 0 ? { cwd, agentPreset } : { cwd },
+        sessionId: `session-${randomUUID()}`,
+        meta: composed.agentPreset !== void 0 ? { cwd, agentPreset: composed.agentPreset } : { cwd },
         agentOptions: {
           provider: route.provider,
           model: route.model,
           ...route.reasoningEffort !== void 0 ? { reasoningEffort: route.reasoningEffort } : {}
-        }
+        },
+        ...composed.setup !== void 0 ? { setup: composed.setup } : {}
       });
       return handle.agent.id.toString();
     },
@@ -303,7 +360,12 @@ function createAdapter(ctx) {
       const childId = child.id.toString();
       const registry = agents();
       if (registry !== void 0) {
-        await registry.resume({ resumeSessionId: childId, agentOptions: { provider: route.provider, model: route.model } });
+        const composed = await composePreset(await presetOfSession(sessionId));
+        await registry.resume({
+          resumeSessionId: childId,
+          agentOptions: { provider: route.provider, model: route.model },
+          ...composed.setup !== void 0 ? { setup: composed.setup } : {}
+        });
       }
       return childId;
     },
@@ -336,21 +398,13 @@ function createAdapter(ctx) {
       let cwd;
       const live = ctx.sessions.get(id);
       if (live) cwd = live.header.cwd;
-      else {
-        const per = persistence();
-        if (per) {
-          try {
-            const { meta } = await per.readFrom(id, 0);
-            const m = meta;
-            cwd = m?.cwd;
-          } catch {
-          }
-        }
-      }
+      const agentPreset = await presetOfSession(id);
+      const composed = await composePreset(agentPreset);
       await registry.create({
         sessionId: id,
         meta: cwd !== void 0 ? { cwd } : {},
-        agentOptions: { provider: route.provider, model: route.model }
+        agentOptions: { provider: route.provider, model: route.model },
+        ...composed.setup !== void 0 ? { setup: composed.setup } : {}
       });
     },
     async sendUserMessage(id, text, imageRefs) {
@@ -535,6 +589,10 @@ function parseGatewayToWorkerFrame(value) {
   }
 }
 
+// ../bridge-protocol/dist/preview.js
+var PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+var PREVIEW_CHUNK_BYTES = 48 * 1024;
+
 // ../bridge-protocol/dist/ws.js
 function parsePhoneFrame(text) {
   let value;
@@ -551,6 +609,8 @@ function parsePhoneFrame(text) {
       return typeof v.token === "string" ? { kind: "auth", token: v.token } : null;
     case "pong":
       return typeof v.nonce === "number" ? { kind: "pong", nonce: v.nonce } : null;
+    case "preview":
+      return typeof v.requestId === "string" && typeof v.path === "string" && v.path.startsWith("/") ? { kind: "preview", requestId: v.requestId, path: v.path } : null;
     case "rpc": {
       const { request } = v;
       if (typeof request !== "object" || request === null)
@@ -573,6 +633,44 @@ function parsePhoneFrame(text) {
     default:
       return null;
   }
+}
+
+// src/plugin/preview.ts
+var MIME_BY_EXT = {
+  html: "text/html; charset=utf-8",
+  htm: "text/html; charset=utf-8",
+  css: "text/css; charset=utf-8",
+  js: "text/javascript; charset=utf-8",
+  mjs: "text/javascript; charset=utf-8",
+  json: "application/json; charset=utf-8",
+  txt: "text/plain; charset=utf-8",
+  md: "text/plain; charset=utf-8",
+  csv: "text/csv; charset=utf-8",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  ico: "image/x-icon",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  wasm: "application/wasm"
+};
+function mimeOfPath(path) {
+  const dot = path.lastIndexOf(".");
+  const slash = path.lastIndexOf("/");
+  if (dot <= slash + 1) return void 0;
+  return MIME_BY_EXT[path.slice(dot + 1).toLowerCase()];
+}
+function isSafePreviewPath(path) {
+  if (!path.startsWith("/") || path.includes("\0")) return false;
+  const segments = path.split("/");
+  return !segments.some((s) => s === ".." || s === ".");
+}
+function isUnderRoot(root, child) {
+  if (root === child) return true;
+  return child.startsWith(root.endsWith("/") ? root : `${root}/`);
 }
 
 // src/plugin/hub.ts
@@ -613,12 +711,14 @@ var BridgeHub = class {
   attach(sender, options) {
     const id = `c${++connSeq}`;
     const trusted = options?.trusted === true;
-    const conn = { id, sender, authed: trusted, trusted, subscribed: /* @__PURE__ */ new Set() };
+    const conn = { id, sender, authed: trusted, trusted, subscribed: /* @__PURE__ */ new Set(), previewing: /* @__PURE__ */ new Set() };
     this.conns.set(id, conn);
     if (trusted) this.sendTo(conn, { kind: "auth-ok" });
     return id;
   }
   detach(connId) {
+    const conn = this.conns.get(connId);
+    if (conn !== void 0) conn.previewing.clear();
     this.conns.delete(connId);
   }
   /**
@@ -644,6 +744,15 @@ var BridgeHub = class {
       }
       case "pong":
         return "ok";
+      case "preview": {
+        if (!conn.authed) {
+          this.sendTo(conn, { kind: "preview-error", requestId: frame.requestId, code: "unavailable", message: "authenticate first" });
+          return "ok";
+        }
+        conn.previewing.add(frame.requestId);
+        void this.streamPreview(conn, frame.requestId, frame.path);
+        return "ok";
+      }
       case "rpc": {
         if (!conn.authed) {
           const response = rpcFailure(frame.request.id, "unauthorized", "authenticate first");
@@ -660,6 +769,46 @@ var BridgeHub = class {
         });
         return "ok";
       }
+    }
+  }
+  /**
+   * 作品预览流：校验（能力/路径/白名单/大小/workspace 根）→ begin → chunk×N → end。
+   * 帧走现有连接（直连 WS 或 gateway 隧道），传输层不需要理解内容；
+   * requestId 关联，连接断开（previewing 清空）即停止发送。
+   */
+  async streamPreview(conn, requestId, path) {
+    const failPreview = (code, message) => {
+      conn.previewing.delete(requestId);
+      this.sendTo(conn, { kind: "preview-error", requestId, code, message });
+    };
+    try {
+      if (!this.capabilities.artifacts) return failPreview("unavailable", "artifacts not enabled");
+      if (!isSafePreviewPath(path)) return failPreview("forbidden-path", "path not allowed");
+      const mime = mimeOfPath(path);
+      if (mime === void 0) return failPreview("unsupported-type", "file type not previewable");
+      const roots = (await this.adapter.listWorkspaces()).map((w) => w.path);
+      if (!roots.some((root) => isUnderRoot(root, path))) return failPreview("forbidden-path", "outside any workspace");
+      const stat = await this.adapter.statFile(path);
+      if (stat === null || stat.type !== "file") return failPreview("not-found", "file not found");
+      const size = stat.size ?? 0;
+      if (size > PREVIEW_MAX_BYTES) return failPreview("too-large", `file ${size}B exceeds ${PREVIEW_MAX_BYTES}B limit`);
+      const bytes = await this.adapter.readFile(path, PREVIEW_MAX_BYTES);
+      if (bytes === null) return failPreview("read-failed", "read failed");
+      this.sendTo(conn, { kind: "preview-begin", requestId, mime, bytes: bytes.byteLength });
+      for (let offset = 0; offset < bytes.byteLength; offset += PREVIEW_CHUNK_BYTES) {
+        if (!conn.previewing.has(requestId)) return;
+        const chunk = bytes.subarray(offset, offset + PREVIEW_CHUNK_BYTES);
+        this.sendTo(conn, {
+          kind: "preview-chunk",
+          requestId,
+          seq: offset / PREVIEW_CHUNK_BYTES,
+          dataBase64: Buffer.from(chunk).toString("base64")
+        });
+      }
+      conn.previewing.delete(requestId);
+      this.sendTo(conn, { kind: "preview-end", requestId, bytes: bytes.byteLength });
+    } catch (error) {
+      failPreview("internal", error instanceof Error ? error.message : String(error));
     }
   }
   /** mobile/v1 白名单分发。 */
@@ -736,8 +885,9 @@ var BridgeHub = class {
         if (typeof path !== "string" || !path.startsWith("/")) {
           return fail("bad-request", "absolute path required");
         }
-        const dirs = await this.adapter.listDir(path);
-        return rpcSuccess(req.id, { path, dirs });
+        const entries = await this.adapter.listDir(path);
+        const dirs = entries.filter((e) => e.type === "directory");
+        return rpcSuccess(req.id, { path, entries, dirs });
       }
       case "fs.home": {
         const denied = denyIf(!this.capabilities.sessionCreate, "unavailable", "session create not enabled");

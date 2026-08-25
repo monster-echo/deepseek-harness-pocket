@@ -33,6 +33,13 @@ interface PendingRpc {
   reject: (error: Error) => void
 }
 
+interface PendingPreview {
+  resolve: (result: { mime: string; base64: string }) => void
+  reject: (error: Error) => void
+  chunks: string[]
+  mime: string
+}
+
 export interface HandshakeInfo {
   readonly name: string
   readonly fingerprint: string
@@ -42,6 +49,7 @@ export interface HandshakeInfo {
 
 export class DshClient {
   private readonly pending = new Map<string, PendingRpc>()
+  private readonly pendingPreviews = new Map<string, PendingPreview>()
   private authed = false
   private authTimer: ReturnType<typeof setTimeout> | null = null
   private pingTimer: ReturnType<typeof setInterval> | null = null
@@ -95,6 +103,12 @@ export class DshClient {
       case 'rpc-result':
         this.resolveRpc(frame.response)
         return
+      case 'preview-begin':
+      case 'preview-chunk':
+      case 'preview-end':
+      case 'preview-error':
+        this.feedPreview(frame)
+        return
       case 'event':
         this.handlers.onEvent(frame.event.sessionId, frame.event.event)
         return
@@ -142,6 +156,54 @@ export class DshClient {
     const response = await this.rpc('fs', 'list', { path })
     if (!response.ok) throw new Error(response.error.message)
     return (response.result as { dirs: { name: string; path: string }[] }).dirs
+  }
+
+  /** 列目录（目录 + 文件）；产物列表用（v1 顶层浏览） */
+  async fsEntries(path: string): Promise<readonly { name: string; path: string; type: 'file' | 'directory' }[]> {
+    const response = await this.rpc('fs', 'list', { path })
+    if (!response.ok) throw new Error(response.error.message)
+    return (response.result as { entries: { name: string; path: string; type: 'file' | 'directory' }[] }).entries ?? []
+  }
+
+  /** 作品预览：preview 帧分块拉取，拼装 base64（worker 侧限 2MB/白名单） */
+  async previewFile(path: string): Promise<{ mime: string; base64: string }> {
+    const requestId = makeRpcId()
+    return new Promise<{ mime: string; base64: string }>((resolve, reject) => {
+      this.pendingPreviews.set(requestId, { resolve, reject, chunks: [], mime: '' })
+      setTimeout(() => {
+        const p = this.pendingPreviews.get(requestId)
+        if (p !== undefined) {
+          this.pendingPreviews.delete(requestId)
+          p.reject(new Error('preview timeout'))
+        }
+      }, 60_000)
+      this.send({ kind: 'preview', requestId, path })
+    })
+  }
+
+  private feedPreview(
+    frame:
+      | { kind: 'preview-begin'; requestId: string; mime: string; bytes: number }
+      | { kind: 'preview-chunk'; requestId: string; seq: number; dataBase64: string }
+      | { kind: 'preview-end'; requestId: string; bytes: number }
+      | { kind: 'preview-error'; requestId: string; code: string; message: string },
+  ): void {
+    const pending = this.pendingPreviews.get(frame.requestId)
+    if (pending === undefined) return
+    if (frame.kind === 'preview-begin') {
+      pending.mime = frame.mime
+      return
+    }
+    if (frame.kind === 'preview-chunk') {
+      pending.chunks.push(frame.dataBase64)
+      return
+    }
+    this.pendingPreviews.delete(frame.requestId)
+    if (frame.kind === 'preview-error') {
+      pending.reject(new Error(`${frame.code}: ${frame.message}`))
+      return
+    }
+    pending.resolve({ mime: pending.mime, base64: pending.chunks.join('') })
   }
 
   async fsHome(): Promise<string> {
@@ -290,6 +352,10 @@ export class DshClient {
       pending.reject(new Error('client disposed'))
     }
     this.pending.clear()
+    for (const pending of this.pendingPreviews.values()) {
+      pending.reject(new Error('client disposed'))
+    }
+    this.pendingPreviews.clear()
     this.channel.close()
     if (!silent) this.handlers.onDisconnect()
   }

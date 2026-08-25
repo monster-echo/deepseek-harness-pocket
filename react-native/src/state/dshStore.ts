@@ -28,6 +28,10 @@ interface DshState {
   refreshSessions(): Promise<void>
   listWorkspaces(): Promise<readonly { id: string; path: string; title: string }[]>
   listDir(path: string): Promise<readonly { name: string; path: string }[]>
+  /** 列目录含文件（产物列表） */
+  listEntries(path: string): Promise<readonly { name: string; path: string; type: 'file' | 'directory' }[]>
+  /** 作品预览：分块拉取拼装（{mime, base64}） */
+  previewFile(path: string): Promise<{ mime: string; base64: string }>
   fsHome(): Promise<string>
   addWorkspace(path: string): Promise<{ id: string; path: string; title: string } | null>
   renameWorkspace(id: string, title: string): Promise<boolean>
@@ -177,6 +181,21 @@ export const useDshStore = create<DshState>((set, get) => {
         setNotice(set, error instanceof Error ? error.message : String(error))
         return []
       }
+    },
+
+    async listEntries(path) {
+      if (client === null) return []
+      try {
+        return await client.fsEntries(path)
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+        return []
+      }
+    },
+
+    async previewFile(path) {
+      if (client === null) throw new Error('未连接 Worker')
+      return await client.previewFile(path)
     },
 
     async fsHome() {

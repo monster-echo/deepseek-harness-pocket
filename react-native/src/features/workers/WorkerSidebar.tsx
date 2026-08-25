@@ -22,6 +22,7 @@ import { useDshStore } from "../../state/dshStore";
 import type { SessionListItem } from "../conversation/reducer";
 import { spacing, radii } from "../../theme/tokens";
 import { DirectoryPickerSheet } from "./DirectoryPickerSheet";
+import { WorkspaceArtifactsSheet } from "./WorkspaceArtifactsSheet";
 
 interface WorkspaceRow {
   id: string;
@@ -74,6 +75,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const [actionTarget, setActionTarget] = useState<WorkspaceRow | null>(null);
   const [renameTarget, setRenameTarget] = useState<WorkspaceRow | null>(null);
   const [renameText, setRenameText] = useState("");
+  const [artifactsTarget, setArtifactsTarget] = useState<WorkspaceRow | null>(null);
   const [workspaces, setWorkspaces] = useState<readonly WorkspaceRow[]>([]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
@@ -542,6 +544,18 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
         </Pressable>
         <Pressable
           style={[styles.actionRow, { borderColor: palette.border }]}
+          onPress={() => {
+            setArtifactsTarget(actionTarget)
+            setActionTarget(null)
+          }}
+        >
+          <AppIcon name="eye" color={palette.brand} size={16} />
+          <Text style={[styles.actionText, { color: palette.text }]}>
+            查看作品
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.actionRow, { borderColor: palette.border }]}
           onPress={() => actionTarget !== null && doDelete(actionTarget)}
         >
           <AppIcon name="trash" color={palette.error} size={16} />
@@ -574,6 +588,15 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
           <Text style={styles.renameBtnText}>确定</Text>
         </Pressable>
       </Sheet>
+      <WorkspaceArtifactsSheet
+        visible={artifactsTarget !== null}
+        workspace={
+          artifactsTarget !== null
+            ? { title: artifactsTarget.title, path: artifactsTarget.path }
+            : null
+        }
+        onClose={() => setArtifactsTarget(null)}
+      />
     </View>
   );
 }

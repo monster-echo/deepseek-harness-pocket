@@ -127,6 +127,13 @@ describe('ws frames', () => {
     expect(parsePhoneFrame('{"kind":"pong","nonce":7}')).toEqual({ kind: 'pong', nonce: 7 })
     expect(parsePhoneFrame('{bad')).toBeNull()
   })
+
+  it('preview 帧解析', () => {
+    expect(parsePhoneFrame('{"kind":"preview","requestId":"pv1","path":"/ws/a/snake.html"}'))
+      .toEqual({ kind: 'preview', requestId: 'pv1', path: '/ws/a/snake.html' })
+    expect(parsePhoneFrame('{"kind":"preview","requestId":"pv1"}')).toBeNull()
+    expect(parsePhoneFrame('{"kind":"preview","requestId":"pv1","path":"relative"}')).toBeNull()
+  })
 })
 
 describe('server requests', () => {

@@ -27,6 +27,10 @@ export function parsePhoneFrame(text) {
             return typeof v.token === 'string' ? { kind: 'auth', token: v.token } : null;
         case 'pong':
             return typeof v.nonce === 'number' ? { kind: 'pong', nonce: v.nonce } : null;
+        case 'preview':
+            return typeof v.requestId === 'string' && typeof v.path === 'string' && v.path.startsWith('/')
+                ? { kind: 'preview', requestId: v.requestId, path: v.path }
+                : null;
         case 'rpc': {
             const { request } = v;
             if (typeof request !== 'object' || request === null)

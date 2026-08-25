@@ -7,6 +7,7 @@
 import type { WireRequest, WireResponse } from './rpc.js';
 import type { ServerRequest } from './server-requests.js';
 import type { MobileEvent, SessionSnapshot } from './events.js';
+import type { PreviewFrame } from './preview.js';
 export type PhoneToWorkerFrame = {
     readonly kind: 'auth';
     readonly token: string;
@@ -16,6 +17,10 @@ export type PhoneToWorkerFrame = {
 } | {
     readonly kind: 'pong';
     readonly nonce: number;
+} | {
+    readonly kind: 'preview';
+    readonly requestId: string;
+    readonly path: string;
 };
 export type WorkerToPhoneFrame = {
     readonly kind: 'auth-ok';
@@ -41,7 +46,7 @@ export type WorkerToPhoneFrame = {
     readonly kind: 'resync-needed';
     readonly sessionId: string;
     readonly reason: 'seq-gap' | 'unknown-session';
-};
+} | PreviewFrame;
 export declare function serializePhoneFrame(frame: PhoneToWorkerFrame): string;
 export declare function serializeWorkerFrame(frame: WorkerToPhoneFrame): string;
 /** 宽松解析：未知结构返回 null，不抛错（连接层负责按 bad-request 处理）。 */

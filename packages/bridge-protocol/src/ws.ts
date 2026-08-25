@@ -8,11 +8,13 @@
 import type { WireRequest, WireResponse } from './rpc.js'
 import type { ServerRequest } from './server-requests.js'
 import type { MobileEvent, SessionSnapshot } from './events.js'
+import type { PreviewFrame } from './preview.js'
 
 export type PhoneToWorkerFrame =
   | { readonly kind: 'auth'; readonly token: string }
   | { readonly kind: 'rpc'; readonly request: WireRequest }
   | { readonly kind: 'pong'; readonly nonce: number }
+  | { readonly kind: 'preview'; readonly requestId: string; readonly path: string }
 
 export type WorkerToPhoneFrame =
   | { readonly kind: 'auth-ok' }
@@ -23,6 +25,7 @@ export type WorkerToPhoneFrame =
   | { readonly kind: 'server-request'; readonly request: ServerRequest }
   | { readonly kind: 'ping'; readonly nonce: number }
   | { readonly kind: 'resync-needed'; readonly sessionId: string; readonly reason: 'seq-gap' | 'unknown-session' }
+  | PreviewFrame
 
 export function serializePhoneFrame(frame: PhoneToWorkerFrame): string {
   return JSON.stringify(frame)
@@ -47,6 +50,10 @@ export function parsePhoneFrame(text: string): PhoneToWorkerFrame | null {
       return typeof v.token === 'string' ? { kind: 'auth', token: v.token } : null
     case 'pong':
       return typeof v.nonce === 'number' ? { kind: 'pong', nonce: v.nonce } : null
+    case 'preview':
+      return typeof v.requestId === 'string' && typeof v.path === 'string' && v.path.startsWith('/')
+        ? { kind: 'preview', requestId: v.requestId, path: v.path }
+        : null
     case 'rpc': {
       const { request } = v
       if (typeof request !== 'object' || request === null) return null

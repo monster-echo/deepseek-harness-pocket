@@ -5,5 +5,7 @@ export * from './server-requests.js';
 export * from './handshake.js';
 export * from './pairing.js';
 export * from './relay.js';
+export * from './fs.js';
+export * from './preview.js';
 export * from './ws.js';
 //# sourceMappingURL=index.js.map

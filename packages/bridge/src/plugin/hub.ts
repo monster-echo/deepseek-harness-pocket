@@ -8,6 +8,8 @@
 import {
   isCompatibleVersion,
   M1_CAPABILITIES,
+  PREVIEW_CHUNK_BYTES,
+  PREVIEW_MAX_BYTES,
   PROTOCOL_VERSION,
   parsePhoneFrame,
   type BridgeCapabilities,
@@ -18,6 +20,7 @@ import {
 import { makeRpcId, methodKey, parseWireRequest, rpcFailure, rpcSuccess } from '@deepseek-harness-pocket/bridge-protocol'
 import type { ApprovalAsk, DshAdapter, QuestionAsk } from './adapter-dsh.js'
 import type { DirEntry } from './adapter-dsh.js'
+import { isSafePreviewPath, isUnderRoot, mimeOfPath } from './preview.js'
 
 export interface PhoneSender {
   send(text: string): void
@@ -30,6 +33,8 @@ interface PhoneConn {
   /** gateway 隧道连接：gateway 已完成用户鉴权与配对校验，免 pairing token */
   readonly trusted: boolean
   readonly subscribed: Set<string>
+  /** 进行中的预览传输（requestId）；连接断开时终止 */
+  readonly previewing: Set<string>
 }
 
 export interface HubOptions {
@@ -85,13 +90,15 @@ export class BridgeHub {
   attach(sender: PhoneSender, options?: { trusted?: boolean }): string {
     const id = `c${++connSeq}`
     const trusted = options?.trusted === true
-    const conn: PhoneConn = { id, sender, authed: trusted, trusted, subscribed: new Set() }
+    const conn: PhoneConn = { id, sender, authed: trusted, trusted, subscribed: new Set(), previewing: new Set() }
     this.conns.set(id, conn)
     if (trusted) this.sendTo(conn, { kind: 'auth-ok' })
     return id
   }
 
   detach(connId: string): void {
+    const conn = this.conns.get(connId)
+    if (conn !== undefined) conn.previewing.clear()
     this.conns.delete(connId)
   }
 
@@ -118,6 +125,15 @@ export class BridgeHub {
       }
       case 'pong':
         return 'ok'
+      case 'preview': {
+        if (!conn.authed) {
+          this.sendTo(conn, { kind: 'preview-error', requestId: frame.requestId, code: 'unavailable', message: 'authenticate first' })
+          return 'ok'
+        }
+        conn.previewing.add(frame.requestId)
+        void this.streamPreview(conn, frame.requestId, frame.path)
+        return 'ok'
+      }
       case 'rpc': {
         if (!conn.authed) {
           const response = rpcFailure(frame.request.id, 'unauthorized', 'authenticate first')
@@ -136,6 +152,47 @@ export class BridgeHub {
           })
         return 'ok'
       }
+    }
+  }
+
+  /**
+   * 作品预览流：校验（能力/路径/白名单/大小/workspace 根）→ begin → chunk×N → end。
+   * 帧走现有连接（直连 WS 或 gateway 隧道），传输层不需要理解内容；
+   * requestId 关联，连接断开（previewing 清空）即停止发送。
+   */
+  private async streamPreview(conn: PhoneConn, requestId: string, path: string): Promise<void> {
+    const failPreview = (code: 'unavailable' | 'forbidden-path' | 'unsupported-type' | 'not-found' | 'too-large' | 'read-failed' | 'internal', message: string): void => {
+      conn.previewing.delete(requestId)
+      this.sendTo(conn, { kind: 'preview-error', requestId, code, message })
+    }
+    try {
+      if (!this.capabilities.artifacts) return failPreview('unavailable', 'artifacts not enabled')
+      if (!isSafePreviewPath(path)) return failPreview('forbidden-path', 'path not allowed')
+      const mime = mimeOfPath(path)
+      if (mime === undefined) return failPreview('unsupported-type', 'file type not previewable')
+      const roots = (await this.adapter.listWorkspaces()).map((w) => w.path)
+      if (!roots.some((root) => isUnderRoot(root, path))) return failPreview('forbidden-path', 'outside any workspace')
+      const stat = await this.adapter.statFile(path)
+      if (stat === null || stat.type !== 'file') return failPreview('not-found', 'file not found')
+      const size = stat.size ?? 0
+      if (size > PREVIEW_MAX_BYTES) return failPreview('too-large', `file ${size}B exceeds ${PREVIEW_MAX_BYTES}B limit`)
+      const bytes = await this.adapter.readFile(path, PREVIEW_MAX_BYTES)
+      if (bytes === null) return failPreview('read-failed', 'read failed')
+      this.sendTo(conn, { kind: 'preview-begin', requestId, mime, bytes: bytes.byteLength })
+      for (let offset = 0; offset < bytes.byteLength; offset += PREVIEW_CHUNK_BYTES) {
+        if (!conn.previewing.has(requestId)) return // 连接已断开/取消
+        const chunk = bytes.subarray(offset, offset + PREVIEW_CHUNK_BYTES)
+        this.sendTo(conn, {
+          kind: 'preview-chunk',
+          requestId,
+          seq: offset / PREVIEW_CHUNK_BYTES,
+          dataBase64: Buffer.from(chunk).toString('base64'),
+        })
+      }
+      conn.previewing.delete(requestId)
+      this.sendTo(conn, { kind: 'preview-end', requestId, bytes: bytes.byteLength })
+    } catch (error: unknown) {
+      failPreview('internal', error instanceof Error ? error.message : String(error))
     }
   }
 
@@ -224,8 +281,10 @@ export class BridgeHub {
         if (typeof path !== 'string' || !path.startsWith('/')) {
           return fail('bad-request', 'absolute path required')
         }
-        const dirs: readonly DirEntry[] = await this.adapter.listDir(path)
-        return rpcSuccess(req.id, { path, dirs })
+        const entries: readonly DirEntry[] = await this.adapter.listDir(path)
+        // dirs 保留给目录选择器（仅目录）；entries 含文件（产物列表）
+        const dirs = entries.filter((e) => e.type === 'directory')
+        return rpcSuccess(req.id, { path, entries, dirs })
       }
 
       case 'fs.home': {

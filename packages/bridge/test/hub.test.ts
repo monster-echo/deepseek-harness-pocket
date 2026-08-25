@@ -239,3 +239,118 @@ describe('hub', () => {
     expect(capsForLevel('m3').sessionCreate).toBe(true)
   })
 })
+
+describe('preview', () => {
+  function makePreviewAdapter(files: Record<string, { content: Buffer; size?: number }>, roots: string[] = ['/ws/proj']): DshAdapter {
+    const base = makeAdapter()
+    return {
+      ...base,
+      async listWorkspaces() {
+        return roots.map((p, i) => ({ id: `w${i}`, path: p, title: p }))
+      },
+      async statFile(path: string) {
+        const f = files[path]
+        if (f === undefined) return null
+        return { type: 'file', size: f.size ?? f.content.byteLength }
+      },
+      async readFile(path: string) {
+        return files[path]?.content ?? null
+      },
+    }
+  }
+
+  const authedConn = (hub: BridgeHub): { conn: string; out: unknown[] } => {
+    const out: unknown[] = []
+    const conn = hub.attach({ send: (t) => out.push(JSON.parse(t)) })
+    hub.handleFrame(conn, JSON.stringify({ kind: 'auth', token: 'pt_secret' }))
+    return { conn, out }
+  }
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0))
+  }
+
+  it('成功：begin → chunk×N → end', async () => {
+    const big = Buffer.alloc(100_000, 7) // > 2 个 chunk（48KB）
+    const hub = makeHub(makePreviewAdapter({ '/ws/proj/snake.html': { content: big } }), 'm3')
+    const { conn, out } = authedConn(hub)
+    hub.handleFrame(conn, JSON.stringify({ kind: 'preview', requestId: 'pv1', path: '/ws/proj/snake.html' }))
+    await settle()
+    const kinds = (out as { kind: string }[]).map((f) => f.kind)
+    expect(kinds).toContain('preview-begin')
+    expect(kinds.filter((k) => k === 'preview-chunk')).toHaveLength(3)
+    expect(kinds).toContain('preview-end')
+    const begin = (out as { kind: string; mime?: string; bytes?: number }[]).find((f) => f.kind === 'preview-begin')!
+    expect(begin.mime).toContain('text/html')
+    expect(begin.bytes).toBe(100_000)
+    const chunks = (out as { kind: string; dataBase64?: string }[]).filter((f) => f.kind === 'preview-chunk')
+    const reassembled = Buffer.from(chunks.map((c) => c.dataBase64!).join(''), 'base64')
+    expect(reassembled.equals(big)).toBe(true)
+  })
+
+  it('workspace 外路径拒绝 forbidden-path', async () => {
+    const hub = makeHub(makePreviewAdapter({ '/etc/evil.html': { content: Buffer.from('x') } }), 'm3')
+    const { conn, out } = authedConn(hub)
+    hub.handleFrame(conn, JSON.stringify({ kind: 'preview', requestId: 'pv2', path: '/etc/evil.html' }))
+    await settle()
+    const err = (out as { kind: string; code?: string }[]).find((f) => f.kind === 'preview-error')!
+    expect(err.code).toBe('forbidden-path')
+  })
+
+  it('路径穿越拒绝', async () => {
+    const hub = makeHub(makePreviewAdapter({}), 'm3')
+    const { conn, out } = authedConn(hub)
+    hub.handleFrame(conn, JSON.stringify({ kind: 'preview', requestId: 'pv3', path: '/ws/proj/../secret.html' }))
+    await settle()
+    const err = (out as { kind: string; code?: string }[]).find((f) => f.kind === 'preview-error')!
+    expect(err.code).toBe('forbidden-path')
+  })
+
+  it('非白名单扩展名拒绝 unsupported-type', async () => {
+    const hub = makeHub(makePreviewAdapter({ '/ws/proj/app.zip': { content: Buffer.from('x') } }), 'm3')
+    const { conn, out } = authedConn(hub)
+    hub.handleFrame(conn, JSON.stringify({ kind: 'preview', requestId: 'pv4', path: '/ws/proj/app.zip' }))
+    await settle()
+    const err = (out as { kind: string; code?: string }[]).find((f) => f.kind === 'preview-error')!
+    expect(err.code).toBe('unsupported-type')
+  })
+
+  it('超过 2MB 拒绝 too-large', async () => {
+    const hub = makeHub(makePreviewAdapter({ '/ws/proj/big.png': { content: Buffer.alloc(1), size: 3 * 1024 * 1024 } }), 'm3')
+    const { conn, out } = authedConn(hub)
+    hub.handleFrame(conn, JSON.stringify({ kind: 'preview', requestId: 'pv5', path: '/ws/proj/big.png' }))
+    await settle()
+    const err = (out as { kind: string; code?: string }[]).find((f) => f.kind === 'preview-error')!
+    expect(err.code).toBe('too-large')
+  })
+
+  it('m2 能力下拒绝 unavailable', async () => {
+    const hub = makeHub(makePreviewAdapter({ '/ws/proj/a.html': { content: Buffer.from('<p/>') } }), 'm2')
+    const { conn, out } = authedConn(hub)
+    hub.handleFrame(conn, JSON.stringify({ kind: 'preview', requestId: 'pv6', path: '/ws/proj/a.html' }))
+    await settle()
+    const err = (out as { kind: string; code?: string }[]).find((f) => f.kind === 'preview-error')!
+    expect(err.code).toBe('unavailable')
+  })
+
+  it('连接断开后停止发送', async () => {
+    let readCount = 0
+    const base = makePreviewAdapter({ '/ws/proj/a.html': { content: Buffer.alloc(48 * 1024 * 5, 1) } })
+    const slow: DshAdapter = {
+      ...base,
+      async readFile(path: string, maxBytes: number) {
+        readCount += 1
+        await new Promise((r) => setTimeout(r, 5))
+        return base.readFile(path, maxBytes)
+      },
+    }
+    const hub = makeHub(slow, 'm3')
+    const { conn, out } = authedConn(hub)
+    hub.handleFrame(conn, JSON.stringify({ kind: 'preview', requestId: 'pv7', path: '/ws/proj/a.html' }))
+    await settle()
+    hub.detach(conn)
+    const framesAfterDetach = out.length
+    await settle()
+    expect(out.length).toBe(framesAfterDetach)
+    expect(readCount).toBe(1)
+  })
+})

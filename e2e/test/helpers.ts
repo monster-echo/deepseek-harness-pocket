@@ -148,8 +148,14 @@ export function makeFakeDsh(fixture: { sessionId: string; events: DshSessionEven
     },
     async listDir(path: string) {
       return path === '/'
-        ? [{ name: 'Users', path: '/Users' }, { name: 'tmp', path: '/tmp' }]
-        : [{ name: 'proj', path: `${path}/proj` }]
+        ? [{ name: 'Users', path: '/Users', type: 'directory' as const }, { name: 'tmp', path: '/tmp', type: 'directory' as const }]
+        : [{ name: 'proj', path: `${path}/proj`, type: 'directory' as const }]
+    },
+    async statFile() {
+      return null
+    },
+    async readFile() {
+      return null
     },
     homePath() {
       return '/Users/e2e'

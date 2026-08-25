@@ -29,6 +29,7 @@ export interface WorkspaceSummary {
 export interface DirEntry {
   readonly name: string
   readonly path: string
+  readonly type: 'file' | 'directory'
 }
 
 /**
@@ -129,8 +130,12 @@ export interface DshAdapter {
   listModels(sessionId: string): Promise<{ providers: readonly { id: string; name?: string; models: readonly ModelInfo[] }[]; current: { provider: string; model: string } | null }>
   /** agent preset 目录（standard/code/minimal/…） */
   listPresets(): Promise<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]>
-  /** 列目录（仅目录，隐藏目录排后）；供手机端目录树浏览 */
+  /** 列目录（目录+文件，隐藏排后）；目录树浏览与产物列表共用 */
   listDir(path: string): Promise<readonly DirEntry[]>
+  /** 目标元信息（不存在返回 null） */
+  statFile(path: string): Promise<{ type: 'file' | 'directory' | 'other'; size?: number } | null>
+  /** 读文件字节（maxBytes 由调用方策略限制；读失败/不存在返回 null） */
+  readFile(path: string, maxBytes: number): Promise<Uint8Array | null>
   /** Worker 端用户 home（目录树起点） */
   homePath(): string
   /** 添加 workspace（按绝对路径）；已存在时幂等返回既有记录 */
@@ -451,10 +456,10 @@ export function createAdapter(ctx: Context): DshAdapter {
         const entries = await fs.listDir(target)
         const base = path.endsWith('/') ? path.slice(0, -1) : path
         return entries
-          .filter((e) => e.type === 'directory')
+          .filter((e) => e.type === 'directory' || e.type === 'file')
           // 展示用逻辑路径（用户浏览视角）；真实 realpath 由
           // workspaceRegistry.create 自行解析，避免 /tmp→/private/tmp 跳变
-          .map((e) => ({ name: e.name, path: `${base}/${e.name}` }))
+          .map((e) => ({ name: e.name, path: `${base}/${e.name}`, type: e.type as 'file' | 'directory' }))
           .sort((a, b) => {
             const ah = a.name.startsWith('.')
             const bh = b.name.startsWith('.')
@@ -468,6 +473,36 @@ export function createAdapter(ctx: Context): DshAdapter {
 
     homePath() {
       return homedir()
+    },
+
+    async statFile(path) {
+      const fs = ctx.get('fs') as
+        | {
+            resolve(p: string, opts?: { signal?: AbortSignal }): Promise<unknown>
+            stat(target: unknown, signal?: AbortSignal): Promise<{ type: 'file' | 'directory' | 'other'; size?: number } | undefined>
+          }
+        | undefined
+      if (fs === undefined) return null
+      try {
+        return (await fs.stat(await fs.resolve(path))) ?? null
+      } catch {
+        return null
+      }
+    },
+
+    async readFile(path, maxBytes) {
+      const fs = ctx.get('fs') as
+        | {
+            resolve(p: string, opts?: { signal?: AbortSignal }): Promise<unknown>
+            readBytes(target: unknown, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array>
+          }
+        | undefined
+      if (fs === undefined) return null
+      try {
+        return await fs.readBytes(await fs.resolve(path), undefined, maxBytes)
+      } catch {
+        return null
+      }
     },
 
     async addWorkspace(path) {

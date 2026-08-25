@@ -167,7 +167,7 @@ export interface DshAdapter {
 interface LiveSessionLike {
   readonly id: { toString(): string }
   readonly seq: number
-  readonly header: { createdAt: number; cwd?: string }
+  readonly header: { createdAt: number; cwd?: string; agentPreset?: string }
   readonly events: readonly unknown[]
 }
 
@@ -188,6 +188,12 @@ interface AgentRegistryLike {
   list(): readonly AgentLike[]
 }
 
+/** dsh agentPresets 服务（preset 组合决定 agent 可见的工具与提示段）。 */
+interface AgentPresetsLike {
+  resolve(presetId?: string): Promise<{ id: string }>
+  mount(agentCtx: unknown, presetId: string): Promise<void>
+}
+
 function toEvent(raw: unknown): DshSessionEvent {
   // SessionEvent 全 JSON 可序列化；宽松透传（type/seq 由协议层校验）
   return raw as DshSessionEvent
@@ -196,6 +202,56 @@ function toEvent(raw: unknown): DshSessionEvent {
 export function createAdapter(ctx: Context): DshAdapter {
   const persistence = () => ctx.get('sessionPersistence') as PersistenceLike | undefined
   const agents = () => ctx.get('agents') as AgentRegistryLike | undefined
+  const presets = () => ctx.get('agentPresets') as AgentPresetsLike | undefined
+
+  /**
+   * 解析 preset 并产出 setup 钩子（镜像 dsh-host-apiproxy 的 composeAgent）：
+   * 工具 schema 与提示段由 preset 组合提供，agent 必须在 setup 阶段挂载 preset，
+   * 否则模型拿不到任何工具（toolsTokens=0，模型会把工具调用当文本输出）。
+   * id 必须在 session 边界快照 meta 之前解析完成，才能落入 header。
+   */
+  const composePreset = async (requested?: string): Promise<{
+    agentPreset?: string
+    setup?: (agentCtx: unknown) => Promise<void>
+  }> => {
+    const service = presets()
+    if (service === undefined) return {}
+    const resolvedId = (await service.resolve(requested)).id
+    return {
+      agentPreset: resolvedId,
+      setup: async (agentCtx: unknown) => {
+        await service.mount(agentCtx, resolvedId)
+      },
+    }
+  }
+
+  /** 读取会话当前 preset：live header 优先，否则持久化 meta，最后扫 agent-preset/selected 事件。 */
+  const presetOfSession = async (id: string): Promise<string | undefined> => {
+    const live = ctx.sessions.get(id as SessionId) as LiveSessionLike | undefined
+    if (live !== undefined) {
+      if (live.header.agentPreset !== undefined) return live.header.agentPreset
+      for (let i = live.events.length - 1; i >= 0; i -= 1) {
+        const e = live.events[i] as { type?: string; data?: { agentPreset?: string } }
+        if (e.type === 'agent-preset/selected' && typeof e.data?.agentPreset === 'string') return e.data.agentPreset
+      }
+      return undefined
+    }
+    const per = persistence()
+    if (per) {
+      try {
+        const { meta, events } = await per.readFrom(id, 0)
+        const fromMeta = (meta as { agentPreset?: string } | undefined)?.agentPreset
+        if (fromMeta !== undefined) return fromMeta
+        for (let i = events.length - 1; i >= 0; i -= 1) {
+          const e = events[i] as { type?: string; data?: { agentPreset?: string } }
+          if (e.type === 'agent-preset/selected' && typeof e.data?.agentPreset === 'string') return e.data.agentPreset
+        }
+      } catch {
+        // 读不到就回退默认 preset
+      }
+    }
+    return undefined
+  }
   const caps: AdapterCaps = {
     persistence: persistence() !== undefined,
     agents: agents() !== undefined,
@@ -499,20 +555,23 @@ export function createAdapter(ctx: Context): DshAdapter {
     async createSession(cwd, route, agentPreset) {
       const registry = agents()
       if (registry === undefined) throw new Error('no agent factory (dsh 未运行 agent loop)')
+      const composed = await composePreset(agentPreset)
       const handle = await (registry as unknown as {
         create(options: {
           sessionId: string
           meta: { cwd: string; agentPreset?: string }
           agentOptions: { provider: string; model: string; reasoningEffort?: string }
+          setup?: (agentCtx: unknown) => Promise<void>
         }): Promise<{ agent: { id: { toString(): string } } }>
       }).create({
-        sessionId: randomUUID(),
-        meta: agentPreset !== undefined ? { cwd, agentPreset } : { cwd },
+        sessionId: `session-${randomUUID()}`,
+        meta: composed.agentPreset !== undefined ? { cwd, agentPreset: composed.agentPreset } : { cwd },
         agentOptions: {
           provider: route.provider,
           model: route.model,
           ...(route.reasoningEffort !== undefined ? { reasoningEffort: route.reasoningEffort } : {}),
         },
+        ...(composed.setup !== undefined ? { setup: composed.setup } : {}),
       })
       return handle.agent.id.toString()
     },
@@ -525,9 +584,19 @@ export function createAdapter(ctx: Context): DshAdapter {
       const childId = child.id.toString()
       const registry = agents()
       if (registry !== undefined) {
+        // fork 的子会话继承源 preset（官方路径按 resolveSessionPreset 取源值）
+        const composed = await composePreset(await presetOfSession(sessionId))
         await (registry as unknown as {
-          resume(options: { resumeSessionId: string; agentOptions: { provider: string; model: string } }): Promise<unknown>
-        }).resume({ resumeSessionId: childId, agentOptions: { provider: route.provider, model: route.model } })
+          resume(options: {
+            resumeSessionId: string
+            agentOptions: { provider: string; model: string }
+            setup?: (agentCtx: unknown) => Promise<void>
+          }): Promise<unknown>
+        }).resume({
+          resumeSessionId: childId,
+          agentOptions: { provider: route.provider, model: route.model },
+          ...(composed.setup !== undefined ? { setup: composed.setup } : {}),
+        })
       }
       return childId
     },
@@ -560,29 +629,25 @@ export function createAdapter(ctx: Context): DshAdapter {
       if (registry === undefined) return
       // 已有 live agent 则跳过（命令目录/当前模型可直接查询）
       if (registry.get(id as SessionId) !== undefined) return
-      // 拿 cwd（live session header 优先，否则持久化 meta）
+      // 拿 cwd 与 preset（live session header 优先，否则持久化 meta）
       let cwd: string | undefined
       const live = ctx.sessions.get(id as SessionId) as LiveSessionLike | undefined
       if (live) cwd = live.header.cwd
-      else {
-        const per = persistence()
-        if (per) {
-          try {
-            const { meta } = await per.readFrom(id, 0)
-            const m = meta as { cwd?: string } | undefined
-            cwd = m?.cwd
-          } catch {
-            // 忽略，无 cwd 也可挂 agent
-          }
-        }
-      }
+      const agentPreset = await presetOfSession(id)
+      const composed = await composePreset(agentPreset)
       // resume/挂 agent 到已有 session（agents.create 的 prepare 会加载已有 session）
       await (registry as unknown as {
-        create(options: { sessionId: string; meta: { cwd?: string }; agentOptions: { provider: string; model: string } }): Promise<unknown>
+        create(options: {
+          sessionId: string
+          meta: { cwd?: string; agentPreset?: string }
+          agentOptions: { provider: string; model: string }
+          setup?: (agentCtx: unknown) => Promise<void>
+        }): Promise<unknown>
       }).create({
         sessionId: id,
         meta: cwd !== undefined ? { cwd } : {},
         agentOptions: { provider: route.provider, model: route.model },
+        ...(composed.setup !== undefined ? { setup: composed.setup } : {}),
       })
     },
 

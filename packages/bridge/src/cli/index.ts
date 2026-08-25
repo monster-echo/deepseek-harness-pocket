@@ -163,6 +163,7 @@ async function main(): Promise<void> {
         port: options.port,
         host: options.host,
         name,
+        caps: options.caps,
       })
       break
     }
@@ -208,8 +209,26 @@ async function main(): Promise<void> {
     case 'token': {
       const state = loadBridgeState(stateFile)
       if (state === undefined) throw new Error('状态文件不可用')
+      // 运行中的 dsh 只在启动时读状态文件：rotate 后必须重启，否则直连 token/配对码失配
+      const runBefore = readRunInfo()
+      const wasRunning = isRunning() !== null
       const next = rotatePairing(state, stateFile)
-      process.stdout.write(`[dshc] 配对 token 已 rotate，新配对码 ${next.pairingCode}（运行 dshc qr 查看二维码）\n`)
+      if (wasRunning && runBefore !== undefined) {
+        requestStop()
+        for (let i = 0; i < 20 && isRunning() !== null; i += 1) await new Promise((r) => setTimeout(r, 500))
+        const args = [
+          '--gateway', runBefore.gatewayUrl,
+          '--port', String(runBefore.port),
+          '--host', runBefore.host,
+          '--caps', runBefore.caps.length > 0 ? runBefore.caps : 'm2',
+        ]
+        if (runBefore.name.length > 0) args.push('--name', runBefore.name)
+        args.push('--dsh', runBefore.dshBin, '--quiet')
+        const pid = detachSpawn(args)
+        process.stdout.write(`[dshc] 配对 token 已 rotate，新配对码 ${next.pairingCode}；worker 已重启生效 (pid ${pid})（运行 dshc qr 查看二维码）\n`)
+      } else {
+        process.stdout.write(`[dshc] 配对 token 已 rotate，新配对码 ${next.pairingCode}（运行 dshc qr 查看二维码）\n`)
+      }
       break
     }
 

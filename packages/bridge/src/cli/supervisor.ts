@@ -18,6 +18,7 @@ export interface RunInfo {
   readonly port: number
   readonly host: string
   readonly name: string
+  readonly caps: string
 }
 
 interface StoredRunInfo extends RunInfo {

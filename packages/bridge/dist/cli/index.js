@@ -546,7 +546,8 @@ async function main() {
         gatewayUrl: options.gateway,
         port: options.port,
         host: options.host,
-        name
+        name,
+        caps: options.caps
       });
       break;
     }
@@ -595,9 +596,31 @@ home: ${dshcDir()}
     case "token": {
       const state = loadBridgeState(stateFile);
       if (state === void 0) throw new Error("\u72B6\u6001\u6587\u4EF6\u4E0D\u53EF\u7528");
+      const runBefore = readRunInfo();
+      const wasRunning = isRunning() !== null;
       const next = rotatePairing(state, stateFile);
-      process.stdout.write(`[dshc] \u914D\u5BF9 token \u5DF2 rotate\uFF0C\u65B0\u914D\u5BF9\u7801 ${next.pairingCode}\uFF08\u8FD0\u884C dshc qr \u67E5\u770B\u4E8C\u7EF4\u7801\uFF09
+      if (wasRunning && runBefore !== void 0) {
+        requestStop();
+        for (let i = 0; i < 20 && isRunning() !== null; i += 1) await new Promise((r) => setTimeout(r, 500));
+        const args = [
+          "--gateway",
+          runBefore.gatewayUrl,
+          "--port",
+          String(runBefore.port),
+          "--host",
+          runBefore.host,
+          "--caps",
+          runBefore.caps.length > 0 ? runBefore.caps : "m2"
+        ];
+        if (runBefore.name.length > 0) args.push("--name", runBefore.name);
+        args.push("--dsh", runBefore.dshBin, "--quiet");
+        const pid = detachSpawn(args);
+        process.stdout.write(`[dshc] \u914D\u5BF9 token \u5DF2 rotate\uFF0C\u65B0\u914D\u5BF9\u7801 ${next.pairingCode}\uFF1Bworker \u5DF2\u91CD\u542F\u751F\u6548 (pid ${pid})\uFF08\u8FD0\u884C dshc qr \u67E5\u770B\u4E8C\u7EF4\u7801\uFF09
 `);
+      } else {
+        process.stdout.write(`[dshc] \u914D\u5BF9 token \u5DF2 rotate\uFF0C\u65B0\u914D\u5BF9\u7801 ${next.pairingCode}\uFF08\u8FD0\u884C dshc qr \u67E5\u770B\u4E8C\u7EF4\u7801\uFF09
+`);
+      }
       break;
     }
     case "qr": {

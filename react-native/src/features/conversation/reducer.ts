@@ -133,15 +133,19 @@ function pickBlocks(message: Data): AssistantBlock[] {
 function pickUserText(data: Data): string {
   const content = data['content']
   if (!Array.isArray(content)) return ''
-  return content
+  let images = 0
+  const text = content
     .map((raw) => {
       if (typeof raw === 'object' && raw !== null) {
         const b = raw as Data
         if (b['type'] === 'text' && typeof b['text'] === 'string') return b['text']
+        if (b['type'] === 'image') images += 1
       }
       return ''
     })
     .join('')
+  // 图片以附件 ref 随消息上行（vision 模型可读）；聊天里以标记提示
+  return images > 0 ? `${text} 📷×${images}`.trim() : text
 }
 
 /** 从 usage 载荷宽容提取缓存命中/未命中 token（DeepSeek/dsh 字段名多版本）。 */

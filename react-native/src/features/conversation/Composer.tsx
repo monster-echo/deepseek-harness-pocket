@@ -6,6 +6,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -15,6 +16,7 @@ import {
   View,
 } from "react-native";
 import Svg, { Circle } from "react-native-svg";
+import * as ImagePicker from "expo-image-picker";
 import { AppIcon, IconName } from "../../design-system/AppIcon";
 import { Sheet } from "../../design-system/Sheet";
 import { usePreferences } from "../../preferences/PreferencesProvider";
@@ -123,7 +125,11 @@ const REASONING: ReadonlyArray<{
   },
 ];
 
-const FALLBACK_MODELS: ReadonlyArray<{ id: string; name?: string }> = [
+const FALLBACK_MODELS: ReadonlyArray<{
+  id: string;
+  name?: string;
+  inputModalities?: readonly ("text" | "image")[];
+}> = [
   { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
   { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
 ];
@@ -165,6 +171,10 @@ export function Composer(
   // 共享 state
   const [text, setText] = useState("");
   const [sheet, setSheet] = useState<SheetKind>(null);
+  // 待发送图片（本地 base64 缩略 + 发送时上传为附件 ref）
+  const [images, setImages] = useState<
+    readonly { base64: string; mime: string }[]
+  >([]);
   // new 特有
   const [path, setPath] = useState("");
   const [workspaces, setWorkspaces] = useState<
@@ -185,6 +195,7 @@ export function Composer(
   >([]);
 
   const sendMessage = useDshStore((s) => s.sendMessage);
+  const uploadImage = useDshStore((s) => s.uploadImage);
   const stopTurn = useDshStore((s) => s.stopTurn);
   const createSession = useDshStore((s) => s.createSession);
   const addWorkspace = useDshStore((s) => s.addWorkspace);
@@ -330,28 +341,87 @@ export function Composer(
     }
   };
 
+  // 选图（相册；base64 供预览与上传）
+  const pickImage = (): void => {
+    void (async () => {
+      const perm =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        showToast("需要相册权限才能添加图片", "info");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        base64: true,
+        quality: 0.6,
+      });
+      const asset = result.assets?.[0];
+      if (result.canceled || asset?.base64 === undefined || asset.base64 === null) return;
+      setImages((prev) => [
+        ...prev,
+        { base64: asset.base64!, mime: asset.mimeType ?? "image/jpeg" },
+      ]);
+      // 当前模型不支持视觉时提示（vision-exp 等带 image 输入模态的模型可理解图片）
+      const current = models.find((m) => m.id === modelFull);
+      if (current !== undefined && current.inputModalities?.includes("image") !== true) {
+        showToast("当前模型不支持读图，可在模型里切换 vision 模型", "info");
+      }
+    })();
+  };
+
+  /** 上传图片为 worker 附件 ref，随消息一起发送（vision 模型可理解）。 */
+  const sendWithImages = (value: string, imgs: readonly { base64: string; mime: string }[]): void => {
+    void (async () => {
+      try {
+        const refs: unknown[] = [];
+        for (const img of imgs) {
+          const ref = await uploadImage(img.base64, img.mime);
+          if (ref !== null) refs.push(ref);
+        }
+        await sendMessage(value, refs.length > 0 ? refs : undefined);
+      } catch (error) {
+        showToast(
+          error instanceof Error ? error.message : "图片上传失败",
+          "error",
+        );
+      }
+    })();
+  };
+
   const submit = (): void => {
     const value = text.trim();
-    if (value.length === 0) return;
+    if (value.length === 0 && images.length === 0) return;
+    const sending = images;
     setText("");
+    setImages([]);
     if (isNew) {
       if (path.length === 0 || busy) return;
       setBusy(true);
       void createSession(path, { reasoningEffort: reasoning, permission })
-        .then(() => sendMessage(value))
+        .then(() => {
+          if (sending.length > 0) sendWithImages(value, sending);
+          else void sendMessage(value);
+        })
         .finally(() => setBusy(false));
     } else {
       if (running && queueSend) {
+        if (sending.length > 0) {
+          showToast("本轮进行中：图片请在回合结束后发送", "info");
+          setImages(sending);
+          setText(value);
+          return;
+        }
         setPendingQueue((prev) => [...prev, value]);
         return;
       }
-      void sendMessage(value);
+      if (sending.length > 0) sendWithImages(value, sending);
+      else void sendMessage(value);
     }
   };
 
   const canSend = isNew
-    ? text.trim().length > 0 && path.length > 0 && !busy
-    : text.trim().length > 0;
+    ? (text.trim().length > 0 || images.length > 0) && path.length > 0 && !busy
+    : text.trim().length > 0 || images.length > 0;
 
   // session：上下文圆环
   const usedTokens = totalUsage.input + totalUsage.output;
@@ -447,6 +517,36 @@ export function Composer(
               numberOfLines={1}
             />
           </View>
+          {images.length > 0 && (
+            <ScrollView
+              horizontal
+              style={styles.thumbRow}
+              contentContainerStyle={{ gap: spacing.x2 }}
+              showsHorizontalScrollIndicator={false}
+            >
+              {images.map((img, i) => (
+                <View key={i} style={styles.thumbWrap}>
+                  <Image
+                    source={{ uri: `data:${img.mime};base64,${img.base64}` }}
+                    style={styles.thumb}
+                    accessibilityLabel="待发送图片"
+                  />
+                  <Pressable
+                    style={[
+                      styles.thumbRemove,
+                      { backgroundColor: palette.error },
+                    ]}
+                    onPress={() =>
+                      setImages((prev) => prev.filter((_, j) => j !== i))
+                    }
+                    hitSlop={6}
+                  >
+                    <AppIcon name="close" color="#FFFFFF" size={10} />
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
+          )}
           <View style={[styles.actionBar, { borderTopColor: palette.border }]}>
             <View style={styles.actionLeft}>
               <Pressable
@@ -458,6 +558,17 @@ export function Composer(
                 onPress={() => setSheet("commands")}
               >
                 <AppIcon name="plus" color={palette.text} size={16} />
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.plusButton,
+                  { backgroundColor: palette.surfaceMuted },
+                  pressed && { opacity: 0.7 },
+                ]}
+                onPress={pickImage}
+                accessibilityLabel="添加图片"
+              >
+                <AppIcon name="paperclip" color={palette.text} size={16} />
               </Pressable>
               <Pressable
                 style={styles.actionChip}
@@ -1134,7 +1245,11 @@ function ModelSheet(
   props: Readonly<{
     visible: boolean;
     onClose: () => void;
-    models: readonly { id: string; name?: string }[];
+    models: readonly {
+      id: string;
+      name?: string;
+      inputModalities?: readonly ("text" | "image")[];
+    }[];
     modelFull: string;
     reasoning: string;
     onPickModel: (m: { id: string }) => void;
@@ -1220,6 +1335,16 @@ function ModelSheet(
                 </Text>
               )}
             </View>
+            {m.inputModalities?.includes("image") && (
+              <View
+                style={[styles.visionBadge, { backgroundColor: palette.brandSoft }]}
+              >
+                <AppIcon name="image" color={palette.brand} size={11} />
+                <Text style={[styles.visionBadgeText, { color: palette.brand }]}>
+                  视觉
+                </Text>
+              </View>
+            )}
             {selected && (
               <AppIcon name="check" color={palette.brand} size={16} />
             )}
@@ -1400,6 +1525,37 @@ const styles = StyleSheet.create({
     paddingTop: spacing.x2,
     marginTop: spacing.x1,
   },
+  thumbRow: {
+    paddingHorizontal: spacing.x2,
+    paddingTop: spacing.x1,
+  },
+  thumbWrap: { position: "relative" },
+  thumb: {
+    width: 56,
+    height: 56,
+    borderRadius: radii.small,
+    resizeMode: "cover",
+  },
+  thumbRemove: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  visionBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: radii.round,
+    marginRight: spacing.x2,
+  },
+  visionBadgeText: { fontSize: 10, fontWeight: "600" },
   actionLeft: {
     flexDirection: "row",
     alignItems: "center",

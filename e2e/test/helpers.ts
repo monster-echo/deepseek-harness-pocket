@@ -68,6 +68,9 @@ export function makeMemoryStore(): Store & { pairingsByWorker: Map<string, Set<s
       return []
     },
     async recordUsage() {},
+    async previewBytesToday() {
+      return 0
+    },
     async close() {},
   }
   return store
@@ -224,7 +227,9 @@ export async function startTestGateway(): Promise<RunningGateway> {
   const config: GatewayConfig = {
     port: 0, hostname: '127.0.0.1', databaseUrl: 'unused',
     authJwksUrl: '', authIssuer: 'https://auth.zhongbei.tech', authAudience: 'dsh-pocket',
-    expoAccessToken: '', nodeEnv: 'development',
+    expoAccessToken: '',
+    previewDailyQuotaBytes: 50 * 1024 * 1024,
+    previewRateBytesPerSecond: 256 * 1024, nodeEnv: 'development', previewDailyQuotaBytes: 50 * 1024 * 1024, previewRateBytesPerSecond: 256 * 1024,
   }
   const store = makeMemoryStore()
   const gateway = new Gateway(

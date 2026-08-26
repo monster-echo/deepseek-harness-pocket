@@ -16,6 +16,10 @@ export interface GatewayConfig {
   /** Expo Push（iOS APNs 通道）；空则通知只投递给在线手机 */
   readonly expoAccessToken: string
   readonly nodeEnv: string
+  /** 作品预览：单用户每日中转字节配额（默认 50MB，保护小水管） */
+  readonly previewDailyQuotaBytes: number
+  /** 作品预览：单手机速率上限 bytes/s（默认 256KB/s ≈ 2Mbps） */
+  readonly previewRateBytesPerSecond: number
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
@@ -35,6 +39,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     authAudience: env['AUTH_AUDIENCE'] ?? 'dsh-pocket',
     expoAccessToken: env['EXPO_ACCESS_TOKEN'] ?? '',
     nodeEnv: env['NODE_ENV'] ?? 'development',
+    previewDailyQuotaBytes: Number(env['PREVIEW_DAILY_QUOTA_BYTES'] ?? 50 * 1024 * 1024),
+    previewRateBytesPerSecond: Number(env['PREVIEW_RATE_BPS'] ?? 256 * 1024),
   }
 }
 

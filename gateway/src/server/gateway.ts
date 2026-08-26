@@ -38,6 +38,10 @@ interface PhoneConn {
   alive: boolean
   /** 简单限速：每秒帧数 */
   frameBudget: number
+  /** 作品预览令牌桶（bytes；每秒补充速率上限，允许 1 秒突发） */
+  previewTokens: number
+  /** 速率不足时排队的预览帧（worker 同步倾倒分块时削峰） */
+  previewQueue: { inner: string; bytes: number }[]
 }
 
 export interface PairingResult {
@@ -49,12 +53,35 @@ export interface PairingResult {
 
 const MAX_FRAMES_PER_SECOND = 120
 
+/** preview-chunk 内帧前缀（我们的序列化 kind 恒在首位；前缀不匹配零成本跳过） */
+const PREVIEW_CHUNK_PREFIX = '{"kind":"preview-chunk"'
+/** preview 请求内帧前缀（phone→worker 方向拦截用） */
+const PREVIEW_REQUEST_PREFIX = '{"kind":"preview"'
+/** 预览排队上限（超出按洪泛处理断开，防内存堆积） */
+const PREVIEW_QUEUE_LIMIT = 128
+
+/** 内帧是 preview-chunk 时返回其原始字节数（base64 → 3/4），否则 0。 */
+function previewChunkBytes(inner: string): number {
+  if (!inner.startsWith(PREVIEW_CHUNK_PREFIX)) return 0
+  try {
+    const parsed = JSON.parse(inner) as { kind?: string; dataBase64?: string }
+    if (parsed.kind !== 'preview-chunk' || typeof parsed.dataBase64 !== 'string') return 0
+    return Math.floor((parsed.dataBase64.length * 3) / 4)
+  } catch {
+    return 0
+  }
+}
+
 export class Gateway {
   private readonly workers = new Map<string, WorkerConn>()
   private readonly workerByHostKey = new Map<string, string>()
   private readonly phones = new Map<string, PhoneConn>()
   private readonly challenges = new Map<string, (accepted: boolean) => void>()
   private seq = 0
+  /** 今日已中转预览字节（userId → bytes；跨日清零，60s 批量落库） */
+  private readonly previewUsedToday = new Map<string, number>()
+  private previewDay = ''
+  private previewFlushAt = 0
 
   constructor(
     private readonly config: GatewayConfig,
@@ -144,11 +171,17 @@ export class Gateway {
       case 'pong':
         break
       case 'phone-frame': {
-        // Worker → 手机下行：转发给当前打开该 Worker 的手机（MVP 单活跃）
+        // Worker → 手机下行：转发给当前打开该 Worker 的手机（MVP 单活跃）。
+        // preview-chunk 走计量 + 速率令牌桶（保护小水管），其余帧直接透传。
         if (conn.workerId === '') return
-        for (const phone of this.phones.values()) {
+        for (const [phoneId, phone] of this.phones) {
           if (phone.authed && phone.openWorkerId === conn.workerId) {
-            this.sendToPhoneConn(phone, { kind: 'worker-frame', workerId: conn.workerId, inner: frame.inner })
+            const bytes = previewChunkBytes(frame.inner)
+            if (bytes === 0) {
+              this.sendToPhoneConn(phone, { kind: 'worker-frame', workerId: conn.workerId, inner: frame.inner })
+            } else {
+              this.deliverPreview(phoneId, phone, conn.workerId, frame.inner, bytes)
+            }
           }
         }
         break
@@ -194,6 +227,8 @@ export class Gateway {
       authed: false,
       alive: true,
       frameBudget: MAX_FRAMES_PER_SECOND,
+      previewTokens: this.config.previewRateBytesPerSecond,
+      previewQueue: [],
     }
     const id = `ph${++this.seq}`
     this.phones.set(id, conn)
@@ -203,9 +238,11 @@ export class Gateway {
     const authTimer = setTimeout(() => {
       if (!conn.authed) this.dropPhone(id)
     }, 10_000)
-    // 简单限速：每秒重置预算
+    // 简单限速：每秒重置预算 + 补充预览令牌并排空排队帧
     const budgetTimer = setInterval(() => {
       conn.frameBudget = MAX_FRAMES_PER_SECOND
+      conn.previewTokens = Math.min(this.config.previewRateBytesPerSecond, conn.previewTokens + this.config.previewRateBytesPerSecond)
+      this.drainPreviewQueue(conn)
     }, 1000)
 
     ws.on('pong', () => {
@@ -306,10 +343,101 @@ export class Gateway {
         if (conn.openWorkerId !== workerId) return // 未打开或越权
         const workerConn = this.findWorkerConnByWorkerId(workerId)
         if (workerConn === undefined) return
+        // 作品预览请求：过日配额闸（超限直接回 preview-error，不进隧道）
+        if (inner.startsWith(PREVIEW_REQUEST_PREFIX)) {
+          void this.gatePreview(id, conn, workerId, inner)
+          return
+        }
         this.sendToWorkerConn(workerConn, { kind: 'phone-frame', phoneId: id, inner })
         return
       }
     }
+  }
+
+  // ---------- 作品预览配额（计量 / 限速 / 日配额） ----------
+
+  /** preview 请求闸：配额内转发给 worker，超限合成 preview-error 回手机。 */
+  private async gatePreview(id: string, conn: PhoneConn, workerId: string, inner: string): Promise<void> {
+    let requestId = ''
+    try {
+      const parsed = JSON.parse(inner) as { requestId?: unknown }
+      if (typeof parsed.requestId === 'string') requestId = parsed.requestId
+    } catch {
+      return
+    }
+    const userId = conn.userId
+    if (userId === null) return
+    this.rollPreviewDayIfNeeded()
+    const used = (this.previewUsedToday.get(userId) ?? 0) + await this.store.previewBytesToday(userId)
+    if (used < this.config.previewDailyQuotaBytes) {
+      const workerConn = this.findWorkerConnByWorkerId(workerId)
+      if (workerConn !== undefined) this.sendToWorkerConn(workerConn, { kind: 'phone-frame', phoneId: id, inner })
+      return
+    }
+    this.sendToPhoneConn(conn, {
+      kind: 'worker-frame',
+      workerId,
+      inner: JSON.stringify({
+        kind: 'preview-error',
+        requestId,
+        code: 'unavailable',
+        message: `预览流量日配额（${Math.floor(this.config.previewDailyQuotaBytes / (1024 * 1024))}MB）已用完，明日重置`,
+      }),
+    })
+  }
+
+  /** 令牌桶投递预览帧；速率不足排队（每秒预算 tick 排空）。 */
+  private deliverPreview(phoneId: string, phone: PhoneConn, workerId: string, inner: string, bytes: number): void {
+    if (phone.previewQueue.length >= PREVIEW_QUEUE_LIMIT) {
+      console.warn(`[gw] phone ${phoneId} preview queue overflow, dropping`)
+      this.dropPhone(phoneId)
+      return
+    }
+    if (phone.previewQueue.length === 0 && phone.previewTokens >= bytes) {
+      phone.previewTokens -= bytes
+      this.sendToPhoneConn(phone, { kind: 'worker-frame', workerId, inner })
+      this.meterPreview(phone.userId, workerId, bytes)
+      return
+    }
+    phone.previewQueue.push({ inner, bytes })
+  }
+
+  private drainPreviewQueue(phone: PhoneConn): void {
+    while (phone.previewQueue.length > 0) {
+      const head = phone.previewQueue[0]!
+      if (phone.previewTokens < head.bytes) return
+      phone.previewTokens -= head.bytes
+      phone.previewQueue.shift()
+      if (phone.openWorkerId !== null) {
+        this.sendToPhoneConn(phone, { kind: 'worker-frame', workerId: phone.openWorkerId, inner: head.inner })
+        this.meterPreview(phone.userId, phone.openWorkerId, head.bytes)
+      }
+    }
+  }
+
+  /** 计量（内存聚合，60s 批量落库 kind='preview-bytes'）。 */
+  private meterPreview(userId: string | null, workerId: string, bytes: number): void {
+    if (userId === null) return
+    this.rollPreviewDayIfNeeded()
+    this.previewUsedToday.set(userId, (this.previewUsedToday.get(userId) ?? 0) + bytes)
+    const now = Date.now()
+    if (now - this.previewFlushAt < 60_000) return
+    this.previewFlushAt = now
+    for (const [uid, total] of this.previewUsedToday) {
+      void this.store.recordUsage({ userId: uid, workerId, kind: 'preview-bytes', meta: { bytes: total } })
+    }
+    this.previewUsedToday.clear()
+  }
+
+  /** 跨日清零内存计数（落库行按 at 聚合今日，双轨一致）。 */
+  private rollPreviewDayIfNeeded(): void {
+    const day = new Date().toISOString().slice(0, 10)
+    if (day === this.previewDay) return
+    for (const [uid, total] of this.previewUsedToday) {
+      void this.store.recordUsage({ userId: uid, workerId: null, kind: 'preview-bytes', meta: { bytes: total } })
+    }
+    this.previewUsedToday.clear()
+    this.previewDay = day
   }
 
   private findWorkerConnByWorkerId(workerId: string): WorkerConn | undefined {

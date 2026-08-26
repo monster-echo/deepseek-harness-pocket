@@ -51,6 +51,8 @@ export interface Store {
   listPushTokens(userId: string): Promise<string[]>
 
   recordUsage(e: { userId: string | null; workerId: string | null; kind: string; meta?: Record<string, unknown> }): Promise<void>
+  /** 今日（DB 时区）该用户已中转的作品预览字节（kind='preview-bytes' 聚合） */
+  previewBytesToday(userId: string): Promise<number>
   close(): Promise<void>
 }
 
@@ -161,6 +163,16 @@ export function createStore(databaseUrl: string): Store {
         'insert into usage_events (user_id, worker_id, kind, meta) values ($1, $2, $3, $4)',
         [e.userId, e.workerId, e.kind, JSON.stringify(e.meta ?? {})],
       )
+    },
+
+    async previewBytesToday(userId) {
+      const { rows } = await pool.query<{ total: string }>(
+        `select coalesce(sum((meta->>'bytes')::bigint), 0) as total
+         from usage_events
+         where user_id = $1 and kind = 'preview-bytes' and at >= date_trunc('day', now())`,
+        [userId],
+      )
+      return Number(rows[0]?.total ?? 0)
     },
 
     async close() {

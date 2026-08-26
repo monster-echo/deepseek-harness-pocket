@@ -201,6 +201,7 @@ export function WorkspaceArtifactsSheet({
               style={styles.previewClose}
               onPress={() => setPreview(null)}
               hitSlop={8}
+              accessibilityLabel="关闭预览"
             >
               <AppIcon name="close" color={palette.text} size={20} />
             </Pressable>

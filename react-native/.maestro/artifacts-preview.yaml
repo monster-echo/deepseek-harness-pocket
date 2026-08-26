@@ -1,0 +1,63 @@
+# 作品预览核心流程（纯坐标版）
+#
+# ⚠️ 本环境（iOS 26.4 模拟器 + RN 0.8x）可访问性树不可靠：截图可见的 Text
+#    在 AX 树中缺失，故 text/id/label 选择器一律不可用，全流程用坐标点。
+#    坐标基于 iPhone 16 Pro（402x874pt / 1206x2622px），百分比必须为整数。
+#
+# 种子态前置（首次运行见 scripts/maestro-seed.sh）：
+#   - metro 在 8081 运行；App 已连接 dev server 并登录 autotest-ui 账号
+#   - worker 已用 /api/v1/pairing/bind 绑定到该账号且在线
+# 运行：maestro test .maestro/artifacts-preview.yaml
+appId: top.rwecho.dshcompanion
+name: 作品预览全流程（坐标）
+tags:
+  - e2e
+  - artifacts
+  - coordinates
+---
+- launchApp:
+    appId: top.rwecho.dshcompanion
+    permissions:
+      notifications: allow
+
+# JS bundle 冷加载等待
+- runScript:
+    file: sleep.js
+    env:
+      sleepMs: "12000"
+
+# ---------- 侧边栏 → 工作区长按 → 查看作品 ----------
+# 汉堡菜单（顶栏左上）
+- tapOn:
+    point: "7%, 6%"
+- runScript:
+    file: sleep.js
+    env:
+      sleepMs: "2500"
+- takeScreenshot: maestro-02-sidebar
+# snake-game 工作区行（分组标题行）
+- longPressOn:
+    point: "50%, 36%"
+- runScript:
+    file: sleep.js
+    env:
+      sleepMs: "1500"
+# 操作菜单第二行「查看作品」
+- tapOn:
+    point: "50%, 57%"
+
+# ---------- 产物列表 → 打开 snake.html ----------
+- runScript:
+    file: sleep.js
+    env:
+      sleepMs: "3000"
+- takeScreenshot: maestro-03-artifacts
+- tapOn:
+    point: "50%, 59%"
+
+# ---------- 全屏预览（WebView 渲染游戏） ----------
+- runScript:
+    file: sleep.js
+    env:
+      sleepMs: "8000"
+- takeScreenshot: maestro-04-preview-game

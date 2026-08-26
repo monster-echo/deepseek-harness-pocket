@@ -129,6 +129,7 @@ export function AuthScreen({ mode }: Readonly<{ mode: AuthMode }>) {
             onChangeText={(value) => { setEmail(value); clearAuthError(); }}
             placeholder={mode === 'signIn' ? '用户名 / 邮箱 / 手机号' : '邮箱'}
             style={styles.input}
+            testID="auth.identifier"
             value={email}
           />
         ) : null}
@@ -142,6 +143,7 @@ export function AuthScreen({ mode }: Readonly<{ mode: AuthMode }>) {
             placeholder={mode === 'reset' ? '新密码' : '密码'}
             secureTextEntry
             style={styles.input}
+            testID="auth.password"
             value={password}
           />
         ) : null}
@@ -163,6 +165,7 @@ export function AuthScreen({ mode }: Readonly<{ mode: AuthMode }>) {
           disabled={busy || !isValid({ mode, email, password, username, code, phone, phoneCodeSent })}
           label={busy ? '正在处理…' : mode === 'phone' && phoneCodeSent ? '验证并登录' : copy.action}
           onPress={() => void submit()}
+          testID="auth.submit"
         />
         {mode === 'signIn' ? (
           <>

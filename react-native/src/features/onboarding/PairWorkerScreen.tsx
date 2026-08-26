@@ -36,7 +36,7 @@ export function PairWorkerScreen() {
         </Pressable>
         <Text style={[styles.title, { color: palette.text }]}>我的电脑</Text>
         {/* 右上角 +：进入添加/配对 */}
-        <Pressable onPress={() => setShowAdd(true)} hitSlop={12}>
+        <Pressable onPress={() => setShowAdd(true)} hitSlop={12} accessibilityLabel="添加电脑">
           <AppIcon name="plus" color={palette.brand} size={22} />
         </Pressable>
       </View>

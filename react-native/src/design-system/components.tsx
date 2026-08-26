@@ -22,6 +22,7 @@ export function AppButton({
   variant = 'primary',
   disabled = false,
   analyticsId,
+  testID,
 }: Readonly<{
   label: string;
   onPress: () => void;
@@ -29,6 +30,7 @@ export function AppButton({
   variant?: 'primary' | 'secondary' | 'danger';
   disabled?: boolean;
   analyticsId?: string;
+  testID?: string;
 }>) {
   const { palette } = usePreferences();
   const variantStyle = variant === 'primary'
@@ -44,6 +46,7 @@ export function AppButton({
     <Pressable
       accessibilityRole="button"
       disabled={disabled}
+      testID={testID}
       onPress={() => {
         telemetry.track('ui_action', { action_id: analyticsId ?? `button.${label}` });
         onPress();

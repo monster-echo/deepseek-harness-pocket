@@ -118,6 +118,7 @@ export function HomeShellScreen() {
           style={styles.menuButton}
           onPress={() => showSidebar(!open)}
           hitSlop={12}
+          accessibilityLabel="菜单"
         >
           <AppIcon name="menu" color={palette.text} size={22} />
         </Pressable>

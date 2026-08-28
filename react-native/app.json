@@ -41,7 +41,10 @@
         "applinks:auth.zhongbei.tech"
       ],
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocalNetworkUsageDescription": "掌鲸需要访问本地网络，以便发现并连接你电脑上运行的 DSH 助手。",
+        "NSMicrophoneUsageDescription": "允许掌鲸使用麦克风，以便录制语音消息并发送到会话。",
+        "NSPhotoLibraryUsageDescription": "当你选择照片作为头像或上传反馈截图时，掌鲸需要访问你的相册。"
       }
     },
     "android": {

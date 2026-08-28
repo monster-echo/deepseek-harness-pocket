@@ -44,3 +44,9 @@ jobs:
       - run: npm ci --legacy-peer-deps
       - name: EAS build (iOS + Android)
         run: eas build --platform all --profile production --non-interactive
+      # 提交 TestFlight：ascAppId 见 eas.json submit.production.ios，
+      # ASC API Key 已存 EAS 服务端（Key ID 3AN8F9V4XK），无需 GitHub Secrets。
+      # Android 提交 Google Play 需另配 service account，暂缓。
+      - name: EAS submit (iOS → TestFlight)
+        if: success()
+        run: eas submit --platform ios --profile production --latest --non-interactive

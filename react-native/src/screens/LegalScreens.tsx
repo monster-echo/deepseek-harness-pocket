@@ -6,7 +6,7 @@ import {
   privacyPolicy,
   subscriptionTerms,
   termsOfService,
-} from '../legal/legalDocuments';
+} from '@deepseek-harness-pocket/legal';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { styles } from '../theme/styles';
 import { radii, spacing } from '../theme/tokens';

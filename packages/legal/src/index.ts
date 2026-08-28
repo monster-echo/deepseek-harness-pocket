@@ -1,19 +1,31 @@
+/**
+ * 法务文档单一事实源：react-native（App 内嵌展示）与 gateway（公网 /legal 页面）共用，
+ * 保证两处内容一致 —— App Store 审核会比对产品页链接与 App 内文档。
+ * 纯 TS 数据，零 Node/DOM API。
+ */
+
+export type LegalDocId = 'privacy' | 'terms' | 'subscription'
+
 export type LegalSection = Readonly<{
-  title: string;
-  paragraphs: readonly string[];
-  bullets?: readonly string[];
-}>;
+  title: string
+  paragraphs: readonly string[]
+  bullets?: readonly string[]
+}>
 
 export type LegalDocument = Readonly<{
-  title: string;
-  summary: string;
-  effectiveDate: string;
-  sections: readonly LegalSection[];
-}>;
+  /** 路由标识（公网页面 /legal/<id>） */
+  id: LegalDocId
+  title: string
+  summary: string
+  effectiveDate: string
+  sections: readonly LegalSection[]
+}>
 
 export const privacyPolicy: LegalDocument = {
+  id: 'privacy',
   title: '隐私政策',
-  summary: '了解 掌鲸 DSH Pocket 如何收集、使用、共享、保存和保护你的数据，以及你可以如何行使隐私权利。',
+  summary:
+    '了解 掌鲸 DSH Pocket 如何收集、使用、共享、保存和保护你的数据，以及你可以如何行使隐私权利。',
   effectiveDate: '2026 年 7 月 30 日',
   sections: [
     {
@@ -91,9 +103,10 @@ export const privacyPolicy: LegalDocument = {
       ],
     },
   ],
-};
+}
 
 export const termsOfService: LegalDocument = {
+  id: 'terms',
   title: '用户协议',
   summary: '本协议说明账号、内容、会员订阅、可接受使用、服务变更和责任边界。',
   effectiveDate: '2026 年 7 月 30 日',
@@ -160,9 +173,10 @@ export const termsOfService: LegalDocument = {
       ],
     },
   ],
-};
+}
 
 export const subscriptionTerms: LegalDocument = {
+  id: 'subscription',
   title: '订阅与自动续期说明',
   summary: '说明订阅商品、付款、续期、取消、恢复购买和退款规则。',
   effectiveDate: '2026 年 7 月 30 日',
@@ -185,9 +199,7 @@ export const subscriptionTerms: LegalDocument = {
     },
     {
       title: '4. 试用、恢复购买与退款',
-      paragraphs: [
-        '免费试用资格、恢复购买和退款受购买页面、支付渠道规则及适用法律约束。',
-      ],
+      paragraphs: ['免费试用资格、恢复购买和退款受购买页面、支付渠道规则及适用法律约束。'],
     },
     {
       title: '5. 价格与权益变更',
@@ -197,9 +209,19 @@ export const subscriptionTerms: LegalDocument = {
     },
     {
       title: '6. 联系方式',
-      paragraphs: [
-        '如遇重复扣费、权益未到账或恢复购买失败，请在“帮助与反馈”中选择“会员与支付”。',
-      ],
+      paragraphs: ['如遇重复扣费、权益未到账或恢复购买失败，请在“帮助与反馈”中选择“会员与支付”。'],
     },
   ],
-};
+}
+
+/** 全部法务文档（公网目录页顺序） */
+export const legalDocuments: readonly LegalDocument[] = [
+  privacyPolicy,
+  termsOfService,
+  subscriptionTerms,
+]
+
+/** 按 id 取文档；未知 id 返回 undefined（供路由 404 判断） */
+export function getLegalDocument(id: string): LegalDocument | undefined {
+  return legalDocuments.find((doc) => doc.id === id)
+}

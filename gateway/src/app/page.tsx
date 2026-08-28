@@ -7,6 +7,9 @@ export default function Home() {
         <li>Worker uplink: <code>wss://…/gw/worker</code></li>
         <li>手机接入: <code>wss://…/gw/phone</code></li>
         <li>健康检查: <code>/api/v1/health</code></li>
+        <li>
+          <a href="/legal" style={{ color: '#B03C3C' }}>协议与政策</a>
+        </li>
       </ul>
     </main>
   )

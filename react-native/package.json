@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@deepseek-harness-pocket/bridge-protocol": "file:../packages/bridge-protocol",
+    "@deepseek-harness-pocket/legal": "file:../packages/legal",
     "@expo/metro-runtime": "~57.0.8",
     "@gorhom/bottom-sheet": "^5.2.14",
     "@react-native-async-storage/async-storage": "2.2.0",

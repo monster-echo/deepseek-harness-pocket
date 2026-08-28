@@ -1,0 +1,28 @@
+{
+  "name": "@deepseek-harness-pocket/legal",
+  "version": "0.1.0",
+  "description": "deepseek-harness-pocket 法务文档单一事实源：隐私政策 / 用户协议 / 订阅说明（App 内嵌展示与 gateway 公网页面共用）",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

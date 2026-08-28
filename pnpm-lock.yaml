@@ -35,6 +35,9 @@ importers:
       '@deepseek-harness-pocket/bridge-protocol':
         specifier: workspace:*
         version: link:../packages/bridge-protocol
+      '@deepseek-harness-pocket/legal':
+        specifier: workspace:*
+        version: link:../packages/legal
       jose:
         specifier: ^6.2.9
         version: 6.2.9
@@ -132,6 +135,15 @@ importers:
         version: 3.2.7(@types/node@22.20.1)(tsx@4.23.12)
 
   packages/bridge-protocol:
+    devDependencies:
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)(tsx@4.23.12)
+
+  packages/legal:
     devDependencies:
       typescript:
         specifier: ^5.8.0

@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@deepseek-harness-pocket/bridge-protocol": "workspace:*",
+    "@deepseek-harness-pocket/legal": "workspace:*",
     "jose": "^6.2.9",
     "next": "^16.2.0",
     "pg": "^8.13.0",

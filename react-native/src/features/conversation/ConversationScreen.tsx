@@ -8,6 +8,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Image,
   Pressable,
   ScrollView,
@@ -40,6 +41,7 @@ export function ConversationScreen() {
   const view = useDshStore((s) => s.sessionView);
   const notice = useDshStore((s) => s.notice);
   const activeSessionId = useDshStore((s) => s.activeSessionId);
+  const sessionLoading = useDshStore((s) => s.sessionLoading);
   const serverRequests = useDshStore((s) => s.serverRequests);
   const scrollRef = useRef<ScrollView>(null);
   const [actionTarget, setActionTarget] = useState<TimelineItem | null>(null);
@@ -54,6 +56,20 @@ export function ConversationScreen() {
       <View style={[styles.container, { backgroundColor: palette.background }]}>
         <View style={[styles.containerSession]}>
           <Composer mode="new" />
+        </View>
+      </View>
+    );
+  }
+
+  if (sessionLoading && view.items.length === 0) {
+    // 快照在途：明确加载态，避免「点了没反应」的观感
+    return (
+      <View style={[styles.container, { backgroundColor: palette.background }]}>
+        <View style={styles.sessionLoading}>
+          <ActivityIndicator color={palette.brand} />
+          <Text style={[styles.sessionLoadingText, { color: palette.textSecondary }]}>
+            正在加载会话…
+          </Text>
         </View>
       </View>
     );
@@ -947,6 +963,13 @@ const makeStyles = (t: number) =>
       flex: 1,
       justifyContent: "center",
     },
+    sessionLoading: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      gap: spacing.x2,
+    },
+    sessionLoadingText: { fontSize: 13 * t },
     empty: { flex: 1, alignItems: "center", justifyContent: "center" },
     emptyTitle: { fontSize: 16 * t },
     notice: {

@@ -146,6 +146,12 @@ export class DshClient {
     if (!response.ok) throw new Error(response.error.message)
   }
 
+  /** 退订会话：切换走时停止旧会话的事件推送（释放隧道带宽）。 */
+  async closeSession(sessionId: string): Promise<void> {
+    const response = await this.rpc('sessions', 'close', { sessionId })
+    if (!response.ok) throw new Error(response.error.message)
+  }
+
   async listWorkspaces(): Promise<readonly { id: string; path: string; title: string }[]> {
     const response = await this.rpc('workspaces', 'list', {})
     if (!response.ok) throw new Error(response.error.message)

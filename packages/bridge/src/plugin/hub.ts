@@ -236,16 +236,20 @@ export class BridgeHub {
         if (typeof sessionId !== 'string') return fail('bad-request', 'sessionId required')
         const slice = await this.adapter.readSlice(sessionId, 0)
         if (slice === null) return fail('not-found', `unknown session ${sessionId}`)
-        // 挂 live agent（无 agent 时），使命令目录/当前模型可查询
-        try {
-          await this.adapter.openSession(sessionId, this.opts.defaultModel)
-        } catch {
-          // 挂 agent 失败不阻塞打开（只影响命令/模型目录查询）
-        }
         for (const c of this.conns.values()) {
           if (c.authed) c.subscribed.add(sessionId)
         }
+        // 快照先广播：历史渲染只依赖事件流，agent 挂载（秒级）不阻塞打开。
+        // 先订阅后广播保证快照之后的事件按序跟随，不产生 seq 空洞。
         this.broadcast(snapshotFrame(slice))
+        // 挂 live agent（无 agent 时）使命令目录/当前模型可查询；后台执行，失败也不影响已打开的会话
+        try {
+          void this.adapter.openSession(sessionId, this.opts.defaultModel).catch(() => {
+            // 挂 agent 失败不阻塞打开（只影响命令/模型目录查询）
+          })
+        } catch {
+          // 挂 agent 失败不阻塞打开（只影响命令/模型目录查询）
+        }
         return rpcSuccess(req.id, { fromSeq: slice.fromSeq, toSeq: slice.toSeq, count: slice.events.length })
       }
 

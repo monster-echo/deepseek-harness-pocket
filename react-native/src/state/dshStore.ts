@@ -16,6 +16,8 @@ interface DshState {
   workerHandshake: HandshakeInfo | null
   sessions: readonly SessionListItem[]
   activeSessionId: string | null
+  /** 已选中会话但快照未到（sidebar 切换后主区域显示加载态） */
+  sessionLoading: boolean
   sessionView: SessionView
   serverRequests: readonly ServerRequest[]
   notice: string | null
@@ -123,6 +125,7 @@ export const useDshStore = create<DshState>((set, get) => {
     workerHandshake: null,
     sessions: [],
     activeSessionId: null,
+    sessionLoading: false,
     sessionView: emptySessionView,
     serverRequests: [],
     notice: null,
@@ -142,14 +145,14 @@ export const useDshStore = create<DshState>((set, get) => {
       gateway = null
       client?.dispose(true)
       client = null
-      set({ gatewayStatus: 'idle', activeWorkerId: null, sessions: [], activeSessionId: null, sessionView: emptySessionView })
+      set({ gatewayStatus: 'idle', activeWorkerId: null, sessions: [], activeSessionId: null, sessionLoading: false, sessionView: emptySessionView })
     },
 
     openWorker(workerId) {
       const g = ensureGateway()
       client?.dispose(true)
       client = null
-      set({ activeWorkerId: workerId, sessions: [], activeSessionId: null, sessionView: emptySessionView, serverRequests: [] })
+      set({ activeWorkerId: workerId, sessions: [], activeSessionId: null, sessionLoading: false, sessionView: emptySessionView, serverRequests: [] })
       g.openWorker(workerId)
     },
 
@@ -292,16 +295,26 @@ export const useDshStore = create<DshState>((set, get) => {
 
     async openSession(sessionId) {
       if (client === null) return
-      set({ activeSessionId: sessionId, sessionView: emptySessionView })
+      // 退订旧会话：停掉旧会话的事件流（agent 流式输出时 delta 会持续抢占隧道带宽，
+      // 拖慢新会话快照传输）；失败不影响切换
+      const prevId = get().activeSessionId
+      if (prevId !== null && prevId !== sessionId) {
+        void client.closeSession(prevId).catch(() => {})
+      }
+      set({ activeSessionId: sessionId, sessionLoading: true, sessionView: emptySessionView })
       try {
         await client.openSession(sessionId)
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
+      } finally {
+        // 快照通常先于 rpc-result 到达（onSnapshot 已清 loading）；此处兜底清除。
+        // 仅当仍是本会话时清：快速连点时旧请求返回不能覆盖新会话的加载态
+        if (get().activeSessionId === sessionId) set({ sessionLoading: false })
       }
     },
 
     startNewSession() {
-      set({ activeSessionId: null, sessionView: emptySessionView })
+      set({ activeSessionId: null, sessionLoading: false, sessionView: emptySessionView })
     },
 
     async sendMessage(text, images) {
@@ -450,7 +463,7 @@ async function startClient(workerId: string, set: Set, get: Get): Promise<void> 
         if (snapshot.sessionId !== s.activeSessionId) return
         let view = emptySessionView
         for (const event of snapshot.events) view = reduceSessionEvent(view, event)
-        set({ sessionView: view })
+        set({ sessionView: view, sessionLoading: false })
       },
       onServerRequest: (request) => {
         set({ serverRequests: [...get().serverRequests, request] })

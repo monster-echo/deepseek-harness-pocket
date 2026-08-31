@@ -13,48 +13,42 @@ import { styles } from '../theme/styles';
 const LogoImage = require('../../assets/splash-icon.png');
 
 // 品牌闪屏阶段常量
-const MIN_LOGO_MS = 1000; // logo+loading 最短展示时间，避免 bootstrap 极快时闪跳
 const MAX_SPLASH_WAIT_MS = 8000; // fetch 无显式超时，最长等待兜底防挂死
 
-// ── Splash screen ────────────────────────────────────────────────────
-// 统一三端启动体验：原生 logo → 品牌闪屏 → home。闪屏仅在「在线且有 splash 配置」
-// 时展示（全屏媒体 + 右上角胶囊跳过 + 倒计时）；离线或未配置 → 直接进首页。
-// 合规：非按钮区域不可点击跳转，仅跳过按钮可点。
+// ── 启动门（原品牌闪屏入口）──────────────────────────────────────────
+// 本屏只是 bootstrap 等待门：原生 logo → （极短 loading）→ 分流落地。
+// **默认关掉品牌闪屏**：无 config.splash 时 bootstrap 一完成立即分流——
+// 已登录 → home，未登录 → auth.signIn（认证页即落地页）。
+// 仅当服务端配置了 config.splash 且在线时才展示品牌闪屏活动（可选项）。
 export function SplashScreen() {
-  const { replace, config, bootstrapped, online } = useApp();
+  const { replace, config, bootstrapped, online, signedIn } = useApp();
   const { palette } = usePreferences();
-  const [minElapsed, setMinElapsed] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const doneRef = useRef(false);
 
   // 首帧渲染完成后隐藏原生启动屏：与 App.tsx 的 preventAutoHideAsync 配合，
-  // 无缝过渡到 JS 品牌闪屏，避免闪跳并遮住 dev-client 的 bundle 下载。
+  // 无缝过渡到 JS 启动门，避免闪跳并遮住 dev-client 的 bundle 下载。
   useEffect(() => {
     void ExpoSplashScreen.hideAsync();
   }, []);
 
-  const goHome = useCallback(() => {
+  const enterApp = useCallback(() => {
     if (doneRef.current) return;
     doneRef.current = true;
-    replace('home');
-  }, [replace]);
-
-  useEffect(() => {
-    const t = setTimeout(() => setMinElapsed(true), MIN_LOGO_MS);
-    return () => clearTimeout(t);
-  }, []);
+    replace(signedIn ? 'home' : 'auth.signIn');
+  }, [replace, signedIn]);
 
   // fetch 无显式超时，最长等待兜底，避免一直卡在 loading
   useEffect(() => {
-    const t = setTimeout(goHome, MAX_SPLASH_WAIT_MS);
+    const t = setTimeout(enterApp, MAX_SPLASH_WAIT_MS);
     return () => clearTimeout(t);
-  }, [goHome]);
+  }, [enterApp]);
 
-  const ready = minElapsed && bootstrapped;
+  const ready = bootstrapped;
   useEffect(() => {
     if (!ready || countdown !== null) return;
     if (!config.splash || !online) {
-      goHome(); // 未配置闪屏或离线 → 直接进首页
+      enterApp(); // 默认：未配置闪屏或离线 → 直接落地（home / 认证页）
       return;
     }
     // 进闪屏前预加载图片：远程图首拉 1-2s，在 loading 阶段拉好，
@@ -63,21 +57,21 @@ export function SplashScreen() {
     const enter = () => setCountdown(config.splash!.durationSeconds);
     if (url) Image.prefetch(url).finally(enter);
     else enter();
-  }, [ready, config.splash, online, countdown, goHome]);
+  }, [ready, config.splash, online, countdown, enterApp]);
 
   useEffect(() => {
     if (countdown === null) return;
     if (countdown <= 0) {
-      goHome();
+      enterApp();
       return;
     }
     const t = setTimeout(() => setCountdown((c) => (c === null ? c : c - 1)), 1000);
     return () => clearTimeout(t);
-  }, [countdown, goHome]);
+  }, [countdown, enterApp]);
 
   if (countdown === null) {
-    // 阶段 loading：logo + appName + tagline + 转圈 + "加载中…"
-    // 背景用 app 主色，原生 splash → loading → 闪屏 → home 全程一致
+    // 阶段 loading：logo + appName + 转圈。bootstrap 通常几百 ms，
+    // 不设最短展示时间——配置未返回即分流，默认体验无闪屏。
     return (
       <View accessibilityLabel="启动中" style={[styles.centered, { backgroundColor: palette.background }]}>
         <Image
@@ -86,9 +80,7 @@ export function SplashScreen() {
           accessibilityLabel="品牌图标"
         />
         <Text style={styles.title}>{config.brand.appName}</Text>
-        <Text style={styles.secondary}>{config.brand.tagline}</Text>
         <ActivityIndicator color={colors.brand} style={launchStyles.loadingSpinner} />
-        <Text style={launchStyles.loadingText}>加载中…</Text>
       </View>
     );
   }
@@ -102,7 +94,7 @@ export function SplashScreen() {
       <SplashMedia splash={splash} background={palette.background} />
       <View pointerEvents="box-none" style={launchStyles.overlay}>
         <View style={launchStyles.topBar}>
-          <SkipCapsule canSkip={canSkip} countdown={Math.max(countdown, 0)} onSkip={goHome} />
+          <SkipCapsule canSkip={canSkip} countdown={Math.max(countdown, 0)} onSkip={enterApp} />
         </View>
       </View>
     </View>
@@ -263,5 +255,4 @@ const launchStyles = StyleSheet.create({
   badge: { color: colors.brand, fontSize: 13, fontWeight: '700' },
   fullWidth: { width: '100%' },
   loadingSpinner: { marginTop: spacing.x4 },
-  loadingText: { color: colors.brand, fontSize: 14, marginTop: spacing.x2 },
 });

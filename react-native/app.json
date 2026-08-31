@@ -32,7 +32,9 @@
         {
           "cameraPermission": "允许拍照并发送给电脑上的 dsh 会话。"
         }
-      ]
+      ],
+      "./plugins/with-localized-display-name",
+      "./plugins/with-splash-watchdog"
     ],
     "ios": {
       "usesAppleSignIn": true,

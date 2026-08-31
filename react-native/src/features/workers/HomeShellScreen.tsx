@@ -1,15 +1,17 @@
 /**
  * 主界面外壳：侧边栏（默认收起）+ 会话聊天主区域（最大化）。
- * 登录后首屏；无 Worker 时引导去配对。
+ * 登录后首屏；无 Worker 时按连接状态区分「连接中 / 连接失败 / 引导配对」，
+ * 避免把「还没连上网关」误展示成「没有绑定过电脑」。
  *
  * 顶栏（对齐 dsh Web）：
  *   左：汉堡菜单（开侧边栏）
  *   中：标题 + 副标题——会话中显示「模式 · 权限 · 在线数」（#19），否则品牌/连接状态
- *   右：会话信息按钮（#21）/ 无 Worker 时「配对电脑」
+ *   右：会话信息按钮（#21）/ 无 Worker 且已连上时「配对电脑」
  */
 
 import React, { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Animated,
   Image,
   Pressable,
@@ -18,6 +20,7 @@ import {
   View,
 } from "react-native";
 import { AppIcon } from "../../design-system/AppIcon";
+import type { GatewayStatus } from "../../dsh/connection";
 import { usePreferences } from "../../preferences/PreferencesProvider";
 import { useApp } from "../../state/AppStore";
 import { useDshStore } from "../../state/dshStore";
@@ -170,7 +173,7 @@ export function HomeShellScreen() {
             <AppIcon name="info" color={palette.text} size={20} />
           </Pressable>
         )}
-        {!hasWorker && (
+        {!hasWorker && gatewayStatus === "connected" && (
           <Pressable
             style={[styles.addPair, { backgroundColor: palette.brand }]}
             onPress={() => navigate("dsh.pair")}
@@ -182,7 +185,14 @@ export function HomeShellScreen() {
 
       {/* 主区域：会话聊天（最大化） */}
       <View style={styles.main}>
-        {!hasWorker ? <EmptyWorker /> : <ConversationScreen />}
+        {!hasWorker ? (
+          <EmptyWorker
+            status={gatewayStatus}
+            onRetry={() => connectGateway()}
+          />
+        ) : (
+          <ConversationScreen />
+        )}
       </View>
 
       <SessionInfoSheet visible={infoOpen} onClose={() => setInfoOpen(false)} />
@@ -210,16 +220,61 @@ export function HomeShellScreen() {
   );
 }
 
-function EmptyWorker() {
+/**
+ * 无 Worker 时的主区域三态：
+ *   connecting → 加载态（连着但 presence 未到，不是「没有电脑」）
+ *   offline/idle → 连接失败 + 重试
+ *   connected → 真正的空态，才引导去配对
+ */
+function EmptyWorker({
+  status,
+  onRetry,
+}: {
+  status: GatewayStatus;
+  onRetry: () => void;
+}) {
   const { palette, dark } = usePreferences();
   const { navigate } = useApp();
+  const logo = (
+    <Image
+      source={dark ? LOGO_DARK : LOGO}
+      style={styles.emptyLogo}
+      accessibilityLabel="掌鲸 DSH Pocket"
+    />
+  );
+  if (status === "connecting") {
+    return (
+      <View style={styles.empty}>
+        {logo}
+        <ActivityIndicator color={palette.brand} />
+        <Text style={[styles.emptyBody, { color: palette.textSecondary }]}>
+          正在连接云服务…
+        </Text>
+      </View>
+    );
+  }
+  if (status !== "connected") {
+    return (
+      <View style={styles.empty}>
+        {logo}
+        <Text style={[styles.emptyTitle, { color: palette.text }]}>
+          网关未连接
+        </Text>
+        <Text style={[styles.emptyBody, { color: palette.textSecondary }]}>
+          无法连接到云服务，请检查网络后重试。
+        </Text>
+        <Pressable
+          style={[styles.emptyButton, { backgroundColor: palette.brand }]}
+          onPress={onRetry}
+        >
+          <Text style={styles.emptyButtonText}>重试</Text>
+        </Pressable>
+      </View>
+    );
+  }
   return (
     <View style={styles.empty}>
-      <Image
-        source={dark ? LOGO_DARK : LOGO}
-        style={styles.emptyLogo}
-        accessibilityLabel="掌鲸 DSH Pocket"
-      />
+      {logo}
       <Text style={[styles.emptyTitle, { color: palette.text }]}>
         掌鲸 DSH Pocket
       </Text>

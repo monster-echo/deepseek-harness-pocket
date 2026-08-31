@@ -113,7 +113,6 @@ export const useDshStore = create<DshState>((set, get) => {
         void startClient(workerId, set, get)
       },
     })
-    gateway.connect()
     return gateway
   }
 
@@ -134,7 +133,8 @@ export const useDshStore = create<DshState>((set, get) => {
     pinnedSessionIds: [],
 
     connectGateway() {
-      ensureGateway()
+      // 显式 connect()：既是首连，也是 offline 后的「重试」（connect 内部会拆掉旧 socket）
+      ensureGateway().connect()
     },
 
     disconnectGateway() {

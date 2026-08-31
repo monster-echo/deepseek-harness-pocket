@@ -7,12 +7,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
+  KeyboardAvoidingView,
+  LayoutAnimation,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  UIManager,
   View,
 } from "react-native";
 import Svg, { Circle } from "react-native-svg";
@@ -26,7 +30,6 @@ import { spacing, radii } from "../../theme/tokens";
 import { readLastWorkspace, saveLastWorkspace } from "../../data/storage";
 import { DirectoryPickerSheet } from "../workers/DirectoryPickerSheet";
 import { CommandPaletteSheet } from "./CommandPaletteSheet";
-import { ComposerInput } from "./ComposerInput";
 
 import { useWindowDimensions } from "react-native";
 
@@ -134,6 +137,14 @@ const FALLBACK_MODELS: ReadonlyArray<{
   { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
 ];
 
+// 空态引导的起点提示词（点击填入输入框）
+const HELLO_CHIPS: ReadonlyArray<{ label: string; fill: string }> = [
+  { label: "修一个报错", fill: "帮我排查并修复这个报错：" },
+  { label: "写个新功能", fill: "给这个项目加一个新功能：" },
+  { label: "读懂这个仓库", fill: "带我把这个仓库的整体结构和入口读一遍" },
+  { label: "重构一段代码", fill: "帮我把这段代码重构一下：" },
+];
+
 const PRESET_LABELS: Readonly<Record<string, string>> = {
   standard: "标准",
   code: "代码编排",
@@ -193,6 +204,13 @@ export function Composer(
   const [commandsCache, setCommandsCache] = useState<
     readonly { name: string; description: string }[]
   >([]);
+  // 豆包式形态：session 空闲收成单行胶囊，聚焦/已输入展开
+  const [dockExpanded, setDockExpanded] = useState(isNew);
+  // session 当前实际模型（listModels 返回，修复沿用 newSessionDefaults 的显示错误）
+  const [sessionModel, setSessionModel] = useState<string | null>(null);
+  const inputRef = useRef<TextInput>(null);
+  // 胶囊→展开时 TextInput 尚未挂载（条件渲染），聚焦需等 commit 后在 effect 里补
+  const pendingFocusRef = useRef(false);
 
   const sendMessage = useDshStore((s) => s.sendMessage);
   const uploadImage = useDshStore((s) => s.uploadImage);
@@ -212,6 +230,9 @@ export function Composer(
   const permissionCurrent = useDshStore((s) => s.sessionView.permissionCurrent);
   const totalUsage = useDshStore((s) => s.sessionView.totalUsage);
   const queueSend = useDshStore((s) => s.queueSend);
+  const listModels = useDshStore((s) => s.listModels);
+  const stats = useDshStore((s) => s.sessionView.stats);
+  const activeSessionId = useDshStore((s) => s.activeSessionId);
   const prevRunning = useRef(running);
 
   // new：加载工作区 + 沿用上次目录
@@ -246,22 +267,28 @@ export function Composer(
     prevRunning.current = running;
   }, [isNew, running, pendingQueue, sendMessage]);
 
+  // session：拉取当前会话实际模型（仅展示用）
+  useEffect(() => {
+    if (isNew) return;
+    let alive = true;
+    listModels()
+      .then((result) => {
+        if (!alive) return;
+        const m = result.current?.model;
+        if (typeof m === "string" && m.length > 0) setSessionModel(m);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [isNew, listModels, activeSessionId]);
+
   const rememberWorkspace = (p: string): void => {
     setPath(p);
     void saveLastWorkspace(p);
   };
 
-  // 内联命令联想（session）/ 命令覆盖层（new）
-  const slashQuery =
-    text.startsWith("/") && !text.includes(" ")
-      ? text.slice(1).toLowerCase()
-      : null;
-  const suggestions = useMemo(() => {
-    if (slashQuery === null) return [];
-    return commandsCache
-      .filter((c) => c.name.startsWith(slashQuery))
-      .slice(0, 6);
-  }, [slashQuery, commandsCache]);
+  // 命令覆盖层（new 模式）：/cmd 语法高亮
   const parsed = useMemo(() => {
     if (!isNew || !text.startsWith("/"))
       return { name: null as string | null, body: "", placeholder: "" };
@@ -281,8 +308,14 @@ export function Composer(
       (m) =>
         m.id === (newSessionPreset.length > 0 ? newSessionPreset : "standard"),
     )?.name ?? "标准模式";
-  const perm = PERMISSIONS.find((p) => p.id === permission) ?? PERMISSIONS[1]!;
+  const permissionId = isNew
+    ? permission
+    : (permissionCurrent ?? permission);
+  const currentPerm =
+    PERMISSIONS.find((p) => p.id === permissionId) ?? PERMISSIONS[1]!;
+  const permissionLabel = PERMISSION_LABELS[permissionId] ?? currentPerm.name;
   const modelFull = newSessionDefaults?.model ?? "deepseek-v4-flash";
+  const displayModel = isNew ? modelFull : (sessionModel ?? modelFull);
   const reasoningLabel =
     REASONING.find((r) => r.id === reasoning)?.label ?? "Off";
   const pathLabel =
@@ -292,8 +325,54 @@ export function Composer(
   const activeWorkerName =
     workers.find((w) => w.workerId === activeWorkerId)?.name ?? "选择电脑";
   const models = modelCatalog.length > 0 ? modelCatalog : FALLBACK_MODELS;
+  // 模型 pill 文案：目录里的展示名优先（fallback id 太长），思考档合并展示
+  const modelMeta = models.find((m) => m.id === displayModel);
+  const modelPillLabel =
+    (modelMeta?.name !== undefined && modelMeta.name.length > 0
+      ? modelMeta.name
+      : displayModel) +
+    (isNew && reasoning !== "off" ? ` · ${reasoningLabel}` : "");
 
-  const { isMdDown } = useResponsive();
+  // 胶囊↔展开切换（输入空 + 未聚焦时 session 收成单行）
+  const inputEmpty = text.trim().length === 0 && images.length === 0;
+  const showStop = !isNew && running && inputEmpty;
+  const docked = !isNew && !dockExpanded;
+  const helloVisible = isNew && inputEmpty && !focused;
+  const tokPerSec =
+    stats.decodeMs > 0
+      ? Math.round((stats.decodeTokens / stats.decodeMs) * 1000)
+      : 0;
+
+  /** 胶囊↔展开的布局动画（Android 需先开实验开关）。 */
+  const animateLayout = (): void => {
+    if (
+      Platform.OS === "android" &&
+      typeof UIManager.setLayoutAnimationEnabledExperimental === "function"
+    ) {
+      UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+  };
+
+  const expandDock = (): void => {
+    animateLayout();
+    pendingFocusRef.current = true;
+    setDockExpanded(true);
+  };
+
+  // 展开卡 commit 后补聚焦（setDockExpanded 同一 tick 里 ref 还是 null，同步 focus 会被吞掉）
+  useEffect(() => {
+    if (dockExpanded && pendingFocusRef.current) {
+      pendingFocusRef.current = false;
+      inputRef.current?.focus();
+    }
+  }, [dockExpanded]);
+
+  // 空态引导：一键填入起点提示词并聚焦
+  const applyHelloChip = (fill: string): void => {
+    setText(fill);
+    inputRef.current?.focus();
+  };
 
   const pickDirectory = (dir: string): void => {
     setBusy(true);
@@ -423,100 +502,160 @@ export function Composer(
     ? (text.trim().length > 0 || images.length > 0) && path.length > 0 && !busy
     : text.trim().length > 0 || images.length > 0;
 
-  // session：上下文圆环
+  // 上下文占比（InfoLine 圆点）
   const usedTokens = totalUsage.input + totalUsage.output;
-  const contextLimit = CONTEXT_LIMITS[modelFull] ?? DEFAULT_CONTEXT_LIMIT;
+  const contextLimit = CONTEXT_LIMITS[displayModel] ?? DEFAULT_CONTEXT_LIMIT;
   const contextPct = Math.max(0, Math.min(1, usedTokens / contextLimit));
-  const R = 7;
-  const CIRC = 2 * Math.PI * R;
 
   return (
     <View
       style={[
-        isNew ? styles.container : styles.containerSession,
+        isNew ? styles.rootNew : styles.containerSession,
         { backgroundColor: palette.background },
       ]}
     >
-      {/* chip 行：new 显示电脑/工作区/模式（居中）；session 只显示模式（靠左） */}
-      <View
-        style={[
-          styles.selectorRow,
-          {
-            justifyContent: "flex-start",
-            paddingHorizontal: spacing.x3,
-          },
-        ]}
+      <KeyboardAvoidingView
+        style={isNew ? styles.kavCenter : styles.kavDock}
+        /* session 的键盘避让由 ConversationScreen 根部 KAV 统一处理（避免双层 padding）；
+           底部安全区由 App.tsx 全局 SafeAreaView 统一处理 */
+        behavior={isNew && Platform.OS === "ios" ? "padding" : undefined}
       >
-        {isNew && (
-          <Chip
-            icon="monitor"
-            label={activeWorkerName}
-            onPress={() => setSheet("worker")}
-          />
-        )}
-        {isNew && (
-          <Chip
-            icon="folder"
-            label={pathLabel}
-            onPress={() => setSheet("project")}
-          />
-        )}
-        {isNew && (
-          <Chip
-            icon="crown"
-            label={modeName}
-            onPress={() => setSheet("mode")}
-          />
-        )}
-      </View>
-
-      {/* 输入区 */}
-      {
-        <View
-          style={[
-            styles.card,
-            {
-              backgroundColor: palette.surface,
-              borderColor: focused ? palette.brand : palette.border,
-            },
-          ]}
-        >
-          <View style={styles.textAreaWrap}>
-            {parsed.name !== null && (
-              <View style={styles.overlay} pointerEvents="none">
-                <Text style={styles.overlayLine}>
-                  <Text style={[styles.cmdName, { color: palette.warning }]}>
-                    /{parsed.name}{" "}
+        {/* 空态引导：问候 + 起点 chips（开始输入即收起） */}
+        {isNew && helloVisible && (
+          <View style={styles.hello}>
+            <Text style={[styles.helloTitle, { color: palette.text }]}>
+              今天想构建什么？
+            </Text>
+            <View style={styles.helloChips}>
+              {HELLO_CHIPS.map((chip) => (
+                <Pressable
+                  key={chip.label}
+                  style={({ pressed }) => [
+                    styles.helloChip,
+                    { backgroundColor: palette.surface },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={() => applyHelloChip(chip.fill)}
+                >
+                  <Text
+                    style={[styles.helloChipText, { color: palette.text }]}
+                    numberOfLines={1}
+                  >
+                    {chip.label}
                   </Text>
-                  {parsed.body.length === 0 ? (
-                    <Text
-                      style={[styles.cmdHint, { color: palette.textSecondary }]}
-                    >
-                      {parsed.placeholder}
-                    </Text>
-                  ) : (
-                    <Text style={[styles.cmdBody, { color: palette.text }]}>
-                      {parsed.body}
-                    </Text>
-                  )}
-                </Text>
-              </View>
-            )}
-            <TextInput
-              style={[
-                styles.textInput,
-                { color: parsed.name !== null ? "transparent" : palette.text },
-              ]}
-              placeholder={parsed.name !== null ? "" : "描述你想要构建的内容"}
-              placeholderTextColor={palette.textSecondary}
-              value={text}
-              onChangeText={setText}
-              onFocus={() => setFocused(true)}
-              onBlur={() => setFocused(false)}
-              multiline
-              numberOfLines={1}
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* 卡外选择器（new）：电脑 / 工作区 / 模式，Ghost 轻量化 */}
+        {isNew && (
+          <View style={styles.ghostRow}>
+            <GhostChip
+              icon="monitor"
+              label={activeWorkerName}
+              onPress={() => setSheet("worker")}
+            />
+            <GhostChip
+              icon="folder"
+              label={pathLabel}
+              onPress={() => setSheet("project")}
+            />
+            <GhostChip
+              icon="crown"
+              label={modeName}
+              onPress={() => setSheet("mode")}
             />
           </View>
+        )}
+
+        {/* session 空闲：单行胶囊 Dock，点按展开 */}
+        {docked ? (
+          <Pressable
+            style={({ pressed }) => [
+              styles.dock,
+              { backgroundColor: palette.surface },
+              pressed && { opacity: 0.92 },
+            ]}
+            onPress={expandDock}
+            accessibilityLabel="输入消息"
+          >
+            <View
+              style={[
+                styles.plusButton,
+                { backgroundColor: palette.surfaceMuted },
+              ]}
+            >
+              <AppIcon name="plus" color={palette.text} size={16} />
+            </View>
+            <Text
+              style={[styles.dockPlaceholder, { color: palette.textSecondary }]}
+              numberOfLines={1}
+            >
+              输入消息…
+            </Text>
+            {showStop ? (
+              <StopButton onPress={() => void stopTurn()} />
+            ) : (
+              <SendButton canSend={false} onPress={() => {}} />
+            )}
+          </Pressable>
+        ) : (
+          /* 展开卡：new 常驻居中；session 聚焦或已输入时呈现 */
+          <View style={[styles.card, { backgroundColor: palette.surface }]}>
+            <View style={styles.textAreaWrap}>
+              {parsed.name !== null && (
+                <View style={styles.overlay} pointerEvents="none">
+                  <Text style={styles.overlayLine}>
+                    <Text style={[styles.cmdName, { color: palette.warning }]}>
+                      /{parsed.name}{" "}
+                    </Text>
+                    {parsed.body.length === 0 ? (
+                      <Text
+                        style={[styles.cmdHint, { color: palette.textSecondary }]}
+                      >
+                        {parsed.placeholder}
+                      </Text>
+                    ) : (
+                      <Text style={[styles.cmdBody, { color: palette.text }]}>
+                        {parsed.body}
+                      </Text>
+                    )}
+                  </Text>
+                </View>
+              )}
+              <TextInput
+                ref={inputRef}
+                style={[
+                  styles.textInput,
+                  { color: parsed.name !== null ? "transparent" : palette.text },
+                ]}
+                placeholder={
+                  parsed.name !== null
+                    ? ""
+                    : isNew
+                      ? "描述你想要构建的内容"
+                      : "输入消息，/ 唤起命令"
+                }
+                placeholderTextColor={palette.textSecondary}
+                value={text}
+                onChangeText={setText}
+                onFocus={() => {
+                  setFocused(true);
+                  if (!dockExpanded) setDockExpanded(true);
+                }}
+                onBlur={() => {
+                  setFocused(false);
+                  if (inputEmpty) {
+                    animateLayout();
+                    setDockExpanded(false);
+                  }
+                }}
+                multiline
+                numberOfLines={1}
+              />
+            </View>
           {images.length > 0 && (
             <ScrollView
               horizontal
@@ -547,136 +686,87 @@ export function Composer(
               ))}
             </ScrollView>
           )}
-          <View style={[styles.actionBar, { borderTopColor: palette.border }]}>
-            <View style={styles.actionLeft}>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.plusButton,
-                  { backgroundColor: palette.surfaceMuted },
-                  pressed && { opacity: 0.7 },
-                ]}
-                onPress={() => setSheet("commands")}
-              >
-                <AppIcon name="plus" color={palette.text} size={16} />
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.plusButton,
-                  { backgroundColor: palette.surfaceMuted },
-                  pressed && { opacity: 0.7 },
-                ]}
-                onPress={pickImage}
-                accessibilityLabel="添加图片"
-              >
-                <AppIcon name="paperclip" color={palette.text} size={16} />
-              </Pressable>
-              <Pressable
-                style={styles.actionChip}
-                onPress={() => setSheet("permission")}
-              >
-                <AppIcon
-                  name={perm.icon}
-                  color={
-                    perm.danger === true ? palette.error : palette.textSecondary
-                  }
-                  size={13}
-                />
-                {!isMdDown && (
-                  <Text
-                    style={[styles.actionChipText, { color: palette.text }]}
-                    numberOfLines={1}
-                  >
-                    {perm.name}
-                  </Text>
-                )}
-              </Pressable>
-            </View>
-            <View style={styles.actionRight}>
-              <Pressable
-                style={styles.actionChip}
-                onPress={() => setSheet("model")}
-              >
-                <Text
-                  style={[
-                    styles.actionChipText,
-                    { color: palette.text, fontFamily: "Menlo" },
-                  ]}
-                >
-                  {modelFull}
-                </Text>
-                <Text
-                  style={[styles.reasonTag, { color: palette.textSecondary }]}
-                >
-                  {reasoningLabel}
-                </Text>
-              </Pressable>
-              {(usedTokens > 0 || contextPct > 0) && (
+            <View style={styles.toolRow}>
+              <View style={styles.actionLeft}>
                 <Pressable
-                  style={styles.statsLine}
-                  onPress={() => setContextOpen(true)}
+                  style={({ pressed }) => [
+                    styles.plusButton,
+                    { backgroundColor: palette.surfaceMuted },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={() => setSheet("commands")}
+                  accessibilityLabel="更多功能"
                 >
-                  <Svg width={18} height={18} viewBox="0 0 20 20">
-                    <Circle
-                      cx="10"
-                      cy="10"
-                      r={R}
-                      stroke={palette.border}
-                      strokeWidth="2.5"
-                      fill="none"
-                    />
-                    <Circle
-                      cx="10"
-                      cy="10"
-                      r={R}
-                      stroke={
-                        contextPct > 0.9 ? palette.warning : palette.brand
-                      }
-                      strokeWidth="2.5"
-                      fill="none"
-                      strokeDasharray={`${CIRC * contextPct} ${CIRC}`}
-                      strokeLinecap="round"
-                      transform="rotate(-90 10 10)"
-                    />
-                  </Svg>
-
-                  {!isMdDown && (
-                    <>
-                      <Text
-                        style={[
-                          styles.statsText,
-                          {
-                            color:
-                              contextPct > 0.9
-                                ? palette.warning
-                                : palette.textSecondary,
-                          },
-                        ]}
-                      >
-                        {Math.round(contextPct * 100)}% 上下文
-                      </Text>
-                      <Text
-                        style={[
-                          styles.statsText,
-                          { color: palette.textSecondary },
-                        ]}
-                      >
-                        {usedTokens > 0 ? ` · ${compact(usedTokens)} tok` : ""}
-                      </Text>
-                    </>
-                  )}
+                  <AppIcon name="plus" color={palette.text} size={16} />
                 </Pressable>
-              )}
-              <SendButton canSend={canSend} onPress={() => void submit()} />
+                <ToolPill
+                  icon={currentPerm.icon}
+                  label={permissionLabel}
+                  danger={currentPerm.danger === true}
+                  onPress={() => setSheet("permission")}
+                />
+                {/* 模型 + 思考档合并入口：点开 ModelSheet 一处选齐 */}
+                <ToolPill
+                  icon="sparkles"
+                  label={modelPillLabel}
+                  active={isNew && reasoning !== "off"}
+                  onPress={() => setSheet("model")}
+                />
+              </View>
+              <View style={styles.actionRight}>
+                {showStop ? (
+                  <StopButton onPress={() => void stopTurn()} />
+                ) : (
+                  <SendButton canSend={canSend} onPress={() => void submit()} />
+                )}
+              </View>
             </View>
           </View>
-        </View>
-      }
+        )}
+
+        {/* 卡下信息带（仅 session）：右 = 上下文/速率/排队（→用量 Sheet）。
+            模型入口已并入卡内工具行的模型 pill */}
+        {!isNew && (usedTokens > 0 || pendingQueue.length > 0) && (
+          <View style={[styles.infoLine, styles.infoLineEnd]}>
+            <Pressable
+              style={styles.infoSeg}
+              onPress={() => setContextOpen(true)}
+              hitSlop={4}
+            >
+              <ContextDot pct={contextPct} />
+              <Text
+                style={[
+                  styles.infoText,
+                  {
+                    color:
+                      contextPct > 0.9
+                        ? palette.warning
+                        : palette.textSecondary,
+                  },
+                ]}
+                numberOfLines={1}
+              >
+                {Math.round(contextPct * 100)}%
+                {tokPerSec > 0
+                  ? ` · ${tokPerSec} tok/s`
+                  : usedTokens > 0
+                    ? ` · ${compact(usedTokens)} tok`
+                    : ""}
+                {pendingQueue.length > 0
+                  ? ` · 已排 ${pendingQueue.length} 条`
+                  : ""}
+              </Text>
+            </Pressable>
+          </View>
+        )}
+      </KeyboardAvoidingView>
 
       {/* Sheets */}
       <CommandPaletteSheet
         visible={sheet === "commands"}
         onClose={() => setSheet(null)}
         onCommand={runCommand}
+        onPickImage={pickImage}
       />
       <WorkerSheet
         visible={sheet === "worker"}
@@ -725,6 +815,7 @@ export function Composer(
         models={models}
         modelFull={modelFull}
         reasoning={reasoning}
+        showReasoning={isNew}
         onPickModel={(m) => {
           setDefaults({ provider: "deepseek-official", model: m.id });
           showToast(`已选模型 ${m.id}`, "info");
@@ -865,9 +956,10 @@ function SendButton(
       ]}
       onPress={props.onPress}
       disabled={!props.canSend}
+      accessibilityLabel="发送"
     >
       <AppIcon
-        name="chevron-right"
+        name="arrow-up"
         color={props.canSend ? "#FFFFFF" : palette.textSecondary}
         size={18}
       />
@@ -875,44 +967,114 @@ function SendButton(
   );
 }
 
-function Chip(
+/** 运行中的停止按钮（红圆 + 白色实心方块），只停当前 turn。 */
+function StopButton(
+  props: Readonly<{ onPress: () => void }>,
+): React.JSX.Element {
+  const { palette } = usePreferences();
+  return (
+    <Pressable
+      style={({ pressed }) => [
+        styles.send,
+        { backgroundColor: palette.error },
+        pressed && { transform: [{ scale: 0.92 }] },
+      ]}
+      onPress={props.onPress}
+      accessibilityLabel="停止"
+    >
+      <View style={styles.stopSquare} />
+    </Pressable>
+  );
+}
+
+/** 工具行 pill 开关：inactive 灰面 / active 品牌软底；danger 用警示红。 */
+function ToolPill(props: Readonly<{
+  icon: IconName;
+  label: string;
+  active?: boolean;
+  danger?: boolean;
+  onPress: () => void;
+}>): React.JSX.Element {
+  const { palette } = usePreferences();
+  const color =
+    props.danger === true
+      ? palette.error
+      : props.active === true
+        ? palette.brand
+        : palette.text;
+  return (
+    <Pressable
+      style={({ pressed }) => [
+        styles.toolPill,
+        {
+          backgroundColor:
+            props.active === true ? palette.brandSoft : palette.surfaceMuted,
+        },
+        pressed && { opacity: 0.75 },
+      ]}
+      onPress={props.onPress}
+      accessibilityRole="button"
+    >
+      <AppIcon name={props.icon} color={color} size={13} />
+      <Text style={[styles.toolPillText, { color }]} numberOfLines={1}>
+        {props.label}
+      </Text>
+    </Pressable>
+  );
+}
+
+/** 卡外 Ghost 选择器（new 模式）：透明底、次级色，视觉降噪。 */
+function GhostChip(
   props: Readonly<{ icon: IconName; label: string; onPress: () => void }>,
 ): React.JSX.Element {
   const { palette } = usePreferences();
   return (
     <Pressable
       style={({ pressed }) => [
-        styles.chip,
-        { backgroundColor: palette.surfaceMuted },
-        pressed && { opacity: 0.75 },
+        styles.ghostChip,
+        pressed && { backgroundColor: palette.surfaceMuted },
       ]}
       onPress={props.onPress}
     >
-      <AppIcon name={props.icon} color={palette.textSecondary} size={14} />
+      <AppIcon name={props.icon} color={palette.textSecondary} size={12} />
       <Text
-        style={[styles.chipText, { color: palette.text }]}
+        style={[styles.ghostChipText, { color: palette.textSecondary }]}
         numberOfLines={1}
       >
         {props.label}
       </Text>
-      <Text style={[styles.chev, { color: palette.textSecondary }]}>▾</Text>
+      <AppIcon name="chevron-down" color={palette.textSecondary} size={10} />
     </Pressable>
   );
 }
 
-function DockButton(
-  props: Readonly<{ label: string; onPress: () => void }>,
-): React.JSX.Element {
+/** InfoLine 的迷你上下文环（12px）。 */
+function ContextDot(props: Readonly<{ pct: number }>): React.JSX.Element {
   const { palette } = usePreferences();
+  const r = 7;
+  const circ = 2 * Math.PI * r;
   return (
-    <Pressable
-      style={({ pressed }) => [styles.dockButton, pressed && { opacity: 0.6 }]}
-      onPress={props.onPress}
-    >
-      <Text style={[styles.dockText, { color: palette.textSecondary }]}>
-        {props.label}
-      </Text>
-    </Pressable>
+    <Svg width={13} height={13} viewBox="0 0 20 20">
+      <Circle
+        cx="10"
+        cy="10"
+        r={r}
+        stroke={palette.border}
+        strokeWidth="2.5"
+        fill="none"
+      />
+      <Circle
+        cx="10"
+        cy="10"
+        r={r}
+        stroke={props.pct > 0.9 ? palette.warning : palette.brand}
+        strokeWidth="2.5"
+        fill="none"
+        strokeDasharray={`${circ * props.pct} ${circ}`}
+        strokeLinecap="round"
+        transform="rotate(-90 10 10)"
+      />
+    </Svg>
   );
 }
 
@@ -985,6 +1147,7 @@ function WorkerSheet(
       onClose={props.onClose}
       scrollable
       snapPoints={["50%", "85%"]}
+      // 默认半屏（1/2），可拖到 85%
     >
       {props.workers.map((worker) => {
         const active = worker.workerId === props.activeWorkerId;
@@ -1038,7 +1201,8 @@ function ProjectSheet(
       title="选择工作区项目"
       onClose={props.onClose}
       scrollable
-      snapPoints={["50%", "85%"]}
+      snapPoints={["66%", "92%"]}
+      // 默认 2/3 屏，可拖到 92%
     >
       {props.workspaces.length === 0 && (
         <Text style={[styles.modeDesc, { color: palette.textSecondary }]}>
@@ -1252,6 +1416,7 @@ function ModelSheet(
     }[];
     modelFull: string;
     reasoning: string;
+    showReasoning: boolean;
     onPickModel: (m: { id: string }) => void;
     onPickReasoning: (id: string) => void;
   }>,
@@ -1265,6 +1430,12 @@ function ModelSheet(
       scrollable
       snapPoints={["70%", "95%"]}
     >
+      {!props.showReasoning && (
+        <Text style={[styles.sheetHint, { color: palette.textSecondary }]}>
+          模型与推理档将于下次新建会话时生效
+        </Text>
+      )}
+      {props.showReasoning && (
       <View
         style={[styles.reasonBox, { backgroundColor: palette.surfaceMuted }]}
       >
@@ -1307,6 +1478,7 @@ function ModelSheet(
           {REASONING.find((r) => r.id === props.reasoning)?.desc}
         </Text>
       </View>
+      )}
       {props.models.map((m) => {
         const selected = props.modelFull === m.id;
         return (
@@ -1368,6 +1540,8 @@ function ContextUsageSheet(
   } | null>(null);
   const activeSessionId = useDshStore((s) => s.activeSessionId);
   const sessionContext = useDshStore((s) => s.sessionContext);
+  const stats = useDshStore((s) => s.sessionView.stats);
+  const totalUsage = useDshStore((s) => s.sessionView.totalUsage);
   useEffect(() => {
     if (props.visible && activeSessionId !== null)
       void sessionContext(activeSessionId).then(setCtx);
@@ -1441,6 +1615,81 @@ function ContextUsageSheet(
               ~{fmt(ctx.messageTokens)}
             </Text>
           </View>
+          {/* 运行统计（原底部 StatsLine 收纳于此） */}
+          {stats.turns > 0 && (
+            <>
+              <View style={[styles.ctxRow, { borderTopColor: palette.border }]}>
+                <Text style={[styles.ctxLabel, { color: palette.textSecondary }]}>
+                  本会话运行
+                </Text>
+                <Text
+                  style={[
+                    styles.ctxValue,
+                    { color: palette.text, fontFamily: "Menlo" },
+                  ]}
+                >
+                  {stats.turns} 轮 · {stats.steps} 步
+                </Text>
+              </View>
+              <View style={[styles.ctxRow, { borderTopColor: palette.border }]}>
+                <Text style={[styles.ctxLabel, { color: palette.textSecondary }]}>
+                  耗时 LLM / 工具
+                </Text>
+                <Text
+                  style={[
+                    styles.ctxValue,
+                    { color: palette.text, fontFamily: "Menlo" },
+                  ]}
+                >
+                  {fmtMs(stats.llmMs)} / {fmtMs(stats.toolMs)}
+                </Text>
+              </View>
+              <View style={[styles.ctxRow, { borderTopColor: palette.border }]}>
+                <Text style={[styles.ctxLabel, { color: palette.textSecondary }]}>
+                  首 token / 速率
+                </Text>
+                <Text
+                  style={[
+                    styles.ctxValue,
+                    { color: palette.text, fontFamily: "Menlo" },
+                  ]}
+                >
+                  {fmtMs(stats.ttftSteps > 0 ? stats.ttftMs / stats.ttftSteps : 0)}
+                  {stats.decodeMs > 0
+                    ? ` · ${Math.round((stats.decodeTokens / stats.decodeMs) * 1000)} tok/s`
+                    : ""}
+                </Text>
+              </View>
+              {Number.isFinite(stats.cacheHitPct) && (
+                <View style={[styles.ctxRow, { borderTopColor: palette.border }]}>
+                  <Text style={[styles.ctxLabel, { color: palette.textSecondary }]}>
+                    缓存命中
+                  </Text>
+                  <Text
+                    style={[
+                      styles.ctxValue,
+                      { color: palette.text, fontFamily: "Menlo" },
+                    ]}
+                  >
+                    {Math.round(stats.cacheHitPct)}%
+                  </Text>
+                </View>
+              )}
+              <View style={[styles.ctxRow, { borderTopColor: palette.border }]}>
+                <Text style={[styles.ctxLabel, { color: palette.textSecondary }]}>
+                  累计 tokens (in/out)
+                </Text>
+                <Text
+                  style={[
+                    styles.ctxValue,
+                    { color: palette.text, fontFamily: "Menlo" },
+                  ]}
+                >
+                  {fmt(totalUsage.input)} / {fmt(totalUsage.output)}
+                </Text>
+              </View>
+            </>
+          )}
         </>
       )}
     </Sheet>
@@ -1454,51 +1703,105 @@ function compact(n: number): string {
   return String(n);
 }
 
+/** ms → 320ms / 5.2s / 1m8s（运行统计用）。 */
+function fmtMs(n: number): string {
+  if (n <= 0) return "—";
+  const s = n / 1000;
+  return s >= 60
+    ? `${Math.floor(s / 60)}m${Math.round(s % 60)}s`
+    : `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
+}
+
 const styles = StyleSheet.create({
-  container: {
-    alignItems: "center",
-    justifyContent: "center",
-    padding: spacing.x4,
-  },
+  rootNew: { flex: 1 },
   containerSession: {
     justifyContent: "flex-end",
-    paddingTop: spacing.x3,
   },
-  selectorRow: {
-    flexDirection: "row",
-    gap: spacing.x2,
-    marginBottom: spacing.x3,
-    alignSelf: "stretch",
+  kavCenter: {
+    flex: 1,
     justifyContent: "center",
-    flexWrap: "nowrap",
-  },
-  dockRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.x3,
+    alignItems: "stretch",
     paddingHorizontal: spacing.x4,
-    paddingBottom: spacing.x2,
-    flexWrap: "wrap",
   },
-  dockButton: { paddingVertical: 2 },
-  dockText: { fontSize: 13 },
-  chip: {
+  kavDock: {
+    // 注意：不能加 flex:1（flexBasis 0 会在 auto 高度的根容器里被量成 0，
+    // 导致 Dock/InfoLine 被推出屏幕）；session 根容器本身贴底自适应。
+    // 底部安全区 padding 由渲染处按 insets 内联注入。
+    justifyContent: "flex-end",
+    paddingHorizontal: spacing.x3,
+  },
+  hello: {
+    alignSelf: "stretch",
+    paddingHorizontal: spacing.x1,
+    marginBottom: spacing.x6,
+  },
+  helloTitle: {
+    fontSize: 25,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    marginBottom: 15,
+  },
+  helloChips: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.x2,
+  },
+  helloChip: {
+    borderRadius: radii.round,
+    paddingVertical: 9,
+    paddingHorizontal: 15,
+    shadowColor: "#0A0C10",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  helloChipText: { fontSize: 13, fontWeight: "500" },
+  ghostRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.x1,
     paddingHorizontal: spacing.x3,
-    paddingVertical: spacing.x2,
-    borderRadius: radii.control,
+    marginBottom: spacing.x2,
+    alignSelf: "stretch",
   },
-  chipText: { fontSize: 13, maxWidth: 130 },
-  chev: { fontSize: 11 },
+  ghostChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 5,
+    borderRadius: radii.round,
+  },
+  ghostChipText: { fontSize: 12, maxWidth: 130 },
   card: {
     alignSelf: "stretch",
-    borderRadius: 24,
-    borderWidth: 1,
+    borderRadius: 26,
     padding: spacing.x3,
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#0A0C10",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.07,
+    shadowRadius: 14,
+    elevation: 3,
   },
-  textAreaWrap: { minHeight: 80 },
+  dock: {
+    alignSelf: "stretch",
+    borderRadius: radii.round,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.x2,
+    paddingVertical: 7,
+    paddingLeft: 9,
+    paddingRight: 7,
+    shadowColor: "#0A0C10",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.07,
+    shadowRadius: 14,
+    elevation: 3,
+  },
+  dockPlaceholder: { flex: 1, fontSize: 15 },
+  textAreaWrap: { minHeight: 44 },
   overlay: {
     position: "absolute",
     top: 0,
@@ -1512,22 +1815,21 @@ const styles = StyleSheet.create({
   cmdHint: { fontSize: 15 },
   cmdBody: { fontSize: 15 },
   textInput: {
-    fontSize: 15,
-    minHeight: 80,
+    fontSize: 16,
+    minHeight: 44,
+    maxHeight: 144,
     padding: 0,
     textAlignVertical: "top",
   },
-  actionBar: {
+  toolRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: spacing.x2,
-    marginTop: spacing.x1,
+    paddingTop: spacing.x1,
   },
   thumbRow: {
     paddingHorizontal: spacing.x2,
-    paddingTop: spacing.x1,
+    paddingTop: spacing.x2,
   },
   thumbWrap: { position: "relative" },
   thumb: {
@@ -1564,52 +1866,51 @@ const styles = StyleSheet.create({
   },
   actionRight: { flexDirection: "row", alignItems: "center", gap: spacing.x2 },
   plusButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  actionChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: spacing.x2,
-    paddingVertical: spacing.x1,
-    borderRadius: radii.small,
-  },
-  actionChipText: { fontSize: 12, fontWeight: "500", maxWidth: 140 },
-  reasonTag: { fontSize: 12 },
-  send: {
     width: 32,
     height: 32,
     borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
   },
-  suggestBox: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radii.card,
-    marginBottom: spacing.x1,
-    overflow: "hidden",
-  },
-  suggestRow: {
+  toolPill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.x2,
-    paddingHorizontal: spacing.x3,
-    paddingVertical: spacing.x2,
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radii.round,
   },
-  suggestName: { fontSize: 13 },
-  suggestDesc: { flex: 1, fontSize: 12 },
-  statsLine: {
+  toolPillText: { fontSize: 13, fontWeight: "500" },
+  infoLine: {
     flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.x3,
+    paddingHorizontal: 20,
+    paddingTop: 6,
+    alignSelf: "stretch",
+  },
+  infoLineEnd: { justifyContent: "flex-end" },
+  infoSeg: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    minWidth: 0,
+  },
+  infoText: { fontSize: 11 },
+  send: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: "center",
     justifyContent: "center",
-    gap: spacing.x1,
-    paddingVertical: spacing.x1,
   },
-  statsText: { fontSize: 11 },
+  stopSquare: {
+    width: 12,
+    height: 12,
+    borderRadius: 3,
+    backgroundColor: "#FFFFFF",
+  },
   sheetHint: { fontSize: 12, paddingBottom: spacing.x2 },
   sheetDivider: { height: StyleSheet.hairlineWidth, marginTop: spacing.x2 },
   addRow: {
@@ -1668,7 +1969,6 @@ const styles = StyleSheet.create({
     marginBottom: spacing.x2,
   },
   optionText: { fontSize: 15, flex: 1 },
-  optionSub: { fontSize: 11, marginTop: 2 },
   reasonBox: {
     borderRadius: 20,
     padding: spacing.x3,

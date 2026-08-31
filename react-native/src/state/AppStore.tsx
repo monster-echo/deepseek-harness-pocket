@@ -215,6 +215,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   });
   useEffect(() => {
     registerSessionExpiredHandler(() => {
+      console.log('[AUTH-DEBUG] sessionExpiredHandler: clearing user + storage');
       setUser(null);
       void clearAuthStorage();
       if (navigationRef.isReady()) {

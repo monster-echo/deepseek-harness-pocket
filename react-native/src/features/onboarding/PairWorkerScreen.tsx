@@ -68,7 +68,7 @@ export function PairWorkerScreen() {
         })}
       </ScrollView>
 
-      {/* 添加电脑：2/3 底部弹层 */}
+      {/* 添加电脑：2/3 底部弹层；scrollable 保证键盘弹出后表单可滚动到可视区 */}
       <Sheet visible={showAdd} title="添加电脑" onClose={() => setShowAdd(false)} scrollable snapPoints={['66%', '92%']}>
         <AddWorkerForm onDone={() => setShowAdd(false)} />
       </Sheet>

@@ -21,6 +21,7 @@ import SyntaxHighlighter from "react-native-syntax-highlighter";
 import { docco } from "react-syntax-highlighter/styles/hljs";
 import atomOneDark from "react-syntax-highlighter/styles/hljs/atom-one-dark";
 import * as Clipboard from "expo-clipboard";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { AppIcon, IconName } from "../../design-system/AppIcon";
 import { Sheet } from "../../design-system/Sheet";
 import { usePreferences } from "../../preferences/PreferencesProvider";
@@ -29,9 +30,6 @@ import { spacing, radii } from "../../theme/tokens";
 import type { AssistantBlock, TimelineItem, ToolStatus } from "./reducer";
 import { splitDsml, cutAtDsmlStart, type DsmlToolCall } from "./dsml";
 import { Composer } from "./Composer";
-
-const LOGO = require("../../../assets/brand/logo.png"); // eslint-disable-line @typescript-eslint/no-require-imports
-const LOGO_DARK = require("../../../assets/brand/logo-dark.png"); // eslint-disable-line @typescript-eslint/no-require-imports
 
 export function ConversationScreen() {
   const { palette } = usePreferences();
@@ -47,11 +45,10 @@ export function ConversationScreen() {
   }, [view.items.length]);
 
   if (activeSessionId === null) {
-    // 对齐 dsh Web 新建会话页：标题 + 选择工作区 + 功能条 + 大输入区（首条消息即建会话）
+    // 对齐 dsh Web 新建会话页：居中大输入区（首条消息即建会话）
     return (
       <View style={[styles.container, { backgroundColor: palette.background }]}>
         <View style={[styles.containerSession]}>
-          <NewSessionHeader />
           <Composer mode="new" />
         </View>
       </View>
@@ -61,6 +58,9 @@ export function ConversationScreen() {
   const pending = serverRequests[0];
 
   return (
+    /* 键盘避让：SDK 57 edge-to-edge 下 Android adjustResize 失效、iOS 无原生避让，
+       会话屏根部包 KAV（双平台 padding），保证 composer 始终在键盘上方 */
+    <KeyboardAvoidingView behavior="padding" style={styles.container}>
     <View style={[styles.container, { backgroundColor: palette.background }]}>
       {notice !== null && (
         <View style={[styles.notice, { backgroundColor: palette.warningSoft }]}>
@@ -96,31 +96,13 @@ export function ConversationScreen() {
       ) : (
         <Composer mode="session" />
       )}
-      {/* 底部累计统计行（对齐 dsh Web stats 行，置于输入区下方） */}
-      <StatsLine />
+      {/* 运行统计已收纳进 Composer 的上下文用量 Sheet */}
     </View>
+    </KeyboardAvoidingView>
   );
 }
 
 // ---------- 时间线行 ----------
-
-/** 新建会话首屏 header：Logo + 标题 + 预览版（页面级元素，不属于 Composer）。 */
-function NewSessionHeader(): React.JSX.Element {
-  const { palette, dark } = usePreferences();
-  return (
-    <View style={styles.titleRow}>
-      <Image
-        source={dark ? LOGO_DARK : LOGO}
-        style={styles.logo}
-        accessibilityLabel="掌鲸 DSH Pocket"
-      />
-      <Text style={[styles.title, { color: palette.text }]}>探索未至之境</Text>
-      <View style={[styles.badge, { backgroundColor: palette.brandSoft }]}>
-        <Text style={[styles.badgeText, { color: palette.brand }]}>预览版</Text>
-      </View>
-    </View>
-  );
-}
 
 function TimelineRow({
   item,
@@ -141,50 +123,6 @@ function TimelineRow({
 }
 
 /** 底部累计统计行（对齐 dsh Web stats：轮/步/LLM/工具/首token/tok/s/缓存/输入输出）。 */
-function StatsLine() {
-  const { palette } = usePreferences();
-  const stats = useDshStore((s) => s.sessionView.stats);
-  const totalUsage = useDshStore((s) => s.sessionView.totalUsage);
-  if (stats.turns === 0 && stats.steps === 0) return null;
-  const fmtMs = (n: number): string => {
-    if (n <= 0) return "—";
-    const s = n / 1000;
-    return s >= 60
-      ? `${Math.floor(s / 60)}m${Math.round(s % 60)}s`
-      : `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
-  };
-  const fmtTok = (n: number): string => {
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 10_000) return `${Math.round(n / 1_000)}K`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-    return String(n);
-  };
-  const avgTtft = stats.ttftSteps > 0 ? stats.ttftMs / stats.ttftSteps : 0;
-  const tokPerSec =
-    stats.decodeMs > 0
-      ? Math.round((stats.decodeTokens / stats.decodeMs) * 1000)
-      : 0;
-  const parts: string[] = [];
-  parts.push(`${stats.turns} 轮 ${stats.steps} 步`);
-  parts.push(
-    `LLM ${fmtMs(stats.llmMs)}${stats.toolMs > 0 ? ` 工具 ${fmtMs(stats.toolMs)}` : ""}`,
-  );
-  parts.push(
-    `首 token ${fmtMs(avgTtft)} ${tokPerSec > 0 ? `${tokPerSec}` : "—"} tok/s`,
-  );
-  if (Number.isFinite(stats.cacheHitPct))
-    parts.push(`缓存命中 ${Math.round(stats.cacheHitPct)}%`);
-  parts.push(`${fmtTok(totalUsage.input)} / ${fmtTok(totalUsage.output)}`);
-  return (
-    <Text
-      style={[styles.statsBar, { color: palette.textSecondary }]}
-      numberOfLines={2}
-    >
-      {parts.join(" ｜ ")}
-    </Text>
-  );
-}
-
 function UserRow({
   item,
   onLongPress,
@@ -997,31 +935,12 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
   },
-  titleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.x2,
-    paddingTop: spacing.x4,
-    marginBottom: spacing.x3,
-  },
-  logo: { width: 28, height: 28, borderRadius: 14 },
-  title: { fontSize: 22, fontWeight: "700" },
-  badge: { paddingHorizontal: spacing.x2, paddingVertical: 2, borderRadius: 6 },
-  badgeText: { fontSize: 11, fontWeight: "500" },
   empty: { flex: 1, alignItems: "center", justifyContent: "center" },
   emptyTitle: { fontSize: 15 },
   notice: {
     padding: spacing.x2,
     margin: spacing.x2,
     borderRadius: radii.control,
-  },
-  statsBar: {
-    fontSize: 11,
-    lineHeight: 15,
-    textAlign: "center",
-    paddingHorizontal: spacing.x3,
-    paddingVertical: spacing.x1,
   },
   noticeText: { fontSize: 13 },
   timeline: { flex: 1 },

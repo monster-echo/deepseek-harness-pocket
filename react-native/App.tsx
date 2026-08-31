@@ -1,9 +1,12 @@
 import React, { useCallback } from 'react';
-import { Platform, SafeAreaView } from 'react-native';
+import { Platform } from 'react-native';
 import * as ExpoSplashScreen from 'expo-splash-screen';
 import { NavigationContainer } from '@react-navigation/native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+// 注意：必须用 safe-area-context 的 SafeAreaView（RN 内置的在 Android 上是 no-op，
+// 且 SDK 57 edge-to-edge 下内容会画进状态栏/手势条）。
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { navigationRef } from './src/navigation/navigationRef';
@@ -52,9 +55,13 @@ function AppSurface() {
   useEntryIntents(openEntryRoute, resume);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+    <KeyboardProvider>
     <SafeAreaProvider>
       <BottomSheetModalProvider>
-      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]}>
+      <SafeAreaView
+        style={[styles.safeArea, { backgroundColor: palette.background }]}
+        edges={['top', 'bottom']}
+      >
         <NavigationContainer
           ref={navigationRef}
           onStateChange={() => {
@@ -71,6 +78,7 @@ function AppSurface() {
       </SafeAreaView>
       </BottomSheetModalProvider>
     </SafeAreaProvider>
+    </KeyboardProvider>
     </GestureHandlerRootView>
   );
 }

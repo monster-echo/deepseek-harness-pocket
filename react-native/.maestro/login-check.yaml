@@ -1,0 +1,19 @@
+appId: top.rwecho.dshcompanion
+name: login-check
+---
+- tapOn:
+    point: "50%, 32%"
+- inputText: "autotest-ui@dsh-pocket.dev"
+- hideKeyboard
+- tapOn:
+    point: "50%, 40%"
+- inputText: "AutoTest#2026dsh"
+- hideKeyboard
+- tapOn:
+    point: "24%, 87%"
+- tapOn:
+    point: "50%, 50%"
+- runScript:
+    file: sleep.js
+    env:
+      sleepMs: "4000"

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { colors, radii, spacing } from '../theme/tokens';
 import { AppIcon } from './AppIcon';
@@ -18,6 +19,7 @@ export function SelectField<T extends string | number>({
   onChange: (value: T) => void;
 }>) {
   const { palette } = usePreferences();
+  const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
   const selected = options.find((option) => option.value === value);
   return (
@@ -41,7 +43,16 @@ export function SelectField<T extends string | number>({
       </View>
       <Modal animationType="fade" transparent visible={open} onRequestClose={() => setOpen(false)}>
         <Pressable style={selectStyles.scrim} onPress={() => setOpen(false)}>
-          <View style={[selectStyles.sheet, { backgroundColor: palette.surface }]}>
+          <View
+            style={[
+              selectStyles.sheet,
+              {
+                backgroundColor: palette.surface,
+                // RN Modal 在全局 SafeAreaView 之外，底部自避手势条
+                paddingBottom: insets.bottom + spacing.x4,
+              },
+            ]}
+          >
             <Text style={[selectStyles.title, { color: palette.text }]}>{label}</Text>
             {options.map((option) => (
               <Pressable
@@ -88,7 +99,6 @@ const selectStyles = StyleSheet.create({
     borderTopLeftRadius: radii.sheet,
     borderTopRightRadius: radii.sheet,
     padding: spacing.x4,
-    paddingBottom: spacing.x8,
   },
   title: { fontSize: 18, fontWeight: '700', padding: spacing.x3 },
   option: {

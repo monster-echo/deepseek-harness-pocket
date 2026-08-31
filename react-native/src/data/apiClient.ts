@@ -314,7 +314,11 @@ async function sendRequest<T>(
   } catch {
     throw serviceUnavailableError();
   }
+  if (response.status === 401 && !retried) {
+    console.log(`[AUTH-DEBUG] 401 on ${path}, attempting refresh (retried=${retried})`);
+  }
   if (response.status === 401 && !retried && await refreshSession()) {
+    console.log(`[AUTH-DEBUG] refresh ok, retrying ${path}`);
     return sendRequest<T>(path, options, true);
   }
   const body = await parseResponse<T>(response);
@@ -325,7 +329,10 @@ async function sendRequest<T>(
       retryable: response.status >= 500,
       traceId: 'local',
     };
-    if (response.status === 401 && !retried) sessionExpiredHandler?.();
+    if (response.status === 401 && !retried) {
+      console.log('[AUTH-DEBUG] refresh failed → firing sessionExpiredHandler');
+      sessionExpiredHandler?.();
+    }
     throw new ApiClientError(
       error.code,
       specificErrorMessage(error.message, error.fieldErrors),
@@ -358,6 +365,7 @@ async function refreshSession(): Promise<boolean> {
 
 async function performRefresh(): Promise<boolean> {
   const refreshToken = await refreshTokenReader();
+  console.log(`[AUTH-DEBUG] performRefresh: rt=${refreshToken ? `len:${refreshToken.length}` : 'NULL'}`);
   if (!refreshToken) return false;
   try {
     const response = await fetch(`${getApiBase()}/api/v1/auth/refresh`, {
@@ -365,14 +373,20 @@ async function performRefresh(): Promise<boolean> {
       headers: { ...clientHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
     });
+    console.log(`[AUTH-DEBUG] performRefresh: status=${response.status}`);
     if (!response.ok) return false;
     const body = await response.json() as Envelope<AuthSession>;
     const data = body?.data;
-    if (!data?.token || !data?.refreshToken) return false;
+    if (!data?.token || !data?.refreshToken) {
+      console.log(`[AUTH-DEBUG] performRefresh: bad shape keys=${data ? Object.keys(data).join(',') : 'null'}`);
+      return false;
+    }
     await sessionTokenWriter(data.token);
     await refreshTokenWriter(data.refreshToken);
+    console.log('[AUTH-DEBUG] performRefresh: OK, new pair saved');
     return true;
-  } catch {
+  } catch (e) {
+    console.log(`[AUTH-DEBUG] performRefresh: threw ${e instanceof Error ? e.message : String(e)}`);
     return false;
   }
 }

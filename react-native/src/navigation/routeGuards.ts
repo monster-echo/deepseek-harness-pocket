@@ -13,6 +13,7 @@ export type RouteDecision = Readonly<{
 }>;
 
 const protectedRoutes = new Set<AppRoute>([
+  'dsh.pair',
   'profile.edit', 'profile.statistics', 'profile.invite', 'profile.coupons',
   'membership.checkout', 'membership.orders', 'notifications.center',
   'settings.accountSecurity', 'settings.devices', 'settings.deleteAccount',

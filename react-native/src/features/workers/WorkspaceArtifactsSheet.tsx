@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { WebView } from "react-native-webview";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppIcon } from "../../design-system/AppIcon";
 import { Sheet } from "../../design-system/Sheet";
 import { usePreferences } from "../../preferences/PreferencesProvider";
@@ -47,6 +48,7 @@ export function WorkspaceArtifactsSheet({
   onClose: () => void
 }>) {
   const { palette } = usePreferences();
+  const insets = useSafeAreaInsets();
   const listEntries = useDshStore((s) => s.listEntries);
   const previewFile = useDshStore((s) => s.previewFile);
   const [entries, setEntries] = useState<readonly Entry[]>([]);
@@ -181,7 +183,17 @@ export function WorkspaceArtifactsSheet({
         animationType="slide"
         onRequestClose={() => setPreview(null)}
       >
-        <View style={[styles.previewShell, { backgroundColor: palette.background }]}>
+        <View
+          style={[
+            styles.previewShell,
+            {
+              backgroundColor: palette.background,
+              // RN Modal 渲染在全局 SafeAreaView 之外，需自行避让刘海/手势条
+              paddingTop: insets.top + spacing.x1,
+              paddingBottom: insets.bottom,
+            },
+          ]}
+        >
           <View
             style={[
               styles.previewBar,
@@ -244,7 +256,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.x1,
   },
   rowName: { flex: 1, fontSize: 14 },
-  previewShell: { flex: 1, paddingTop: spacing.x6 },
+  previewShell: { flex: 1 },
   previewBar: {
     flexDirection: "row",
     alignItems: "center",

@@ -104,7 +104,7 @@ export function HomeShellScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
-      {/* 顶栏 */}
+      {/* 顶栏（状态栏高度由 App.tsx 全局 SafeAreaView 处理，这里只留呼吸空间） */}
       <View
         style={[
           styles.topBar,
@@ -151,6 +151,16 @@ export function HomeShellScreen() {
             </View>
           )}
         </View>
+        {/* 新建会话页：预览版 badge 上移至顶栏右侧（原页内 NewSessionHeader 已移除） */}
+        {hasWorker && activeSessionId === null && (
+          <View
+            style={[styles.verBadge, { backgroundColor: palette.brandSoft }]}
+          >
+            <Text style={[styles.verBadgeText, { color: palette.brand }]}>
+              预览版
+            </Text>
+          </View>
+        )}
         {activeSessionId !== null && hasWorker && (
           <Pressable
             style={styles.menuButton}
@@ -234,11 +244,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.x2,
     paddingHorizontal: spacing.x3,
-    paddingTop: spacing.x6,
+    // 状态栏高度由全局 SafeAreaView 处理，这里只留小呼吸空间
+    paddingTop: spacing.x2,
     paddingBottom: spacing.x2,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   menuButton: { padding: spacing.x1 },
+  verBadge: {
+    paddingHorizontal: spacing.x2,
+    paddingVertical: 3,
+    borderRadius: 7,
+  },
+  verBadgeText: { fontSize: 11, fontWeight: "600" },
   topTitle: { flex: 1 },
   brandRow: { flexDirection: "row", alignItems: "center", gap: spacing.x2 },
   brandLogo: { width: 22, height: 22, borderRadius: 11 },

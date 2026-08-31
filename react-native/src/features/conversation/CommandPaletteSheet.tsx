@@ -10,8 +10,9 @@ import { usePreferences } from '../../preferences/PreferencesProvider';
 import { useDshStore } from '../../state/dshStore';
 import { radii, spacing } from '../../theme/tokens';
 
-export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose: () => void; onCommand: (name: string) => void }>): React.JSX.Element {
+export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose: () => void; onCommand: (name: string) => void; onPickImage?: () => void }>): React.JSX.Element {
   const { palette } = usePreferences()
+  const onPickImage = props.onPickImage
   const [commands, setCommands] = useState<readonly { name: string; description: string }[]>([])
   const listCommands = useDshStore((s) => s.listCommands)
   const notice = useDshStore((s) => s.notice)
@@ -29,6 +30,21 @@ export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose:
   return (
     <Sheet visible={props.visible} title="快捷命令" onClose={props.onClose} scrollable snapPoints={['50%', '85%']}>
       <ScrollView style={styles.list}>
+        {onPickImage !== undefined && (
+          <Pressable
+            style={({ pressed }) => [styles.row, { borderColor: palette.border }, pressed && { backgroundColor: palette.surfaceMuted }]}
+            onPress={() => {
+              props.onClose()
+              onPickImage()
+            }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.name, { color: palette.text }]}>添加图片</Text>
+              <Text style={[styles.desc, { color: palette.textSecondary }]} numberOfLines={1}>从相册选取，随消息发送</Text>
+            </View>
+            <AppIcon name="paperclip" color={palette.textSecondary} size={14} />
+          </Pressable>
+        )}
         {commands.map((cmd) => (
           <Pressable
             key={cmd.name}

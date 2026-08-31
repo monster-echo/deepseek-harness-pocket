@@ -56,8 +56,12 @@ final runtimeServiceProvider = Provider<DshRuntimeService>((ref) => DshRuntimeSe
 final autostartServiceProvider = Provider<AutostartService>((ref) => AutostartService());
 final updaterServiceProvider = Provider<UpdaterService>((ref) => UpdaterService());
 
-/// sidecar 就绪状态（缺失时 UI 顶部横幅提示）。
-final sidecarReadyProvider = Provider<bool>((ref) => AppPaths.sidecarReady);
+/// sidecar 就绪状态（缺失时 UI 顶部横幅提示）；
+/// 跟随状态轮询复查，应用文件恢复后横幅自行消失。
+final sidecarReadyProvider = Provider<bool>((ref) {
+  ref.watch(workerStatusProvider);
+  return AppPaths.sidecarReady;
+});
 
 // ---------- worker 状态轮询 ----------
 
@@ -65,7 +69,7 @@ final workerStatusProvider = StreamProvider<WorkerStatus>((ref) async* {
   final svc = ref.watch(workerServiceProvider);
   while (true) {
     try {
-      yield await svc.status();
+      yield await svc.status(fallbackPort: ref.read(settingsProvider).port);
     } catch (_) {
       yield const WorkerStatus.unknown();
     }

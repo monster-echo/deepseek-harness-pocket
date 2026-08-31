@@ -27,13 +27,54 @@ class WorkerService {
     return args;
   }
 
-  Future<WorkerStatus> status() async {
-    final res = await Proc.dshc(['status', '--json'], timeout: const Duration(seconds: 20));
-    if (!res.ok) return const WorkerStatus.unknown();
+  Future<WorkerStatus> status({int? fallbackPort}) async {
     try {
-      return WorkerStatus.fromJson(jsonDecode(res.stdout) as Map<String, dynamic>);
+      final res = await Proc.dshc(['status', '--json'], timeout: const Duration(seconds: 20));
+      if (!res.ok) return const WorkerStatus.unknown();
+      try {
+        return WorkerStatus.fromJson(jsonDecode(res.stdout) as Map<String, dynamic>);
+      } catch (_) {
+        return const WorkerStatus.unknown();
+      }
+    } on SidecarMissingException {
+      // 查询工具不可用 ≠ worker 停了：降级用 run.json + 本地健康检查，
+      // 避免把「活着的服务」误报成「dsh 未加载」吓到用户。
+      return _fallbackStatus(fallbackPort);
+    }
+  }
+
+  /// 降级探测：读 run.json（dshc status 的文件版），再用 /mobile/health 确认真活着。
+  Future<WorkerStatus> _fallbackStatus(int? port) async {
+    RunInfo? run;
+    try {
+      final file = File(AppPaths.runFile);
+      if (file.existsSync()) {
+        run = RunInfo.fromJson(jsonDecode(file.readAsStringSync()) as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    // run.json 可能是残留（daemon 已崩），健康检查过了才算运行中
+    if (port == null || !await _healthOk(port)) return const WorkerStatus.unknown();
+    return WorkerStatus(
+      running: true,
+      pid: (run?.pid ?? 0) > 0 ? run!.pid : null,
+      run: run,
+      stateFile: '',
+      logFile: AppPaths.workerLogFile,
+      reachable: true,
+    );
+  }
+
+  Future<bool> _healthOk(int port) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final req = await client.getUrl(Uri.parse('http://127.0.0.1:$port/mobile/health'));
+      final res = await req.close();
+      await res.drain<void>();
+      return res.statusCode == 200;
     } catch (_) {
-      return const WorkerStatus.unknown();
+      return false;
+    } finally {
+      client.close(force: true);
     }
   }
 

@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:path/path.dart' as p;
 
 import 'paths.dart';
@@ -47,8 +48,10 @@ class Proc {
   static void ensureSidecar() {
     if (!AppPaths.sidecarReady) {
       throw SidecarMissingException(
-        '内置 node sidecar 缺失：${AppPaths.sidecarRoot}\n'
-        '开发态请先运行 desktop/tool/build-sidecar.sh <target>',
+        kReleaseMode
+            ? '应用文件不完整，Worker 功能不可用。请重新安装 DSH Pocket Worker。'
+            : '内置 node sidecar 缺失：${AppPaths.sidecarRoot}\n'
+                '开发态请先运行 desktop/tool/build-sidecar.sh <target>',
       );
     }
   }

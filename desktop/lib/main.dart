@@ -51,7 +51,8 @@ Future<void> _bootstrap(ProviderContainer container) async {
   final settings = container.read(settingsProvider);
   await Future<void>.delayed(const Duration(milliseconds: 800));
   try {
-    final st = await container.read(workerServiceProvider).status();
+    final st =
+        await container.read(workerServiceProvider).status(fallbackPort: settings.port);
     if (!st.running) {
       await container.read(workerServiceProvider).start(settings);
     }

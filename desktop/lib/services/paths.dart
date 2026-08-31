@@ -18,6 +18,9 @@ class AppPaths {
 
   static String get workerLogFile => p.join(pocketHome, 'dshc.log');
 
+  /// supervisor 运行态文件（dshc status 的文件版，供降级探测）。
+  static String get runFile => p.join(pocketHome, 'run.json');
+
   /// 托管的 dsh 运行时根目录（应用管理的多版本）。
   static String get dshRuntimesDir => p.join(pocketHome, 'runtimes', 'dsh');
 

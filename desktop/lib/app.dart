@@ -1,6 +1,7 @@
 /// 应用外壳：主题 + 底部导航 + sidecar 缺失横幅 + 关闭到托盘。
 library;
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
@@ -96,11 +97,13 @@ class _SidecarBanner extends StatelessWidget {
         dense: true,
         leading: Icon(Icons.warning_amber_rounded, color: Theme.of(context).colorScheme.onErrorContainer),
         title: Text(
-          '内置 node sidecar 缺失，Worker 功能不可用',
+          '应用文件不完整，Worker 功能不可用',
           style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer, fontSize: 13),
         ),
         subtitle: Text(
-          '开发态先运行 desktop/tool/build-sidecar.sh；正式安装包不应出现此提示',
+          kReleaseMode
+              ? '请重新安装 DSH Pocket Worker 后再试'
+              : '开发态先运行 desktop/tool/build-sidecar.sh；正式安装包不应出现此提示',
           style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer, fontSize: 11),
         ),
       ),

@@ -2,7 +2,7 @@
  * 快捷命令 Sheet：单层命令列表，点按即以 /name 直接发送（免模型回合）。
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Sheet } from '../../design-system/Sheet';
 import { AppIcon } from '../../design-system/AppIcon';
@@ -11,7 +11,8 @@ import { useDshStore } from '../../state/dshStore';
 import { radii, spacing } from '../../theme/tokens';
 
 export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose: () => void; onCommand: (name: string) => void; onPickImage?: () => void }>): React.JSX.Element {
-  const { palette } = usePreferences()
+  const { palette, textScale } = usePreferences()
+  styles = useMemo(() => makeStyles(textScale), [textScale])
   const onPickImage = props.onPickImage
   const [commands, setCommands] = useState<readonly { name: string; description: string }[]>([])
   const listCommands = useDshStore((s) => s.listCommands)
@@ -68,10 +69,13 @@ export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose:
   )
 }
 
-const styles = StyleSheet.create({
-  list: { maxHeight: 380 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, marginBottom: spacing.x2 },
-  name: { fontSize: 14, fontWeight: '600' },
-  desc: { fontSize: 12 },
-  empty: { fontSize: 13, padding: spacing.x3, textAlign: 'center' },
-})
+const makeStyles = (t: number) =>
+  StyleSheet.create({
+    list: { maxHeight: 380 },
+    row: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, marginBottom: spacing.x2 },
+    name: { fontSize: 14 * t, fontWeight: '600' },
+    desc: { fontSize: 12 * t },
+    empty: { fontSize: 13 * t, padding: spacing.x3, textAlign: 'center' },
+  })
+
+let styles = makeStyles(1)

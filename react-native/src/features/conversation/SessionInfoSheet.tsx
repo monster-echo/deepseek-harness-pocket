@@ -3,7 +3,7 @@
  * 数据来自 reducer 从 dsh 事件流解析的 sessionView.stats；缺失字段显示「—」。
  */
 
-import React from "react";
+import React, { useMemo } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Sheet } from "../../design-system/Sheet";
 import { usePreferences } from "../../preferences/PreferencesProvider";
@@ -33,7 +33,8 @@ function ms(n: number): string {
 export function SessionInfoSheet(
   props: Readonly<{ visible: boolean; onClose: () => void }>,
 ): React.JSX.Element {
-  const { palette } = usePreferences();
+  const { palette, textScale } = usePreferences();
+  styles = useMemo(() => makeStyles(textScale), [textScale]);
   const stats = useDshStore((s) => s.sessionView.stats);
   const totalUsage = useDshStore((s) => s.sessionView.totalUsage);
 
@@ -95,16 +96,19 @@ export function SessionInfoSheet(
   );
 }
 
-const styles = StyleSheet.create({
-  card: { borderRadius: 16, paddingHorizontal: spacing.x4, overflow: "hidden" },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: spacing.x2,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  label: { fontSize: 14 },
-  value: { fontSize: 14 },
-  hint: { fontSize: 12, marginTop: spacing.x3, textAlign: "center" },
-});
+const makeStyles = (t: number) =>
+  StyleSheet.create({
+    card: { borderRadius: 16, paddingHorizontal: spacing.x4, overflow: "hidden" },
+    row: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingVertical: spacing.x2,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+    },
+    label: { fontSize: 14 * t },
+    value: { fontSize: 14 * t },
+    hint: { fontSize: 12 * t, marginTop: spacing.x3, textAlign: "center" },
+  });
+
+let styles = makeStyles(1);

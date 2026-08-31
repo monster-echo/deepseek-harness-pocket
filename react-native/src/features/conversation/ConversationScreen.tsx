@@ -6,7 +6,7 @@
  *   - 审批与提问接管 composer 上方（对齐 dsh ApprovalPanel 行为：仅允许一次/拒绝）
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
   Pressable,
@@ -32,7 +32,11 @@ import { splitDsml, cutAtDsmlStart, type DsmlToolCall } from "./dsml";
 import { Composer } from "./Composer";
 
 export function ConversationScreen() {
-  const { palette } = usePreferences();
+  const { palette, textScale } = usePreferences();
+  // 字号统一受「字体大小」设置驱动（与 theme/styles.ts 的 applyTheme 同套路：
+  // 渲染期重建模块级样式表，子组件在本次渲染中读到新样式）
+  styles = useMemo(() => makeStyles(textScale), [textScale]);
+  sheetStyles = useMemo(() => makeSheetStyles(textScale), [textScale]);
   const view = useDshStore((s) => s.sessionView);
   const notice = useDshStore((s) => s.notice);
   const activeSessionId = useDshStore((s) => s.activeSessionId);
@@ -274,7 +278,7 @@ function AssistantBlockView({
   block,
   streaming,
 }: Readonly<{ block: AssistantBlock; streaming: boolean }>) {
-  const { palette, dark } = usePreferences();
+  const { palette, dark, textScale } = usePreferences();
   const [open, setOpen] = useState(false);
   if (block.type === "text") {
     if (streaming) {
@@ -291,8 +295,8 @@ function AssistantBlockView({
         <View style={styles.dsmlGroup}>
           {prose.length > 0 && (
             <Markdown
-              style={markdownStyle(palette)}
-              rules={markdownRules(palette, dark)}
+              style={markdownStyle(palette, textScale)}
+              rules={markdownRules(palette, dark, textScale)}
             >
               {prose}
             </Markdown>
@@ -309,8 +313,8 @@ function AssistantBlockView({
     }
     return (
       <Markdown
-        style={markdownStyle(palette)}
-        rules={markdownRules(palette, dark)}
+        style={markdownStyle(palette, textScale)}
+        rules={markdownRules(palette, dark, textScale)}
       >
         {block.text}
       </Markdown>
@@ -350,29 +354,29 @@ function AssistantBlockView({
 
 type Palette = ReturnType<typeof usePreferences>["palette"];
 
-function markdownStyle(palette: Palette) {
+function markdownStyle(palette: Palette, t: number) {
   return {
     body: {
       color: palette.text,
-      fontSize: 16,
-      lineHeight: 26,
+      fontSize: 16 * t,
+      lineHeight: 26 * t,
       letterSpacing: 0.3,
     },
     heading1: {
       color: palette.text,
-      fontSize: 20,
+      fontSize: 20 * t,
       fontWeight: "700" as const,
       marginVertical: 8,
     },
     heading2: {
       color: palette.text,
-      fontSize: 18,
+      fontSize: 18 * t,
       fontWeight: "700" as const,
       marginVertical: 6,
     },
     heading3: {
       color: palette.text,
-      fontSize: 16,
+      fontSize: 16 * t,
       fontWeight: "600" as const,
       marginVertical: 4,
     },
@@ -383,7 +387,7 @@ function markdownStyle(palette: Palette) {
       backgroundColor: palette.surfaceMuted,
       color: palette.text,
       fontFamily: "Menlo",
-      fontSize: 13,
+      fontSize: 13 * t,
       borderRadius: 4,
       paddingHorizontal: 4,
     },
@@ -392,11 +396,11 @@ function markdownStyle(palette: Palette) {
       borderColor: palette.border,
       borderWidth: StyleSheet.hairlineWidth,
       fontFamily: "Menlo",
-      fontSize: 12,
+      fontSize: 12 * t,
       color: palette.text,
       borderRadius: 8,
       padding: 10,
-      lineHeight: 18,
+      lineHeight: 18 * t,
     },
     code_block: {
       backgroundColor: palette.surfaceMuted,
@@ -404,7 +408,7 @@ function markdownStyle(palette: Palette) {
       padding: 10,
     },
     bullet_list_icon: { color: palette.textSecondary },
-    ordered_list_icon: { color: palette.textSecondary, fontSize: 14 },
+    ordered_list_icon: { color: palette.textSecondary, fontSize: 14 * t },
     blockquote: {
       backgroundColor: palette.surfaceMuted,
       borderLeftColor: palette.brand,
@@ -447,7 +451,7 @@ function markdownStyle(palette: Palette) {
 }
 
 /** 代码块高亮：头部（语言标签 + 复制）+ 语法高亮，深浅色用不同样式。 */
-function markdownRules(palette: Palette, dark: boolean) {
+function markdownRules(palette: Palette, dark: boolean, t: number) {
   const codeStyle = dark ? atomOneDark : docco;
   const copyCode = (code: string): void => {
     void Clipboard.setStringAsync(code);
@@ -494,7 +498,7 @@ function markdownRules(palette: Palette, dark: boolean) {
             language={language}
             style={codeStyle}
             highlighter="hljs"
-            fontSize={12}
+            fontSize={12 * t}
           >
             {node.content}
           </SyntaxHighlighter>
@@ -917,188 +921,198 @@ function SheetAction({
   );
 }
 
-const sheetStyles = StyleSheet.create({
-  scrim: { flex: 1, justifyContent: "center", padding: spacing.x6 },
-  sheet: { borderRadius: radii.card, padding: spacing.x2 },
-  title: { fontSize: 13, lineHeight: 18, padding: spacing.x2, opacity: 0.7 },
-  action: {
-    paddingVertical: spacing.x3,
-    paddingHorizontal: spacing.x3,
-    borderRadius: radii.control,
-  },
-  actionText: { fontSize: 15 },
-});
+/**
+ * 会话页字号档位（与 theme/styles.ts 全局一致）：28 标题 / 20 大字 / 16 正文 /
+ * 14 次要 / 13 标签 / 12 说明。全部乘 textScale（设置页「字体大小」）。
+ */
+const makeSheetStyles = (t: number) =>
+  StyleSheet.create({
+    scrim: { flex: 1, justifyContent: "center", padding: spacing.x6 },
+    sheet: { borderRadius: radii.card, padding: spacing.x2 },
+    title: { fontSize: 13 * t, lineHeight: 18 * t, padding: spacing.x2, opacity: 0.7 },
+    action: {
+      paddingVertical: spacing.x3,
+      paddingHorizontal: spacing.x3,
+      borderRadius: radii.control,
+    },
+    actionText: { fontSize: 16 * t },
+  });
 
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  containerSession: {
-    flex: 1,
-    justifyContent: "center",
-  },
-  empty: { flex: 1, alignItems: "center", justifyContent: "center" },
-  emptyTitle: { fontSize: 15 },
-  notice: {
-    padding: spacing.x2,
-    margin: spacing.x2,
-    borderRadius: radii.control,
-  },
-  noticeText: { fontSize: 13 },
-  timeline: { flex: 1 },
-  userRow: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    flexWrap: "nowrap", // 允许换行
-    alignItems: "center", // 垂直居中
-    flexShrink: 0,
-  },
-  userBubble: {
-    maxWidth: "80%",
-    borderRadius: radii.card,
-    padding: spacing.x3,
-    borderBottomRightRadius: radii.small,
-  },
-  userText: { fontSize: 16, lineHeight: 24, letterSpacing: 0.3 },
-  assistantBubble: {
-    alignSelf: "flex-start",
-    maxWidth: "100%",
-    gap: spacing.x2,
-  },
-  assistantText: { fontSize: 16, lineHeight: 26, letterSpacing: 0.3 },
-  thinkRow: {
-    borderRadius: radii.control,
-    padding: spacing.x2,
-    gap: spacing.x1,
-  },
-  thinkHead: { flexDirection: "row", alignItems: "center", gap: spacing.x1 },
-  thinkLabel: { fontSize: 12, fontWeight: "600" },
-  thinkSummary: { flex: 1, fontSize: 12 },
-  thinkBody: { fontSize: 13, lineHeight: 20, paddingTop: spacing.x1 },
-  stoppedMark: { fontSize: 12, alignSelf: "flex-end" },
-  usageLine: { fontSize: 11, alignSelf: "flex-end" },
-  toolCard: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radii.control,
-    alignSelf: "stretch",
-  },
-  toolHead: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.x2,
-    padding: spacing.x2,
-  },
-  toolVariant: { fontSize: 13 },
-  toolSummary: { flex: 1, fontSize: 12, fontFamily: "Menlo" },
-  toolStatus: { fontSize: 12 },
-  toolBody: {
-    padding: spacing.x2,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    gap: spacing.x1,
-  },
-  toolBodyLabel: { fontSize: 11 },
-  mono: { fontSize: 11, fontFamily: "Menlo", lineHeight: 16 },
-  turnEnd: { fontSize: 12, textAlign: "center", paddingVertical: spacing.x1 },
-  dsmlGroup: { gap: spacing.x2 },
-  dsmlHint: { fontSize: 11, lineHeight: 15 },
-  compactionRow: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radii.control,
-    padding: spacing.x2,
-    alignSelf: "center",
-  },
-  compactionLabel: { fontSize: 12 },
-  ciRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: spacing.x2,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radii.control,
-    padding: spacing.x2,
-    alignSelf: "stretch",
-  },
-  ciHeader: { flexDirection: "row", alignItems: "center", gap: spacing.x2 },
-  ciTitle: { fontSize: 12, fontWeight: "600" },
-  ciProducer: { flex: 1, fontSize: 11, fontFamily: "Menlo" },
-  ciSummary: { fontSize: 12, marginTop: 2 },
-  ciBody: { marginTop: spacing.x1, gap: spacing.x1 },
-  ciSection: { paddingVertical: spacing.x1 },
-  ciSectionName: { fontSize: 11, fontWeight: "600" },
-  ciSectionText: { fontSize: 12, lineHeight: 17 },
-  codeBlock: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 8,
-    overflow: "hidden",
-  },
-  codeHead: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: spacing.x2,
-    paddingVertical: spacing.x1,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  codeLang: { fontSize: 11 },
-  codeCopy: { fontSize: 12, fontWeight: "600" },
-  codeCopyBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
-  compactionBody: { fontSize: 12, lineHeight: 18, paddingTop: spacing.x1 },
-  turnEndCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.x2,
-    borderWidth: 1,
-    borderRadius: radii.control,
-    padding: spacing.x2,
-    alignSelf: "center",
-  },
-  turnEndText: { fontSize: 13, flexShrink: 1 },
-  stateDot: { width: 8, height: 8, borderRadius: 4 },
-  composerCard: { borderTopWidth: 2, padding: spacing.x3, gap: spacing.x2 },
-  askTitle: { fontSize: 13 },
-  askBody: { fontSize: 14, lineHeight: 20 },
-  askActions: { flexDirection: "row", gap: spacing.x2, flexWrap: "wrap" },
-  askButton: {
-    paddingHorizontal: spacing.x4,
-    paddingVertical: spacing.x2,
-    borderRadius: radii.round,
-  },
-  askButtonText: { fontSize: 14 },
-  answerRow: {
-    flexDirection: "row",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radii.control,
-    alignItems: "center",
-  },
-  answerInput: { flex: 1, padding: spacing.x2, fontSize: 14 },
-  answerSend: { padding: spacing.x2, borderRadius: radii.small },
-  answerSendText: { color: "#FFFFFF", fontSize: 13 },
-  composer: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: spacing.x2,
-    padding: spacing.x2,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  stopButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.x1,
-    borderWidth: 1,
-    borderRadius: radii.round,
-    paddingHorizontal: spacing.x3,
-    paddingVertical: spacing.x2,
-  },
-  stopText: { fontSize: 13 },
-  input: {
-    flex: 1,
-    minHeight: 40,
-    maxHeight: 120,
-    padding: spacing.x2,
-    fontSize: 15,
-  },
-  send: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-});
+let sheetStyles = makeSheetStyles(1);
+
+const makeStyles = (t: number) =>
+  StyleSheet.create({
+    container: { flex: 1 },
+    containerSession: {
+      flex: 1,
+      justifyContent: "center",
+    },
+    empty: { flex: 1, alignItems: "center", justifyContent: "center" },
+    emptyTitle: { fontSize: 16 * t },
+    notice: {
+      padding: spacing.x2,
+      margin: spacing.x2,
+      borderRadius: radii.control,
+    },
+    noticeText: { fontSize: 13 * t },
+    timeline: { flex: 1 },
+    userRow: {
+      flexDirection: "row",
+      justifyContent: "flex-end",
+      flexWrap: "nowrap", // 允许换行
+      alignItems: "center", // 垂直居中
+      flexShrink: 0,
+    },
+    userBubble: {
+      maxWidth: "80%",
+      borderRadius: radii.card,
+      padding: spacing.x3,
+      borderBottomRightRadius: radii.small,
+    },
+    userText: { fontSize: 16 * t, lineHeight: 24 * t, letterSpacing: 0.3 },
+    assistantBubble: {
+      alignSelf: "flex-start",
+      maxWidth: "100%",
+      gap: spacing.x2,
+    },
+    assistantText: { fontSize: 16 * t, lineHeight: 26 * t, letterSpacing: 0.3 },
+    thinkRow: {
+      borderRadius: radii.control,
+      padding: spacing.x2,
+      gap: spacing.x1,
+    },
+    thinkHead: { flexDirection: "row", alignItems: "center", gap: spacing.x1 },
+    thinkLabel: { fontSize: 12 * t, fontWeight: "600" },
+    thinkSummary: { flex: 1, fontSize: 12 * t },
+    thinkBody: { fontSize: 13 * t, lineHeight: 20 * t, paddingTop: spacing.x1 },
+    stoppedMark: { fontSize: 12 * t, alignSelf: "flex-end" },
+    usageLine: { fontSize: 12 * t, alignSelf: "flex-end" },
+    toolCard: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderRadius: radii.control,
+      alignSelf: "stretch",
+    },
+    toolHead: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.x2,
+      padding: spacing.x2,
+    },
+    toolVariant: { fontSize: 13 * t },
+    toolSummary: { flex: 1, fontSize: 12 * t, fontFamily: "Menlo" },
+    toolStatus: { fontSize: 12 * t },
+    toolBody: {
+      padding: spacing.x2,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      gap: spacing.x1,
+    },
+    toolBodyLabel: { fontSize: 12 * t },
+    mono: { fontSize: 12 * t, fontFamily: "Menlo", lineHeight: 17 * t },
+    turnEnd: { fontSize: 12 * t, textAlign: "center", paddingVertical: spacing.x1 },
+    dsmlGroup: { gap: spacing.x2 },
+    dsmlHint: { fontSize: 12 * t, lineHeight: 16 * t },
+    compactionRow: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderRadius: radii.control,
+      padding: spacing.x2,
+      alignSelf: "center",
+    },
+    compactionLabel: { fontSize: 12 * t },
+    ciRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: spacing.x2,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderRadius: radii.control,
+      padding: spacing.x2,
+      alignSelf: "stretch",
+    },
+    ciHeader: { flexDirection: "row", alignItems: "center", gap: spacing.x2 },
+    ciTitle: { fontSize: 12 * t, fontWeight: "600" },
+    ciProducer: { flex: 1, fontSize: 12 * t, fontFamily: "Menlo" },
+    ciSummary: { fontSize: 12 * t, marginTop: 2 },
+    ciBody: { marginTop: spacing.x1, gap: spacing.x1 },
+    ciSection: { paddingVertical: spacing.x1 },
+    ciSectionName: { fontSize: 12 * t, fontWeight: "600" },
+    ciSectionText: { fontSize: 12 * t, lineHeight: 17 * t },
+    codeBlock: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderRadius: 8,
+      overflow: "hidden",
+    },
+    codeHead: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: spacing.x2,
+      paddingVertical: spacing.x1,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+    },
+    codeLang: { fontSize: 12 * t },
+    codeCopy: { fontSize: 12 * t, fontWeight: "600" },
+    codeCopyBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
+    compactionBody: { fontSize: 12 * t, lineHeight: 18 * t, paddingTop: spacing.x1 },
+    turnEndCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.x2,
+      borderWidth: 1,
+      borderRadius: radii.control,
+      padding: spacing.x2,
+      alignSelf: "center",
+    },
+    turnEndText: { fontSize: 13 * t, flexShrink: 1 },
+    stateDot: { width: 8, height: 8, borderRadius: 4 },
+    composerCard: { borderTopWidth: 2, padding: spacing.x3, gap: spacing.x2 },
+    askTitle: { fontSize: 13 * t },
+    askBody: { fontSize: 14 * t, lineHeight: 20 * t },
+    askActions: { flexDirection: "row", gap: spacing.x2, flexWrap: "wrap" },
+    askButton: {
+      paddingHorizontal: spacing.x4,
+      paddingVertical: spacing.x2,
+      borderRadius: radii.round,
+    },
+    askButtonText: { fontSize: 14 * t },
+    answerRow: {
+      flexDirection: "row",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderRadius: radii.control,
+      alignItems: "center",
+    },
+    answerInput: { flex: 1, padding: spacing.x2, fontSize: 14 * t },
+    answerSend: { padding: spacing.x2, borderRadius: radii.small },
+    answerSendText: { color: "#FFFFFF", fontSize: 13 * t },
+    composer: {
+      flexDirection: "row",
+      alignItems: "flex-end",
+      gap: spacing.x2,
+      padding: spacing.x2,
+      borderTopWidth: StyleSheet.hairlineWidth,
+    },
+    stopButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.x1,
+      borderWidth: 1,
+      borderRadius: radii.round,
+      paddingHorizontal: spacing.x3,
+      paddingVertical: spacing.x2,
+    },
+    stopText: { fontSize: 13 * t },
+    input: {
+      flex: 1,
+      minHeight: 40,
+      maxHeight: 120,
+      padding: spacing.x2,
+      fontSize: 16 * t,
+    },
+    send: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+  });
+
+let styles = makeStyles(1);

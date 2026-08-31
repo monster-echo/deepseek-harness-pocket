@@ -1,25 +1,22 @@
 /**
  * 统一 Composer：new session 与 session 共用一个组件，通过 mode 控制功能显隐。
- *   - new：电脑/工作区/模式 chip + 输入卡（命令覆盖层）+ 命令/权限/模型；提交 = createSession + sendMessage
- *   - session：模式 chip + 输入框 + 命令/访问模式/模型；提交 = sendMessage（running 停止）
+ *   - new：电脑/工作区/模式 chip + 居中输入卡（命令覆盖层 + 权限/模型工具行）；提交 = createSession + sendMessage
+ *   - session：常驻单行输入条（+ 在前、发送在后，开始输入隐藏 +），权限/模型 pill 在条上方；提交 = sendMessage（running 停止）
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
-  KeyboardAvoidingView,
-  LayoutAnimation,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  UIManager,
   View,
 } from "react-native";
 import Svg, { Circle } from "react-native-svg";
+import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
 import * as ImagePicker from "expo-image-picker";
 import { AppIcon, IconName } from "../../design-system/AppIcon";
 import { Sheet } from "../../design-system/Sheet";
@@ -175,9 +172,12 @@ type SheetKind =
 export function Composer(
   props: Readonly<{ mode: "new" | "session" }>,
 ): React.JSX.Element {
-  const { palette } = usePreferences();
+  const { palette, textScale } = usePreferences();
   const { showToast } = useApp();
   const isNew = props.mode === "new";
+  // 字号统一受「字体大小」设置驱动（与 theme/styles.ts 的 applyTheme 同套路：
+  // 渲染期重建模块级样式表，子组件在本次渲染中读到新样式）
+  styles = useMemo(() => makeStyles(textScale), [textScale]);
 
   // 共享 state
   const [text, setText] = useState("");
@@ -204,13 +204,11 @@ export function Composer(
   const [commandsCache, setCommandsCache] = useState<
     readonly { name: string; description: string }[]
   >([]);
-  // 豆包式形态：session 空闲收成单行胶囊，聚焦/已输入展开
-  const [dockExpanded, setDockExpanded] = useState(isNew);
   // session 当前实际模型（listModels 返回，修复沿用 newSessionDefaults 的显示错误）
   const [sessionModel, setSessionModel] = useState<string | null>(null);
+  // new：键盘可见性 → 居中布局切贴底（输入卡贴键盘上方）
+  const keyboard = useKeyboardState();
   const inputRef = useRef<TextInput>(null);
-  // 胶囊→展开时 TextInput 尚未挂载（条件渲染），聚焦需等 commit 后在 effect 里补
-  const pendingFocusRef = useRef(false);
 
   const sendMessage = useDshStore((s) => s.sendMessage);
   const uploadImage = useDshStore((s) => s.uploadImage);
@@ -333,40 +331,16 @@ export function Composer(
       : displayModel) +
     (isNew && reasoning !== "off" ? ` · ${reasoningLabel}` : "");
 
-  // 胶囊↔展开切换（输入空 + 未聚焦时 session 收成单行）
+  // 单行条形态：session 常驻一行，无胶囊↔展开切换
   const inputEmpty = text.trim().length === 0 && images.length === 0;
   const showStop = !isNew && running && inputEmpty;
-  const docked = !isNew && !dockExpanded;
   const helloVisible = isNew && inputEmpty && !focused;
+  // 条内前方的 +：开始输入（有文字）即隐藏；图片不算开始输入（还要靠它继续加图）
+  const barShowPlus = text.trim().length === 0;
   const tokPerSec =
     stats.decodeMs > 0
       ? Math.round((stats.decodeTokens / stats.decodeMs) * 1000)
       : 0;
-
-  /** 胶囊↔展开的布局动画（Android 需先开实验开关）。 */
-  const animateLayout = (): void => {
-    if (
-      Platform.OS === "android" &&
-      typeof UIManager.setLayoutAnimationEnabledExperimental === "function"
-    ) {
-      UIManager.setLayoutAnimationEnabledExperimental(true);
-    }
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-  };
-
-  const expandDock = (): void => {
-    animateLayout();
-    pendingFocusRef.current = true;
-    setDockExpanded(true);
-  };
-
-  // 展开卡 commit 后补聚焦（setDockExpanded 同一 tick 里 ref 还是 null，同步 focus 会被吞掉）
-  useEffect(() => {
-    if (dockExpanded && pendingFocusRef.current) {
-      pendingFocusRef.current = false;
-      inputRef.current?.focus();
-    }
-  }, [dockExpanded]);
 
   // 空态引导：一键填入起点提示词并聚焦
   const applyHelloChip = (fill: string): void => {
@@ -515,10 +489,20 @@ export function Composer(
       ]}
     >
       <KeyboardAvoidingView
-        style={isNew ? styles.kavCenter : styles.kavDock}
-        /* session 的键盘避让由 ConversationScreen 根部 KAV 统一处理（避免双层 padding）；
+        style={[
+          isNew
+            ? keyboard.isVisible
+              ? styles.kavBottom
+              : styles.kavCenter
+            : styles.kavDock,
+          { backgroundColor: palette.background },
+        ]}
+        /* new：双平台 padding 避让（SDK 57 edge-to-edge 下 Android adjustResize 失效，
+           keyboard-controller 的 KAV 双平台可用）；键盘弹出时布局从居中切贴底，
+           输入卡正好坐在键盘上方，而不是在剩余空间里重新居中悬在半空。
+           session 的键盘避让由 ConversationScreen 根部 KAV 统一处理（避免双层 padding）；
            底部安全区由 App.tsx 全局 SafeAreaView 统一处理 */
-        behavior={isNew && Platform.OS === "ios" ? "padding" : undefined}
+        behavior={isNew ? "padding" : undefined}
       >
         {/* 空态引导：问候 + 起点 chips（开始输入即收起） */}
         {isNew && helloVisible && (
@@ -570,39 +554,8 @@ export function Composer(
           </View>
         )}
 
-        {/* session 空闲：单行胶囊 Dock，点按展开 */}
-        {docked ? (
-          <Pressable
-            style={({ pressed }) => [
-              styles.dock,
-              { backgroundColor: palette.surface },
-              pressed && { opacity: 0.92 },
-            ]}
-            onPress={expandDock}
-            accessibilityLabel="输入消息"
-          >
-            <View
-              style={[
-                styles.plusButton,
-                { backgroundColor: palette.surfaceMuted },
-              ]}
-            >
-              <AppIcon name="plus" color={palette.text} size={16} />
-            </View>
-            <Text
-              style={[styles.dockPlaceholder, { color: palette.textSecondary }]}
-              numberOfLines={1}
-            >
-              输入消息…
-            </Text>
-            {showStop ? (
-              <StopButton onPress={() => void stopTurn()} />
-            ) : (
-              <SendButton canSend={false} onPress={() => {}} />
-            )}
-          </Pressable>
-        ) : (
-          /* 展开卡：new 常驻居中；session 聚焦或已输入时呈现 */
+        {isNew ? (
+          /* new 展开卡：常驻居中欢迎态（输入 + 权限/模型工具行） */
           <View style={[styles.card, { backgroundColor: palette.surface }]}>
             <View style={styles.textAreaWrap}>
               {parsed.name !== null && (
@@ -632,60 +585,21 @@ export function Composer(
                   { color: parsed.name !== null ? "transparent" : palette.text },
                 ]}
                 placeholder={
-                  parsed.name !== null
-                    ? ""
-                    : isNew
-                      ? "描述你想要构建的内容"
-                      : "输入消息，/ 唤起命令"
+                  parsed.name !== null ? "" : "描述你想要构建的内容"
                 }
                 placeholderTextColor={palette.textSecondary}
                 value={text}
                 onChangeText={setText}
-                onFocus={() => {
-                  setFocused(true);
-                  if (!dockExpanded) setDockExpanded(true);
-                }}
-                onBlur={() => {
-                  setFocused(false);
-                  if (inputEmpty) {
-                    animateLayout();
-                    setDockExpanded(false);
-                  }
-                }}
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
                 multiline
                 numberOfLines={1}
               />
             </View>
-          {images.length > 0 && (
-            <ScrollView
-              horizontal
-              style={styles.thumbRow}
-              contentContainerStyle={{ gap: spacing.x2 }}
-              showsHorizontalScrollIndicator={false}
-            >
-              {images.map((img, i) => (
-                <View key={i} style={styles.thumbWrap}>
-                  <Image
-                    source={{ uri: `data:${img.mime};base64,${img.base64}` }}
-                    style={styles.thumb}
-                    accessibilityLabel="待发送图片"
-                  />
-                  <Pressable
-                    style={[
-                      styles.thumbRemove,
-                      { backgroundColor: palette.error },
-                    ]}
-                    onPress={() =>
-                      setImages((prev) => prev.filter((_, j) => j !== i))
-                    }
-                    hitSlop={6}
-                  >
-                    <AppIcon name="close" color="#FFFFFF" size={10} />
-                  </Pressable>
-                </View>
-              ))}
-            </ScrollView>
-          )}
+            <ThumbRow
+              images={images}
+              onRemove={(i) => setImages((prev) => prev.filter((_, j) => j !== i))}
+            />
             <View style={styles.toolRow}>
               <View style={styles.actionLeft}>
                 <Pressable
@@ -709,23 +623,74 @@ export function Composer(
                 <ToolPill
                   icon="sparkles"
                   label={modelPillLabel}
-                  active={isNew && reasoning !== "off"}
+                  active={reasoning !== "off"}
                   onPress={() => setSheet("model")}
                 />
               </View>
               <View style={styles.actionRight}>
-                {showStop ? (
-                  <StopButton onPress={() => void stopTurn()} />
-                ) : (
-                  <SendButton canSend={canSend} onPress={() => void submit()} />
-                )}
+                <SendButton canSend={canSend} onPress={() => void submit()} />
               </View>
             </View>
           </View>
+        ) : (
+          /* session：常驻单行输入条 —— 权限/模型 pill 在条上方，+ 在条内前部，
+             发送/停止在条内后部；开始输入后隐藏 +。条不做胶囊↔展开切换，
+             多行时自然长高（maxHeight 封顶） */
+          <>
+            <View style={styles.aboveRow}>
+              <ToolPill
+                icon={currentPerm.icon}
+                label={permissionLabel}
+                danger={currentPerm.danger === true}
+                onPress={() => setSheet("permission")}
+              />
+              {/* 会话实际模型展示 + 下次新建默认 */}
+              <ToolPill
+                icon="sparkles"
+                label={modelPillLabel}
+                onPress={() => setSheet("model")}
+              />
+            </View>
+            <ThumbRow
+              images={images}
+              onRemove={(i) => setImages((prev) => prev.filter((_, j) => j !== i))}
+            />
+            <View style={[styles.bar, { backgroundColor: palette.surface }]}>
+              {barShowPlus && (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.plusButton,
+                    { backgroundColor: palette.surfaceMuted },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  onPress={() => setSheet("commands")}
+                  accessibilityLabel="更多功能"
+                >
+                  <AppIcon name="plus" color={palette.text} size={16} />
+                </Pressable>
+              )}
+              <TextInput
+                ref={inputRef}
+                style={[styles.barInput, { color: palette.text }]}
+                placeholder="输入消息，/ 唤起命令"
+                placeholderTextColor={palette.textSecondary}
+                value={text}
+                onChangeText={setText}
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
+                multiline
+              />
+              {showStop ? (
+                <StopButton onPress={() => void stopTurn()} />
+              ) : (
+                <SendButton canSend={canSend} onPress={() => void submit()} />
+              )}
+            </View>
+          </>
         )}
 
         {/* 卡下信息带（仅 session）：右 = 上下文/速率/排队（→用量 Sheet）。
-            模型入口已并入卡内工具行的模型 pill */}
+            权限/模型入口在输入条上方 aboveRow */}
         {!isNew && (usedTokens > 0 || pendingQueue.length > 0) && (
           <View style={[styles.infoLine, styles.infoLineEnd]}>
             <Pressable
@@ -938,6 +903,41 @@ export function Composer(
         onClose={() => setContextOpen(false)}
       />
     </View>
+  );
+}
+
+/** 待发送图片横排（new 卡内与 session 条上方共用）。 */
+function ThumbRow(
+  props: Readonly<{
+    images: readonly { base64: string; mime: string }[];
+    onRemove: (index: number) => void;
+  }>,
+): React.JSX.Element {
+  const { palette } = usePreferences();
+  return (
+    <ScrollView
+      horizontal
+      style={styles.thumbRow}
+      contentContainerStyle={{ gap: spacing.x2 }}
+      showsHorizontalScrollIndicator={false}
+    >
+      {props.images.map((img, i) => (
+        <View key={i} style={styles.thumbWrap}>
+          <Image
+            source={{ uri: `data:${img.mime};base64,${img.base64}` }}
+            style={styles.thumb}
+            accessibilityLabel="待发送图片"
+          />
+          <Pressable
+            style={[styles.thumbRemove, { backgroundColor: palette.error }]}
+            onPress={() => props.onRemove(i)}
+            hitSlop={6}
+          >
+            <AppIcon name="close" color="#FFFFFF" size={10} />
+          </Pressable>
+        </View>
+      ))}
+    </ScrollView>
   );
 }
 
@@ -1712,7 +1712,12 @@ function fmtMs(n: number): string {
     : `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
 }
 
-const styles = StyleSheet.create({
+/**
+ * Composer 字号与 ConversationScreen 同一档位（28/20/16/14/13/12），
+ * 全部乘 textScale（设置页「字体大小」）。
+ */
+const makeStyles = (t: number) =>
+  StyleSheet.create({
   rootNew: { flex: 1 },
   containerSession: {
     justifyContent: "flex-end",
@@ -1722,6 +1727,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "stretch",
     paddingHorizontal: spacing.x4,
+  },
+  // 键盘弹出时的贴底变体：输入卡坐在键盘正上方（聚焦后 hello 已隐藏，栈高很小）
+  kavBottom: {
+    flex: 1,
+    justifyContent: "flex-end",
+    alignItems: "stretch",
+    paddingHorizontal: spacing.x4,
+    paddingBottom: spacing.x2,
   },
   kavDock: {
     // 注意：不能加 flex:1（flexBasis 0 会在 auto 高度的根容器里被量成 0，
@@ -1736,7 +1749,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.x6,
   },
   helloTitle: {
-    fontSize: 25,
+    fontSize: 28 * t,
     fontWeight: "800",
     letterSpacing: 0.3,
     marginBottom: 15,
@@ -1756,7 +1769,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
-  helloChipText: { fontSize: 13, fontWeight: "500" },
+  helloChipText: { fontSize: 13 * t, fontWeight: "500" },
   ghostRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1773,7 +1786,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: radii.round,
   },
-  ghostChipText: { fontSize: 12, maxWidth: 130 },
+  ghostChipText: { fontSize: 12 * t, maxWidth: 130 },
   card: {
     alignSelf: "stretch",
     borderRadius: 26,
@@ -1785,7 +1798,15 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     elevation: 3,
   },
-  dock: {
+  // session 条上方的权限/模型 pill 行（与条同宽左对齐）
+  aboveRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.x1,
+    marginBottom: spacing.x1,
+    alignSelf: "stretch",
+  },
+  bar: {
     alignSelf: "stretch",
     borderRadius: radii.round,
     flexDirection: "row",
@@ -1800,7 +1821,14 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     elevation: 3,
   },
-  dockPlaceholder: { flex: 1, fontSize: 15 },
+  barInput: {
+    flex: 1,
+    fontSize: 16 * t,
+    minHeight: 34,
+    maxHeight: 120,
+    paddingVertical: 7,
+    paddingHorizontal: 2,
+  },
   textAreaWrap: { minHeight: 44 },
   overlay: {
     position: "absolute",
@@ -1810,12 +1838,12 @@ const styles = StyleSheet.create({
     right: 0,
     paddingVertical: 2,
   },
-  overlayLine: { fontSize: 15, lineHeight: 22, flexWrap: "wrap" },
-  cmdName: { fontWeight: "700", fontSize: 15 },
-  cmdHint: { fontSize: 15 },
-  cmdBody: { fontSize: 15 },
+  overlayLine: { fontSize: 16 * t, lineHeight: 22 * t, flexWrap: "wrap" },
+  cmdName: { fontWeight: "700", fontSize: 16 * t },
+  cmdHint: { fontSize: 16 * t },
+  cmdBody: { fontSize: 16 * t },
   textInput: {
-    fontSize: 16,
+    fontSize: 16 * t,
     minHeight: 44,
     maxHeight: 144,
     padding: 0,
@@ -1857,7 +1885,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.round,
     marginRight: spacing.x2,
   },
-  visionBadgeText: { fontSize: 10, fontWeight: "600" },
+  visionBadgeText: { fontSize: 12 * t, fontWeight: "600" },
   actionLeft: {
     flexDirection: "row",
     alignItems: "center",
@@ -1880,7 +1908,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: radii.round,
   },
-  toolPillText: { fontSize: 13, fontWeight: "500" },
+  toolPillText: { fontSize: 13 * t, fontWeight: "500" },
   infoLine: {
     flexDirection: "row",
     alignItems: "center",
@@ -1897,7 +1925,7 @@ const styles = StyleSheet.create({
     gap: 5,
     minWidth: 0,
   },
-  infoText: { fontSize: 11 },
+  infoText: { fontSize: 12 * t },
   send: {
     width: 34,
     height: 34,
@@ -1911,7 +1939,7 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: "#FFFFFF",
   },
-  sheetHint: { fontSize: 12, paddingBottom: spacing.x2 },
+  sheetHint: { fontSize: 12 * t, paddingBottom: spacing.x2 },
   sheetDivider: { height: StyleSheet.hairlineWidth, marginTop: spacing.x2 },
   addRow: {
     flexDirection: "row",
@@ -1919,7 +1947,7 @@ const styles = StyleSheet.create({
     gap: spacing.x2,
     paddingVertical: spacing.x3,
   },
-  addText: { fontSize: 14, fontWeight: "500" },
+  addText: { fontSize: 14 * t, fontWeight: "500" },
   sheetRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1928,8 +1956,8 @@ const styles = StyleSheet.create({
     borderRadius: radii.control,
     paddingHorizontal: spacing.x2,
   },
-  sheetRowLabel: { fontSize: 14, fontWeight: "500" },
-  sheetRowSub: { fontSize: 11 },
+  sheetRowLabel: { fontSize: 14 * t, fontWeight: "500" },
+  sheetRowSub: { fontSize: 12 * t },
   modeCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -1939,8 +1967,8 @@ const styles = StyleSheet.create({
     padding: spacing.x3,
     marginBottom: spacing.x2,
   },
-  modeName: { fontSize: 14, fontWeight: "700", marginBottom: 3 },
-  modeDesc: { fontSize: 12, lineHeight: 17 },
+  modeName: { fontSize: 14 * t, fontWeight: "700", marginBottom: 3 },
+  modeDesc: { fontSize: 12 * t, lineHeight: 17 * t },
   permIcon: {
     width: 32,
     height: 32,
@@ -1957,8 +1985,8 @@ const styles = StyleSheet.create({
     padding: spacing.x3,
     marginBottom: spacing.x2,
   },
-  modelName: { fontSize: 15, fontWeight: "600" },
-  modelSub: { fontSize: 11, marginTop: 2 },
+  modelName: { fontSize: 16 * t, fontWeight: "600" },
+  modelSub: { fontSize: 12 * t, marginTop: 2 },
   optionRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1968,13 +1996,13 @@ const styles = StyleSheet.create({
     padding: spacing.x3,
     marginBottom: spacing.x2,
   },
-  optionText: { fontSize: 15, flex: 1 },
+  optionText: { fontSize: 16 * t, flex: 1 },
   reasonBox: {
     borderRadius: 20,
     padding: spacing.x3,
     marginBottom: spacing.x3,
   },
-  reasonTitle: { fontSize: 13, fontWeight: "600", marginBottom: spacing.x2 },
+  reasonTitle: { fontSize: 13 * t, fontWeight: "600", marginBottom: spacing.x2 },
   reasonSeg: { flexDirection: "row", borderRadius: 12, overflow: "hidden" },
   reasonSegItem: {
     flex: 1,
@@ -1982,17 +2010,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.x2,
     borderRadius: 10,
   },
-  reasonLabel: { fontSize: 12, fontWeight: "600" },
-  reasonSub: { fontSize: 10 },
-  reasonDesc: { fontSize: 11, marginTop: spacing.x2 },
+  reasonLabel: { fontSize: 12 * t, fontWeight: "600" },
+  reasonSub: { fontSize: 12 * t },
+  reasonDesc: { fontSize: 12 * t, marginTop: spacing.x2 },
   ctxPct: {
-    fontSize: 22,
+    fontSize: 20 * t,
     fontWeight: "700",
     textAlign: "center",
     marginTop: spacing.x2,
   },
   ctxTotal: {
-    fontSize: 13,
+    fontSize: 13 * t,
     textAlign: "center",
     marginTop: spacing.x1,
     marginBottom: spacing.x3,
@@ -2004,8 +2032,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.x2,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  ctxLabel: { fontSize: 14 },
-  ctxValue: { fontSize: 14 },
+  ctxLabel: { fontSize: 14 * t },
+  ctxValue: { fontSize: 14 * t },
   centerScrim: {
     flex: 1,
     alignItems: "center",
@@ -2020,7 +2048,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.x3,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  confirmTitle: { fontSize: 17, fontWeight: "700" },
+  confirmTitle: { fontSize: 16 * t, fontWeight: "700" },
   riskRow: {
     flexDirection: "row",
     gap: spacing.x3,
@@ -2033,7 +2061,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  riskText: { flex: 1, fontSize: 14, lineHeight: 21 },
+  riskText: { flex: 1, fontSize: 14 * t, lineHeight: 21 * t },
   checkRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2048,7 +2076,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  checkText: { fontSize: 14, fontWeight: "600" },
+  checkText: { fontSize: 14 * t, fontWeight: "600" },
   confirmActions: {
     flexDirection: "row",
     justifyContent: "flex-end",
@@ -2063,11 +2091,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.x5,
     paddingVertical: spacing.x2,
   },
-  cancelText: { fontSize: 14, fontWeight: "500" },
+  cancelText: { fontSize: 14 * t, fontWeight: "500" },
   enableButton: {
     borderRadius: 12,
     paddingHorizontal: spacing.x4,
     paddingVertical: spacing.x2,
   },
-  enableText: { fontSize: 14, fontWeight: "600" },
-});
+  enableText: { fontSize: 14 * t, fontWeight: "600" },
+  });
+
+let styles = makeStyles(1);

@@ -40,7 +40,9 @@ function parseArgs(argv: readonly string[]): { command: string; options: CliOpti
     gateway: process.env['DSHC_GATEWAY'] ?? '',
     port: 3780,
     host: '0.0.0.0',
-    caps: 'm2',
+    // m3 起 sessionCreate/artifacts 才可用：手机端「新建会话/选目录/作品」是主流程，
+    // 默认必须给全（与桌面端 GUI 默认一致）；要收敛能力仍可显式 --caps m1|m2
+    caps: 'm3',
     name: '',
     dsh: undefined,
     detached: false,
@@ -220,7 +222,7 @@ async function main(): Promise<void> {
           '--gateway', runBefore.gatewayUrl,
           '--port', String(runBefore.port),
           '--host', runBefore.host,
-          '--caps', runBefore.caps.length > 0 ? runBefore.caps : 'm2',
+          '--caps', runBefore.caps.length > 0 ? runBefore.caps : 'm3',
         ]
         if (runBefore.name.length > 0) args.push('--name', runBefore.name)
         args.push('--dsh', runBefore.dshBin, '--quiet')
@@ -259,7 +261,7 @@ async function main(): Promise<void> {
           '命令:',
           '  install [--gateway wss://…]   安装开机自启（并启动）',
           '  uninstall                     移除自启',
-          '  start [--gateway …] [--port 3780] [--caps m2] [--detached] [--quiet]',
+          '  start [--gateway …] [--port 3780] [--caps m3] [--detached] [--quiet]',
           '                                拉起并守护 dsh，打印配对二维码',
           '  stop / status [--json] / token / qr [--json]',
         ].join('\n'),

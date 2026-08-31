@@ -408,7 +408,9 @@ function parseArgs(argv) {
     gateway: process.env["DSHC_GATEWAY"] ?? "",
     port: 3780,
     host: "0.0.0.0",
-    caps: "m2",
+    // m3 起 sessionCreate/artifacts 才可用：手机端「新建会话/选目录/作品」是主流程，
+    // 默认必须给全（与桌面端 GUI 默认一致）；要收敛能力仍可显式 --caps m1|m2
+    caps: "m3",
     name: "",
     dsh: void 0,
     detached: false,
@@ -610,7 +612,7 @@ home: ${dshcDir()}
           "--host",
           runBefore.host,
           "--caps",
-          runBefore.caps.length > 0 ? runBefore.caps : "m2"
+          runBefore.caps.length > 0 ? runBefore.caps : "m3"
         ];
         if (runBefore.name.length > 0) args.push("--name", runBefore.name);
         args.push("--dsh", runBefore.dshBin, "--quiet");
@@ -650,7 +652,7 @@ home: ${dshcDir()}
           "\u547D\u4EE4:",
           "  install [--gateway wss://\u2026]   \u5B89\u88C5\u5F00\u673A\u81EA\u542F\uFF08\u5E76\u542F\u52A8\uFF09",
           "  uninstall                     \u79FB\u9664\u81EA\u542F",
-          "  start [--gateway \u2026] [--port 3780] [--caps m2] [--detached] [--quiet]",
+          "  start [--gateway \u2026] [--port 3780] [--caps m3] [--detached] [--quiet]",
           "                                \u62C9\u8D77\u5E76\u5B88\u62A4 dsh\uFF0C\u6253\u5370\u914D\u5BF9\u4E8C\u7EF4\u7801",
           "  stop / status [--json] / token / qr [--json]"
         ].join("\n")

@@ -72,7 +72,9 @@
   → 沙盒升级审批 30 秒内截取(参考 git 历史中 e2e/scripts/.fresh-approval.mjs 的删除前版本)
 
 ## 附录 B:本次发现的待修问题(非发布阻塞,建议排期)
-1. **6.9" 键盘避让不足**:composer 发送键被键盘遮住,手机上无法直接发消息(App Store 截图流程被迫绕道)
+1. ~~**6.9" 键盘避让不足**~~ ✅ 已修复(2026-08-28 傍晚):引入 `react-native-keyboard-controller`
+   (App.tsx KeyboardProvider + ConversationScreen 根部 KAV padding),双平台验证 composer
+   浮于键盘上方;随 Composer 重构一并提交(注意 iOS 侧需 pod install,已在本地执行)
 2. **会话历史不渲染**:重进会话后消息区空白,仅直播事件可见(sessions.open 快照链路)
 3. **作品预览卡「拉取中」**:43KB 单文件预览拉取不完成(复现:作品列表 → snake.html)
 4. **审批摘要英文**:等待审批卡的 summary 是 worker 英文原文,建议中文化

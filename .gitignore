@@ -24,3 +24,16 @@ react-native/android/
 # 根目录 stray EAS 文件（eas 命令误从根目录运行时生成；真实配置在 react-native/）
 /app.json
 /eas.json
+
+# iOS 商店截图 deliver 布局目录（由 tooling/upload-appstore.sh 从 app-store-0*.png 生成，不入库）
+docs/store-assets/ios/screenshots/
+
+# 本地凭证（service account JSON / ASC .p8），仅本机留存，严禁入库
+docs/store-assets/tooling/secrets/
+
+# ── 商店（App Store / Google Play）自动化与 listing 资料：仅本地留存，不入库 ──
+docs/store-assets/tooling/
+docs/store-assets/play/tooling/
+docs/store-assets/ios/tooling/
+docs/store-assets/play/metadata/
+docs/store-assets/ios/metadata/

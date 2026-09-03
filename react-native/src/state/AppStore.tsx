@@ -226,7 +226,9 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   }, []);
   const dataActions = useDataActions(run, setUser, user, setPurchaseState);
   const value = useMemo<AppContextValue>(() => ({
-    route: (navigationRef.getCurrentRoute()?.name ?? 'launch.splash') as AppRoute,
+    // isReady 守卫必须：AppProvider 先于 NavigationContainer 渲染，裸调 getCurrentRoute
+    // 会走 ref 的 console.error(NOT_INITIALIZED_ERROR)，dev 下每次冷启动都弹 LogBox
+    route: ((navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : undefined) ?? 'launch.splash') as AppRoute,
     canGoBack: navigationRef.isReady() && navigationRef.canGoBack(),
     navigate,
     replace,

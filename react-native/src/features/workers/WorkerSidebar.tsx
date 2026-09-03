@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -76,7 +77,6 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
   const [renameTarget, setRenameTarget] = useState<WorkspaceRow | null>(null);
   const [renameText, setRenameText] = useState("");
   const [artifactsTarget, setArtifactsTarget] = useState<WorkspaceRow | null>(null);
-  const [workspaces, setWorkspaces] = useState<readonly WorkspaceRow[]>([]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   const workers = useDshStore((s) => s.workers);
@@ -85,23 +85,34 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
     s.workers.find((w) => w.workerId === s.activeWorkerId),
   );
   const sessions = useDshStore((s) => s.sessions);
+  // workspace 注册表缓存在全局 store：重开 sidebar 首帧直接渲染，effect 只做后台刷新
+  const workspaces = useDshStore((s) => s.workspaces);
   const activeSessionId = useDshStore((s) => s.activeSessionId);
   const openWorker = useDshStore((s) => s.openWorker);
   const openSession = useDshStore((s) => s.openSession);
   const startNewSession = useDshStore((s) => s.startNewSession);
+  const refreshSessions = useDshStore((s) => s.refreshSessions);
   const listWorkspaces = useDshStore((s) => s.listWorkspaces);
   const renameWorkspace = useDshStore((s) => s.renameWorkspace);
   const deleteWorkspace = useDshStore((s) => s.deleteWorkspace);
   const pinnedSessionIds = useDshStore((s) => s.pinnedSessionIds);
   const togglePinSession = useDshStore((s) => s.togglePinSession);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    if (activeWorkerId === null) {
-      setWorkspaces([]);
-      return;
-    }
-    void listWorkspaces().then(setWorkspaces);
-  }, [activeWorkerId, listWorkspaces]);
+    if (activeWorkerId === null) return;
+    // 打开即后台刷新（结果写 store 缓存，渲染走订阅值）：会话列表 + workspace 注册表
+    void refreshSessions();
+    void listWorkspaces();
+  }, [activeWorkerId, refreshSessions, listWorkspaces]);
+
+  /** 下拉刷新：会话列表 + workspace 一起刷，全部完成才收起指示器 */
+  const onRefresh = (): void => {
+    setRefreshing(true);
+    void Promise.all([refreshSessions(), listWorkspaces()]).finally(() => {
+      setRefreshing(false);
+    });
+  };
 
   const q = query.trim().toLowerCase();
   const online = workers.filter((w) => w.online).length;
@@ -181,14 +192,8 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
 
   const doRename = (): void => {
     if (renameTarget === null || renameText.trim().length === 0) return;
-    void renameWorkspace(renameTarget.id, renameText.trim()).then((ok) => {
-      if (ok) {
-        setWorkspaces((prev) =>
-          prev.map((w) =>
-            w.id === renameTarget.id ? { ...w, title: renameText.trim() } : w,
-          ),
-        );
-      }
+    // store 在成功时自动更新缓存，这里只收尾弹层
+    void renameWorkspace(renameTarget.id, renameText.trim()).then(() => {
       setRenameTarget(null);
       setRenameText("");
     });
@@ -196,9 +201,7 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
 
   const doDelete = (w: WorkspaceRow): void => {
     setActionTarget(null);
-    void deleteWorkspace(w.id).then((ok) => {
-      if (ok) setWorkspaces((prev) => prev.filter((x) => x.id !== w.id));
-    });
+    void deleteWorkspace(w.id);
   };
 
   return (
@@ -285,7 +288,19 @@ export function WorkerSidebar({ onClose }: Readonly<{ onClose: () => void }>) {
             </Text>
           </Pressable>
         ) : (
-          <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            style={styles.list}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={palette.textSecondary}
+                colors={[palette.brand]}
+                progressBackgroundColor={palette.surface}
+              />
+            }
+          >
             {groups.length === 0 && (
               <Text
                 style={[styles.emptyText, { color: palette.textSecondary }]}
@@ -688,7 +703,9 @@ function NewSessionSheet({
   onCreated: () => void;
 }>) {
   const { palette } = usePreferences();
-  const [workspaces, setWorkspaces] = useState<readonly WorkspaceRow[]>([]);
+  // workspace 列表读 store 缓存：重开弹层不重新等待网络
+  const workspaces = useDshStore((s) => s.workspaces);
+  const [listLoading, setListLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newPath, setNewPath] = useState("");
@@ -699,16 +716,17 @@ function NewSessionSheet({
 
   useEffect(() => {
     if (!visible) return;
-    setBusy(true);
     setError(null);
+    // 缓存为空（冷启动）才需要加载态；否则后台刷新，先渲染缓存
+    if (workspaces.length === 0) setListLoading(true);
     void listWorkspaces().then((list) => {
-      setWorkspaces(list);
-      setBusy(false);
+      setListLoading(false);
       if (list.length === 0)
         setError(
           "Worker 上还没有 workspace（在电脑 dsh Web UI 里添加项目目录后重试）",
         );
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, listWorkspaces]);
 
   const create = (cwd: string): void => {
@@ -735,11 +753,11 @@ function NewSessionSheet({
     const path = newPath.trim();
     if (path.length === 0) return;
     setBusy(true);
+    // store.addWorkspace 成功后自动合并进缓存
     void addWorkspace(path).then((w) => {
       setBusy(false);
       if (w !== null) {
         setNewPath("");
-        setWorkspaces((prev) => [...prev.filter((x) => x.id !== w.id), w]);
         setError(null);
       } else setError("添加失败：目录需是电脑上的绝对路径且存在");
     });
@@ -753,7 +771,7 @@ function NewSessionSheet({
       scrollable
       snapPoints={["50%", "85%"]}
     >
-      {busy && (
+      {(busy || listLoading) && (
         <Text style={[sheetStyles.hint, { color: palette.textSecondary }]}>
           加载中…
         </Text>
@@ -782,10 +800,6 @@ function NewSessionSheet({
             setBusy(false);
             if (w !== null) {
               setNewPath("");
-              setWorkspaces((prev) => [
-                ...prev.filter((x) => x.id !== w.id),
-                w,
-              ]);
               setError(null);
             } else
               setError(

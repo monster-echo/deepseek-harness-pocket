@@ -9,6 +9,13 @@ import { GatewayConnection, type GatewayStatus } from '../dsh/connection'
 import { DshClient, type HandshakeInfo } from '../dsh/client'
 import { emptySessionView, projectSessionList, reduceSessionEvent, type SessionListItem, type SessionView } from '../features/conversation/reducer'
 
+/** workspace 注册表条目（Worker 上的项目目录） */
+export interface WorkspaceRow {
+  id: string
+  path: string
+  title: string
+}
+
 interface DshState {
   gatewayStatus: GatewayStatus
   workers: readonly WorkerPresence[]
@@ -19,6 +26,8 @@ interface DshState {
   /** 已选中会话但快照未到（sidebar 切换后主区域显示加载态） */
   sessionLoading: boolean
   sessionView: SessionView
+  /** 当前 Worker 的 workspace 注册表缓存：sidebar/新建会话首帧直接渲染，listWorkspaces 后台刷新 */
+  workspaces: readonly WorkspaceRow[]
   serverRequests: readonly ServerRequest[]
   notice: string | null
   /** worker 模型目录缓存（Composer 的模型列表）；inputModalities 用于图片能力提示 */
@@ -28,14 +37,14 @@ interface DshState {
   disconnectGateway(): void
   openWorker(workerId: string): void
   refreshSessions(): Promise<void>
-  listWorkspaces(): Promise<readonly { id: string; path: string; title: string }[]>
+  listWorkspaces(): Promise<readonly WorkspaceRow[]>
   listDir(path: string): Promise<readonly { name: string; path: string }[]>
   /** 列目录含文件（产物列表） */
   listEntries(path: string): Promise<readonly { name: string; path: string; type: 'file' | 'directory' }[]>
   /** 作品预览：分块拉取拼装（{mime, base64}） */
   previewFile(path: string): Promise<{ mime: string; base64: string }>
   fsHome(): Promise<string>
-  addWorkspace(path: string): Promise<{ id: string; path: string; title: string } | null>
+  addWorkspace(path: string): Promise<WorkspaceRow | null>
   renameWorkspace(id: string, title: string): Promise<boolean>
   deleteWorkspace(id: string): Promise<boolean>
   listPlugins(): Promise<readonly { id: string; name: string; enabled: boolean }[]>
@@ -127,6 +136,7 @@ export const useDshStore = create<DshState>((set, get) => {
     activeSessionId: null,
     sessionLoading: false,
     sessionView: emptySessionView,
+    workspaces: [],
     serverRequests: [],
     notice: null,
     modelCatalog: [],
@@ -145,14 +155,14 @@ export const useDshStore = create<DshState>((set, get) => {
       gateway = null
       client?.dispose(true)
       client = null
-      set({ gatewayStatus: 'idle', activeWorkerId: null, sessions: [], activeSessionId: null, sessionLoading: false, sessionView: emptySessionView })
+      set({ gatewayStatus: 'idle', activeWorkerId: null, sessions: [], activeSessionId: null, sessionLoading: false, sessionView: emptySessionView, workspaces: [] })
     },
 
     openWorker(workerId) {
       const g = ensureGateway()
       client?.dispose(true)
       client = null
-      set({ activeWorkerId: workerId, sessions: [], activeSessionId: null, sessionLoading: false, sessionView: emptySessionView, serverRequests: [] })
+      set({ activeWorkerId: workerId, sessions: [], activeSessionId: null, sessionLoading: false, sessionView: emptySessionView, serverRequests: [], workspaces: [] })
       g.openWorker(workerId)
     },
 
@@ -169,10 +179,12 @@ export const useDshStore = create<DshState>((set, get) => {
     async listWorkspaces() {
       if (client === null) return []
       try {
-        return await client.listWorkspaces()
+        const list = await client.listWorkspaces()
+        set({ workspaces: list })
+        return list
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
-        return []
+        return get().workspaces
       }
     },
 
@@ -213,7 +225,12 @@ export const useDshStore = create<DshState>((set, get) => {
     async addWorkspace(path) {
       if (client === null) return null
       try {
-        return await client.addWorkspace(path)
+        const w = await client.addWorkspace(path)
+        // 合并进缓存（按 id 去重）：sidebar / 新建会话首屏立即见到新目录
+        if (w !== null) {
+          set({ workspaces: [...get().workspaces.filter((x) => x.id !== w.id), w] })
+        }
+        return w
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
         return null
@@ -223,7 +240,11 @@ export const useDshStore = create<DshState>((set, get) => {
     async renameWorkspace(id, title) {
       if (client === null) return false
       try {
-        return await client.renameWorkspace(id, title)
+        const ok = await client.renameWorkspace(id, title)
+        if (ok) {
+          set({ workspaces: get().workspaces.map((w) => (w.id === id ? { ...w, title } : w)) })
+        }
+        return ok
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
         return false
@@ -233,7 +254,11 @@ export const useDshStore = create<DshState>((set, get) => {
     async deleteWorkspace(id) {
       if (client === null) return false
       try {
-        return await client.deleteWorkspace(id)
+        const ok = await client.deleteWorkspace(id)
+        if (ok) {
+          set({ workspaces: get().workspaces.filter((w) => w.id !== id) })
+        }
+        return ok
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
         return false
@@ -483,6 +508,12 @@ async function startClient(workerId: string, set: Set, get: Get): Promise<void> 
     set({ workerHandshake: info })
     const raw = await client.listSessions()
     set({ sessions: projectSessionList(raw) })
+    // 预热 workspace 缓存：打开 sidebar / 新建会话首帧即有分组，不用现拉
+    try {
+      set({ workspaces: await client.listWorkspaces() })
+    } catch {
+      // 失败不打扰：使用方打开时 listWorkspaces 会再拉
+    }
     // 不自动打开会话：选择 worker 后停在新建会话首屏，发送首条消息才创建 session
   } catch (error) {
     setNotice(set, error instanceof Error ? error.message : String(error))

@@ -79,8 +79,16 @@ export function ConversationScreen() {
 
   return (
     /* 键盘避让：SDK 57 edge-to-edge 下 Android adjustResize 失效、iOS 无原生避让，
-       会话屏根部包 KAV（双平台 padding），保证 composer 始终在键盘上方 */
-    <KeyboardAvoidingView behavior="padding" style={styles.container}>
+       会话屏根部包 KAV（双平台 padding），保证 composer 始终在键盘上方。
+       automaticOffset 必须：KAV 算 padding 时把 onLayout 的「父容器局部坐标」与
+       「窗口坐标的键盘顶」直接相减，而 App.tsx 的 SafeAreaView 用顶部 inset 把整屏
+       内容下移了状态栏高度 → padding 少算状态栏高度，composer 底部正好被键盘盖住；
+       automaticOffset 改用窗口绝对坐标自纠偏（keyboardVerticalOffset 亦可，但要手动传 inset） */
+    <KeyboardAvoidingView
+      behavior="padding"
+      automaticOffset
+      style={styles.container}
+    >
     <View style={[styles.container, { backgroundColor: palette.background }]}>
       {notice !== null && (
         <View style={[styles.notice, { backgroundColor: palette.warningSoft }]}>

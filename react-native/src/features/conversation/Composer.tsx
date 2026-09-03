@@ -188,9 +188,6 @@ export function Composer(
   >([]);
   // new 特有
   const [path, setPath] = useState("");
-  const [workspaces, setWorkspaces] = useState<
-    readonly { id: string; path: string; title: string }[]
-  >([]);
   const [picker, setPicker] = useState(false);
   const [busy, setBusy] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -216,6 +213,8 @@ export function Composer(
   const createSession = useDshStore((s) => s.createSession);
   const addWorkspace = useDshStore((s) => s.addWorkspace);
   const listWorkspaces = useDshStore((s) => s.listWorkspaces);
+  // workspace 列表读 store 缓存（重开首屏不等待网络），effect 里只做后台刷新
+  const workspaces = useDshStore((s) => s.workspaces);
   const listCommands = useDshStore((s) => s.listCommands);
   const setDefaults = useDshStore((s) => s.setNewSessionDefaults);
   const newSessionDefaults = useDshStore((s) => s.newSessionDefaults);
@@ -233,7 +232,7 @@ export function Composer(
   const activeSessionId = useDshStore((s) => s.activeSessionId);
   const prevRunning = useRef(running);
 
-  // new：加载工作区 + 沿用上次目录
+  // new：刷新工作区缓存 + 沿用上次目录（渲染走 store 订阅的 workspaces）
   useEffect(() => {
     if (!isNew) return;
     void (async () => {
@@ -241,7 +240,6 @@ export function Composer(
         listWorkspaces(),
         readLastWorkspace(),
       ]);
-      setWorkspaces(list);
       const saved =
         last !== null ? list.find((w) => w.path === last) : undefined;
       if (saved !== undefined) setPath(saved.path);
@@ -350,12 +348,10 @@ export function Composer(
 
   const pickDirectory = (dir: string): void => {
     setBusy(true);
+    // store.addWorkspace 成功后自动合并进缓存
     void addWorkspace(dir).then((w) => {
       setBusy(false);
-      if (w !== null) {
-        rememberWorkspace(w.path);
-        setWorkspaces((prev) => [...prev.filter((x) => x.id !== w.id), w]);
-      }
+      if (w !== null) rememberWorkspace(w.path);
     });
   };
 
@@ -501,8 +497,11 @@ export function Composer(
            keyboard-controller 的 KAV 双平台可用）；键盘弹出时布局从居中切贴底，
            输入卡正好坐在键盘上方，而不是在剩余空间里重新居中悬在半空。
            session 的键盘避让由 ConversationScreen 根部 KAV 统一处理（避免双层 padding）；
-           底部安全区由 App.tsx 全局 SafeAreaView 统一处理 */
+           底部安全区由 App.tsx 全局 SafeAreaView 统一处理。
+           automaticOffset：App 全局 SafeAreaView 把内容下移了状态栏高度，KAV 的
+           onLayout 是局部坐标、键盘高是窗口坐标，不纠偏会少算状态栏高度 → 被键盘盖住 */
         behavior={isNew ? "padding" : undefined}
+        automaticOffset
       >
         {/* 空态引导：问候 + 起点 chips（开始输入即收起） */}
         {isNew && helloVisible && (

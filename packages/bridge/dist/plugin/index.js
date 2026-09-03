@@ -846,14 +846,15 @@ var BridgeHub = class {
         if (typeof sessionId !== "string") return fail("bad-request", "sessionId required");
         const slice = await this.adapter.readSlice(sessionId, 0);
         if (slice === null) return fail("not-found", `unknown session ${sessionId}`);
-        try {
-          await this.adapter.openSession(sessionId, this.opts.defaultModel);
-        } catch {
-        }
         for (const c of this.conns.values()) {
           if (c.authed) c.subscribed.add(sessionId);
         }
         this.broadcast(snapshotFrame(slice));
+        try {
+          void this.adapter.openSession(sessionId, this.opts.defaultModel).catch(() => {
+          });
+        } catch {
+        }
         return rpcSuccess(req.id, { fromSeq: slice.fromSeq, toSeq: slice.toSeq, count: slice.events.length });
       }
       case "sessions.close": {

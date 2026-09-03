@@ -17,6 +17,11 @@ const path = require('path');
 const WATCHDOG_M = `#import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 
+// RCTSurfaceHostingProxyRootView 的方法声明（不 import RN 头，运行时动态查找）
+@protocol DSHSplashHostView <NSObject>
+- (void)disableActivityIndicatorAutoHide:(BOOL)disable;
+@end
+
 // 兜底隐藏 splash 加载视图（与 SplashScreenManager.hide() 等价的清理动作）
 static void DSHSplashWatchdogForceHide(void) {
   for (UIWindow *window in [UIApplication sharedApplication].windows) {
@@ -28,7 +33,9 @@ static void DSHSplashWatchdogForceHide(void) {
       if ([NSStringFromClass([view class]) hasPrefix:@"RCTSurfaceHosting"]) {
         UIView *loading = [view valueForKey:@"loadingView"];
         if ([loading isKindOfClass:[UIView class]] && !loading.isHidden) {
-          [(id)view disableActivityIndicatorAutoHide:YES];
+          if ([view respondsToSelector:@selector(disableActivityIndicatorAutoHide:)]) {
+            [(id<DSHSplashHostView>)view disableActivityIndicatorAutoHide:YES];
+          }
           [loading setHidden:YES];
           [loading removeFromSuperview];
         }
@@ -69,7 +76,7 @@ function withSplashWatchdog(config) {
       );
       s = s.replace(
         '/* Begin PBXFileReference section */',
-        `/* Begin PBXFileReference section */\n\t\t${FILE_REF_ID} /* SplashWatchdog.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SplashWatchdog.m; sourceTree = "<group>"; };`,
+        `/* Begin PBXFileReference section */\n\t\t${FILE_REF_ID} /* SplashWatchdog.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = SplashWatchdog.m; path = ${projectName}/SplashWatchdog.m; sourceTree = "<group>"; };`,
       );
       // 挂进主 group（SplashScreen.storyboard 同级）
       s = s.replace(

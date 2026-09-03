@@ -28,7 +28,7 @@
 
 ## 二、App 描述（中文，ASC「描述」字段）
 
-掌鲸（DSH Pocket）是你电脑上 AI 助手的随身遥控器。
+掌鲸（DSH Pocket）是 DeepSeek Harness 的手机端完整对等客户端——电脑上 AI 助手的会话、工具调用、审批与作品，在手机上完整可用。
 
 在手机上：
 • 随时随地与运行在电脑上的 DSH 会话对话，上下文完全同步；
@@ -42,6 +42,14 @@
 • 审批请求若超时或离线，交还电脑端原有流程，详见应用内「协议与政策」。
 
 需要：一台运行 DeepSeek Harness 的电脑，以及对应的中转服务账号。
+
+## 二.5、宣传文本（ASC「Promotional Text」，可免审随时改）
+
+简体中文：
+> DeepSeek Harness 手机端完整对等客户端：会话、实时审批、作品预览，随时随地。
+
+English:
+> The full peer mobile client for DeepSeek Harness — sessions, real-time approvals, and artifact previews, wherever you are.
 
 ## 三、版本发布说明（v1.0.0，ASC「What's New」）
 

@@ -19,6 +19,37 @@ export interface RunInfo {
   readonly host: string
   readonly name: string
   readonly caps: string
+  /** 本轮 dsh 进程打印的 Web 控制台地址（0.1.5+ 带 ?token=，随重启刷新；旧版无认证 URL 同样捕获）。 */
+  webUrl?: string
+}
+
+/** 匹配 dsh 启动打印的 `dsh web: http://127.0.0.1:<port>/[?token=…]`（可能带 LAN 后缀）。 */
+const DSH_WEB_URL_LINE = /^dsh web: (https?:\/\/127\.0\.0\.1:\d+\/?(?:\?token=\S+)?)\b/u
+
+/**
+ * 把本轮 dsh 打印的 Web URL 合并进 run.json（supervisor 与桌面端状态页共享该文件）。
+ * dsh 重启后 URL 必变：exit 时清除、重新打印时覆盖，保持 run.json 只反映存活进程。
+ */
+function writeWebUrl(url: string | undefined): void {
+  const file = runInfoFile()
+  if (!existsSync(file)) return
+  try {
+    const stored = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    if (url === undefined) delete stored['webUrl']
+    else stored['webUrl'] = url
+    writeFileSync(file, `${JSON.stringify(stored, undefined, 2)}\n`)
+  } catch {
+    // run.json 残留损坏时放弃写入，等下轮 start 重写
+  }
+}
+
+/** 从一段 stdout 文本里提取 dsh web URL 行；返回 URL 或 undefined。 */
+function extractWebUrl(text: string): string | undefined {
+  for (const line of text.split('\n')) {
+    const match = DSH_WEB_URL_LINE.exec(line.trim())
+    if (match?.[1] !== undefined) return match[1]
+  }
+  return undefined
 }
 
 interface StoredRunInfo extends RunInfo {
@@ -116,9 +147,18 @@ export async function supervise(
     log(`spawning ${dshBin} ${args.join(' ')}`)
     process.stdout.write(`[dshc] starting: ${dshBin} ${args.join(' ')}\n`)
     child = spawn(dshBin, [...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    // URL 行可能被 chunk 边界截断：跨 chunk 缓冲，只对完整行做匹配
+    let lineBuffer = ''
     child.stdout?.on('data', (chunk: Buffer) => {
+      const text = lineBuffer + chunk.toString()
+      const lines = text.split('\n')
+      lineBuffer = lines.pop() ?? ''
       process.stdout.write(chunk)
-      log(`dsh| ${chunk.toString().trimEnd()}`)
+      for (const line of lines) {
+        log(`dsh| ${line.trimEnd()}`)
+        const url = extractWebUrl(line)
+        if (url !== undefined) writeWebUrl(url)
+      }
     })
     child.stderr?.on('data', (chunk: Buffer) => {
       process.stderr.write(chunk)
@@ -126,6 +166,7 @@ export async function supervise(
     })
     const code = await new Promise<number | null>((resolve) => child!.once('exit', resolve))
     if (stopping) break
+    writeWebUrl(undefined)
     log(`dsh exited with code ${code}`)
     process.stdout.write(`[dshc] dsh exited (code ${code}); restart in ${backoffMs}ms\n`)
     await sleep(backoffMs)

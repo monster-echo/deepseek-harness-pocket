@@ -213,6 +213,26 @@ import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync3, rea
 import { dirname as dirname2 } from "node:path";
 var STOP_FLAG = "dshc.stop-flag";
 var RUN_INFO = "run.json";
+var DSH_WEB_URL_LINE = /^dsh web: (https?:\/\/127\.0\.0\.1:\d+\/?(?:\?token=\S+)?)\b/u;
+function writeWebUrl(url) {
+  const file = runInfoFile();
+  if (!existsSync4(file)) return;
+  try {
+    const stored = JSON.parse(readFileSync3(file, "utf8"));
+    if (url === void 0) delete stored["webUrl"];
+    else stored["webUrl"] = url;
+    writeFileSync3(file, `${JSON.stringify(stored, void 0, 2)}
+`);
+  } catch {
+  }
+}
+function extractWebUrl(text) {
+  for (const line of text.split("\n")) {
+    const match = DSH_WEB_URL_LINE.exec(line.trim());
+    if (match?.[1] !== void 0) return match[1];
+  }
+  return void 0;
+}
 function dshcDir() {
   const dir = `${process.env["HOME"] ?? "."}/.deepseek-harness-pocket`;
   mkdirSync3(dir, { recursive: true });
@@ -288,9 +308,17 @@ async function supervise(dshBin, args, env, info) {
     process.stdout.write(`[dshc] starting: ${dshBin} ${args.join(" ")}
 `);
     child = spawn(dshBin, [...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let lineBuffer = "";
     child.stdout?.on("data", (chunk) => {
+      const text = lineBuffer + chunk.toString();
+      const lines = text.split("\n");
+      lineBuffer = lines.pop() ?? "";
       process.stdout.write(chunk);
-      log(`dsh| ${chunk.toString().trimEnd()}`);
+      for (const line of lines) {
+        log(`dsh| ${line.trimEnd()}`);
+        const url = extractWebUrl(line);
+        if (url !== void 0) writeWebUrl(url);
+      }
     });
     child.stderr?.on("data", (chunk) => {
       process.stderr.write(chunk);
@@ -298,6 +326,7 @@ async function supervise(dshBin, args, env, info) {
     });
     const code = await new Promise((resolve3) => child.once("exit", resolve3));
     if (stopping) break;
+    writeWebUrl(void 0);
     log(`dsh exited with code ${code}`);
     process.stdout.write(`[dshc] dsh exited (code ${code}); restart in ${backoffMs}ms
 `);

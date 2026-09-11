@@ -129,6 +129,7 @@ class RunInfo {
     required this.name,
     required this.pid,
     required this.startedAt,
+    this.webUrl = '',
   });
 
   final String dshBin;
@@ -140,6 +141,10 @@ class RunInfo {
   final int pid;
   final int startedAt; // epoch ms
 
+  /// 本轮 dsh 进程的 Web 控制台地址（0.1.5+ 带 ?token=，随重启刷新；
+  /// supervisor 从 `dsh web:` 行捕获，旧版 runtime 为空）。
+  final String webUrl;
+
   factory RunInfo.fromJson(Map<String, dynamic> json) => RunInfo(
         dshBin: (json['dshBin'] as String?) ?? '',
         dshVersion: (json['dshVersion'] as String?) ?? '',
@@ -149,6 +154,7 @@ class RunInfo {
         name: (json['name'] as String?) ?? '',
         pid: (json['pid'] as num?)?.toInt() ?? 0,
         startedAt: (json['startedAt'] as num?)?.toInt() ?? 0,
+        webUrl: (json['webUrl'] as String?) ?? '',
       );
 
   String get uptimeLabel {

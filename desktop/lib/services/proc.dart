@@ -154,3 +154,14 @@ Future<void> revealInFileBrowser(String path) async {
     await Process.run('xdg-open', [p.dirname(path)]);
   }
 }
+
+/// 跨平台「用系统默认浏览器打开 URL」。
+Future<void> openInBrowser(String url) async {
+  if (Platform.isMacOS) {
+    await Process.run('open', [url]);
+  } else if (Platform.isWindows) {
+    await Process.run('rundll32', ['url.dll,FileProtocolHandler', url]);
+  } else {
+    await Process.run('xdg-open', [url]);
+  }
+}

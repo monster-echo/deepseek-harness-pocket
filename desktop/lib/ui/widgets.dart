@@ -4,6 +4,22 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+/// 管理页路由包装：标题栏 + 返回，内容为原页面 ListView。
+class PanelPage extends StatelessWidget {
+  const PanelPage({super.key, required this.title, required this.child});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: child,
+    );
+  }
+}
+
 class SectionCard extends StatelessWidget {
   const SectionCard({super.key, required this.title, required this.child, this.trailing});
 

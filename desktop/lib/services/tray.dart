@@ -1,4 +1,5 @@
-/// 托盘常驻：状态行 + 菜单（打开/启动/停止/检查更新/开机启动/退出）。
+/// 托盘常驻：状态行 + 菜单（打开/管理面板/启停/检查更新/开机启动/退出）。
+/// 托盘是全应用唯一的管理入口（窗口本体 = 纯 harness 控制台）。
 ///
 /// 菜单与 tooltip 随 worker 运行态刷新（只在翻转时重建，不随轮询 tick 抖动）；
 /// 退出 = 停止 worker 再退出（固定行为）；关窗只是收托盘（app.dart）。
@@ -10,9 +11,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../app_nav.dart';
 import '../models.dart';
 import '../providers.dart';
 import 'worker.dart';
+
+/// 管理面板菜单项（key 与 app_nav 面板注册表对应）。
+const _panelMenuKeys = ['status', 'pairing', 'versions', 'logs'];
+
+const _panelMenuLabels = {'status': '状态', 'pairing': '配对', 'versions': 'dsh 版本', 'logs': '日志'};
 
 typedef WorkerAction = Future<void> Function(WorkerService svc, AppSettings settings);
 
@@ -51,9 +58,11 @@ class TrayController with TrayListener {
     await trayManager.setContextMenu(
       Menu(
         items: [
-          MenuItem(key: 'status', label: 'Worker：${running ? '运行中' : '已停止'}', disabled: true),
+          MenuItem(key: 'worker-state', label: 'Worker：${running ? '运行中' : '已停止'}', disabled: true),
           MenuItem.separator(),
-          MenuItem(key: 'open', label: '打开面板'),
+          MenuItem(key: 'open', label: '打开控制台'),
+          for (final key in _panelMenuKeys) MenuItem(key: key, label: _panelMenuLabels[key]),
+          MenuItem.separator(),
           MenuItem(key: 'start', label: '启动 Worker', disabled: running),
           MenuItem(key: 'stop', label: '停止 Worker', disabled: !running),
           MenuItem.separator(),
@@ -99,6 +108,13 @@ class TrayController with TrayListener {
         await _refreshMenu();
       case 'quit':
         await quitApp();
+      default:
+        // 管理面板项（status/pairing/versions/logs）：显示窗口并推入对应页
+        if (_panelMenuKeys.contains(menuItem.key)) {
+          await windowManager.show();
+          await windowManager.focus();
+          AppNav.pushPanel(menuItem.key!);
+        }
     }
   }
 

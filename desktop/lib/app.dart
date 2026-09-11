@@ -1,15 +1,19 @@
-/// 应用外壳：主题 + 底部导航 + sidecar 缺失横幅 + 关闭到托盘。
+/// 应用外壳：控制台即应用体 + sidecar 缺失横幅 + 关闭到托盘。
+///
+/// 窗口内没有任何管理 chrome：健康态就是纯 DeepSeek Harness Web UI，
+/// 状态/配对/版本/日志全部走托盘菜单（services/tray.dart）以路由推入。
 library;
 
-import 'package:flutter/foundation.dart' show kReleaseMode;
+import 'dart:io';
+
+import 'package:flutter/foundation.dart' show kDebugMode, kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'app_nav.dart';
 import 'providers.dart';
-import 'ui/logs_page.dart';
-import 'ui/status_page.dart';
-import 'ui/versions_page.dart';
+import 'ui/console_page.dart';
 
 class DshApp extends ConsumerStatefulWidget {
   const DshApp({super.key});
@@ -19,12 +23,17 @@ class DshApp extends ConsumerStatefulWidget {
 }
 
 class _DshAppState extends ConsumerState<DshApp> with WindowListener {
-  int _index = 0;
-
   @override
   void initState() {
     super.initState();
     windowManager.addListener(this);
+    if (kDebugMode) {
+      // 调试辅助：DSH_DEBUG_ROUTE=status|pairing|versions|logs 启动即打开对应面板
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final route = Platform.environment['DSH_DEBUG_ROUTE'];
+        if (route != null && route.isNotEmpty) AppNav.pushPanel(route);
+      });
+    }
   }
 
   @override
@@ -45,6 +54,8 @@ class _DshAppState extends ConsumerState<DshApp> with WindowListener {
     return MaterialApp(
       title: 'DSH Pocket Worker',
       debugShowCheckedModeBanner: false,
+      navigatorKey: AppNav.navigatorKey,
+      navigatorObservers: [AppNav.observer],
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4D6BFE)),
         useMaterial3: true,
@@ -60,25 +71,7 @@ class _DshAppState extends ConsumerState<DshApp> with WindowListener {
         body: Column(
           children: [
             if (!sidecarReady) const _SidecarBanner(),
-            Expanded(
-              child: IndexedStack(
-                index: _index,
-                children: const [
-                  StatusPage(),
-                  VersionsPage(),
-                  LogsPage(),
-                ],
-              ),
-            ),
-          ],
-        ),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: (i) => setState(() => _index = i),
-          destinations: const [
-            NavigationDestination(icon: Icon(Icons.monitor_heart_outlined), selectedIcon: Icon(Icons.monitor_heart), label: '状态'),
-            NavigationDestination(icon: Icon(Icons.layers_outlined), selectedIcon: Icon(Icons.layers), label: '版本'),
-            NavigationDestination(icon: Icon(Icons.article_outlined), selectedIcon: Icon(Icons.article), label: '日志'),
+            const Expanded(child: ConsolePage()),
           ],
         ),
       ),

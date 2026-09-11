@@ -1,13 +1,12 @@
-/// 状态页：运行状态 + 启停控制 + 配对二维码。
+/// 状态页：运行状态 + 启停控制 + Web 控制台地址（配对已拆到 pairing_page）。
 library;
 
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import '../providers.dart';
+import '../services/proc.dart';
 import 'widgets.dart';
 
 class StatusPage extends ConsumerStatefulWidget {
@@ -31,7 +30,6 @@ class _StatusPageState extends ConsumerState<StatusPage> {
     } finally {
       if (mounted) setState(() => _busy = false);
       ref.invalidate(workerStatusProvider);
-      ref.invalidate(pairingProvider);
     }
   }
 
@@ -39,7 +37,6 @@ class _StatusPageState extends ConsumerState<StatusPage> {
   Widget build(BuildContext context) {
     final statusAsync = ref.watch(workerStatusProvider);
     final settings = ref.watch(settingsProvider);
-    final pairingAsync = ref.watch(pairingProvider);
 
     return ListView(
       padding: const EdgeInsets.only(bottom: 16),
@@ -64,6 +61,7 @@ class _StatusPageState extends ConsumerState<StatusPage> {
                 InfoRow('dsh 版本', st.run?.dshVersion ?? ''),
                 InfoRow('运行时长', st.run?.uptimeLabel ?? '—'),
                 InfoRow('名称', st.run?.name.isNotEmpty == true ? st.run!.name : settings.workerName.isEmpty ? '（hostname）' : settings.workerName),
+                _WebConsoleRow(webUrl: st.run?.webUrl ?? ''),
                 const SizedBox(height: 10),
                 Row(
                   children: [
@@ -107,66 +105,62 @@ class _StatusPageState extends ConsumerState<StatusPage> {
             error: (e, _) => Text('状态不可用：$e'),
           ),
         ),
-        SectionCard(
-          title: '配对',
-          trailing: TextButton.icon(
-            onPressed: _busy
-                ? null
-                : () => _run('配对码已更新', () async {
-                      await ref.read(workerServiceProvider).rotateToken();
-                    }),
-            icon: const Icon(Icons.key_outlined, size: 16),
-            label: const Text('换配对码'),
-          ),
-          child: pairingAsync.when(
-            data: (payload) => payload == null
-                ? const Text('配对信息不可用（状态文件读取失败）')
-                : Column(
-                    children: [
-                      Center(
-                        child: Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: QrImageView(
-                            data: jsonEncode(payload.toJson()),
-                            version: QrVersions.auto,
-                            size: 190,
-                            gapless: false,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text('配对码  ', style: Theme.of(context).textTheme.bodySmall),
-                          SelectableText(
-                            payload.code,
-                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 4,
-                                ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      InfoRow('主机指纹', payload.fingerprint, copyable: true),
-                      const SizedBox(height: 4),
-                      Text(
-                        '手机 App → 扫码，或输入配对码',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).hintColor),
-                      ),
-                    ],
-                  ),
-            loading: () => const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())),
-            error: (e, _) => Text('配对信息读取失败：$e'),
-          ),
-        ),
         const _AppVersionFooter(),
       ],
+    );
+  }
+}
+
+/// Web 控制台行：显示不带 token 的地址；复制/打开携带完整已认证 URL（token 不上屏）。
+class _WebConsoleRow extends StatelessWidget {
+  const _WebConsoleRow({required this.webUrl});
+
+  final String webUrl;
+
+  /// 展示用：剥掉 query（token），保留 `http://127.0.0.1:3080`。
+  static String _display(String url) {
+    final i = url.indexOf('?');
+    return i > 0 ? url.substring(0, i) : url;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (webUrl.isEmpty) {
+      return const InfoRow('Web 控制台', '');
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 76,
+            child: Text('Web 控制台', style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor)),
+          ),
+          Expanded(child: Text(_display(webUrl), style: theme.textTheme.bodyMedium)),
+          IconButton(
+            tooltip: '复制完整地址（含凭证）',
+            visualDensity: VisualDensity.compact,
+            iconSize: 14,
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: webUrl));
+              if (context.mounted) {
+                ScaffoldMessenger.of(context)
+                  ..hideCurrentSnackBar()
+                  ..showSnackBar(const SnackBar(content: Text('已复制 Web 控制台地址'), duration: Duration(seconds: 1)));
+              }
+            },
+            icon: const Icon(Icons.copy, size: 14),
+          ),
+          IconButton(
+            tooltip: '在默认浏览器打开',
+            visualDensity: VisualDensity.compact,
+            iconSize: 14,
+            onPressed: () => openInBrowser(webUrl),
+            icon: const Icon(Icons.open_in_new, size: 14),
+          ),
+        ],
+      ),
     );
   }
 }

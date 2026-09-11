@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🐳 掌鲸 · DSH Pocket
+<img src="react-native/assets/brand/logo.png" width="110" alt="掌鲸 logo">
+
+# 掌鲸 · DSH Pocket
 
 **把 [DeepSeek Harness](https://github.com/deepseek-ai) 装进你自己的电脑，然后随时随地使唤它。**
 

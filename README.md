@@ -1,17 +1,17 @@
 <div align="center">
 
-# 🐳 DSH Pocket Worker · 掌鲸
+# 🐳 掌鲸 · DSH Pocket
 
 **把 [DeepSeek Harness](https://github.com/deepseek-ai) 装进你自己的电脑，然后随时随地使唤它。**
 
-电脑端托盘小助手 + 手机 App + 加密中转——
+一套三件：**电脑端 Worker**（托盘小助手）+ **手机 App** + **加密中转 Gateway**——
 AI agent 在家里/办公室的电脑上干活，你在沙发上、地铁上、外面，随时看进度、递句话、点个「同意」。
 
 [⬇️ 下载电脑端](https://github.com/monster-echo/deepseek-harness-pocket/releases/latest) · [📱 手机端](react-native/) · [🏗️ 架构文档](docs/ARCHITECTURE.md)
 
 ![控制台](docs/screenshots/desktop-console.png)
 
-*电脑端主界面：打开就是完整的 DeepSeek Harness，对话、干活、交付都在这里*
+*三件套里的「电脑端」：打开就是完整的 DeepSeek Harness，对话、干活、交付都在这里*
 
 </div>
 

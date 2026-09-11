@@ -4,6 +4,8 @@
 
 # 掌鲸 · DSH Pocket
 
+[English](README.en.md) | 中文
+
 **把 [DeepSeek Harness](https://github.com/deepseek-ai) 装进你自己的电脑，然后随时随地使唤它。**
 
 一套三件：**电脑端 Worker**（托盘小助手）+ **手机 App** + **加密中转 Gateway**——

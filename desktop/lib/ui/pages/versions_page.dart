@@ -40,7 +40,6 @@ class _VersionsPageState extends ConsumerState<VersionsPage> {
     } finally {
       if (mounted) setState(() => _busy = false);
       ref.invalidate(workerStatusProvider);
-      ref.invalidate(pairingProvider);
       ref.invalidate(installedDshProvider);
     }
   }
@@ -126,7 +125,7 @@ class _VersionsPageState extends ConsumerState<VersionsPage> {
             children: [
               Expanded(
                 child: Text(
-                  '切换来源或改设置后需重启 Worker 生效',
+                  '切换来源或改设置后需重启服务生效',
                   style: theme.textTheme.muted.copyWith(fontSize: 12),
                 ),
               ),
@@ -137,7 +136,7 @@ class _VersionsPageState extends ConsumerState<VersionsPage> {
                   () => ref.read(workerServiceProvider).restart(ref.read(settingsProvider)),
                 ),
                 leading: const Icon(Icons.restart_alt, size: 15),
-                child: const Text('重启 Worker'),
+                child: const Text('重启服务'),
               ),
             ],
           ),

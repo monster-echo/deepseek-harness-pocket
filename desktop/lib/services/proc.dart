@@ -49,7 +49,7 @@ class Proc {
     if (!AppPaths.sidecarReady) {
       throw SidecarMissingException(
         kReleaseMode
-            ? '应用文件不完整，Worker 功能不可用。请重新安装 DSH Pocket Worker。'
+            ? '应用文件不完整，服务功能不可用。请重新安装 DSH Pocket。'
             : '内置 node sidecar 缺失：${AppPaths.sidecarRoot}\n'
                 '开发态请先运行 desktop/tool/build-sidecar.sh <target>',
       );

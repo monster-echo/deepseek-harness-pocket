@@ -11,7 +11,7 @@ class AutostartService {
   static String get appPath {
     final exe = Platform.resolvedExecutable;
     if (Platform.isMacOS) {
-      // .../DSH Pocket Worker.app/Contents/MacOS/<binary>
+      // .../DSH Pocket.app/Contents/MacOS/<binary>
       var dir = File(exe).parent; // MacOS
       dir = dir.parent; // Contents
       return dir.parent.path; // .app
@@ -22,7 +22,7 @@ class AutostartService {
   Future<void> setup() async {
     final info = await PackageInfo.fromPlatform();
     LaunchAtStartup.instance.setup(
-      appName: info.appName.isEmpty ? 'DSH Pocket Worker' : info.appName,
+      appName: info.appName.isEmpty ? 'DSH Pocket' : info.appName,
       appPath: appPath,
     );
   }

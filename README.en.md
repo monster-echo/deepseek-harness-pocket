@@ -29,7 +29,7 @@ First, **DeepSeek Harness** (usually written `dsh`): DeepSeek's AI agent runtime
 
 | Piece | What it does | For whom |
 |---|---|---|
-| 🖥️ **Desktop Worker** (DSH Pocket Worker) | A quiet tray helper: boots the Harness automatically at login; the app window *is* a full Harness console; status, pairing and logs live in the tray menu | Every computer you want working for you |
+| 🖥️ **Desktop app** (DSH Pocket) | A quiet tray helper: boots the Harness automatically at login; the main window *is* the full Harness; a separate console window holds account, status, versions and logs | Every computer you want working for you |
 | 📱 **Mobile app** | The same session list and chat as your computer — keep the conversation going, watch it run, approve actions from your pocket | You, on the go |
 | ☁️ **Gateway** | An encrypted relay between phone and computer. Your computer dials *out* to it — no public IP, no port forwarding at home | Nobody (it's invisible) |
 
@@ -59,8 +59,8 @@ Real scenarios:
 
 Grab the latest build from [Releases](https://github.com/monster-echo/deepseek-harness-pocket/releases/latest):
 
-- macOS: download `DSH-Pocket-Worker-<version>-macos-arm64.dmg`, drag into Applications, open
-- Windows: download `DSH-Pocket-Worker-Setup-<version>.exe`, double-click
+- macOS: download `DSH-Pocket-<version>-macos-arm64.dmg`, drag into Applications, open
+- Windows: download `DSH-Pocket-Setup-<version>.exe`, double-click
 
 It boots the Harness by itself (first run spends a few minutes preparing the environment). From then on it comes online at every login; closing the window tucks it into the **tray** — everything is managed from the tray menu.
 

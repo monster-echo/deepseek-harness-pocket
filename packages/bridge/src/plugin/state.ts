@@ -70,18 +70,6 @@ export function loadBridgeState(file: string, allowCreate = true): BridgeState |
   return state
 }
 
-/** rotate 配对 token 与配对码（hostKey 与指纹保持稳定）。 */
-export function rotatePairing(state: BridgeState, file: string): BridgeState {
-  const code = String(100000 + (randomBytes(4).readUInt32BE(0) % 900000))
-  const next: BridgeState = {
-    ...state,
-    pairingToken: `pt_${b64url(randomBytes(24))}`,
-    pairingCode: code,
-  }
-  saveBridgeState(resolve(file.replace(/^~(?=\/|$)/, homedir())), next)
-  return next
-}
-
 function saveBridgeState(path: string, state: BridgeState): void {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, `${JSON.stringify(state, undefined, 2)}\n`, { mode: 0o600 })

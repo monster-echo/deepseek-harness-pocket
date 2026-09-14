@@ -11,11 +11,10 @@ import 'proc.dart';
 
 class WorkerService {
   /// dshc start 参数组装（settings → CLI flags）。
-  static List<String> startArgs(AppSettings s, {bool quiet = true}) {
+  static List<String> startArgs(AppSettings s) {
     final args = <String>[
       'start',
       '--detached',
-      if (quiet) '--quiet',
       if (s.gatewayUrl.trim().isNotEmpty) ...['--gateway', s.gatewayUrl.trim()],
       '--port', '${s.port}',
       '--host', s.host,
@@ -107,26 +106,6 @@ class WorkerService {
     final st = await status();
     if (st.running) await stop();
     await start(s);
-  }
-
-  Future<PairingPayload> pairing(AppSettings s) async {
-    final args = <String>['qr', '--json', '--port', '${s.port}'];
-    if (s.gatewayUrl.trim().isNotEmpty) args.addAll(['--gateway', s.gatewayUrl.trim()]);
-    final res = await Proc.dshc(args, timeout: const Duration(seconds: 30));
-    if (!res.ok) throw WorkerActionException(res.output.isEmpty ? '读取配对信息失败' : res.output);
-    try {
-      return PairingPayload.fromJson(jsonDecode(res.stdout) as Map<String, dynamic>);
-    } catch (_) {
-      throw const WorkerActionException('配对信息解析失败（状态文件不可用？）');
-    }
-  }
-
-  /// rotate 配对 token；返回新配对码。
-  Future<String> rotateToken() async {
-    final res = await Proc.dshc(['token'], timeout: const Duration(seconds: 20));
-    if (!res.ok) throw WorkerActionException(res.output.isEmpty ? 'rotate 失败' : res.output);
-    final match = RegExp(r'新配对码 (\d{6})').firstMatch(res.output);
-    return match?.group(1) ?? res.output;
   }
 
   /// 判断 sidecar 是否就绪（供 UI 提示）。

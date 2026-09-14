@@ -1,14 +1,15 @@
 /**
- * Gateway 核心：Worker uplink 与手机接入的 WS 处理、配对挑战、presence、通知分发。
+ * Gateway 核心：Worker uplink 与手机接入的 WS 处理、账号绑定、presence、通知分发。
  *
  * 手机↔Worker 是纯隧道（phone-frame/worker-frame 互转，不解析 /mobile 协议）。
+ * 绑定唯一入口是账号登录：worker-register 带 accountToken（验签后自动绑定）
+ * 或桌面端 REST /api/v1/workers/bind（hostKey 主动绑定）。
  * 账号归属（pairings）与设备/用量持久化在 Store；内存态只保留在线表。
  */
 
 import { randomUUID } from 'node:crypto'
 import {
   parseGatewayToPhoneFrame,
-  type PairingQrPayload,
   type WorkerPresence,
 } from '@deepseek-harness-pocket/bridge-protocol'
 import type { GatewayToPhoneFrame, GatewayToWorkerFrame, WorkerToGatewayFrame } from '@deepseek-harness-pocket/bridge-protocol'
@@ -25,7 +26,6 @@ interface WorkerConn {
   name: string
   fingerprint: string
   dshVersion: string | null
-  pairingCode: string
   alive: boolean
 }
 
@@ -76,7 +76,6 @@ export class Gateway {
   private readonly workers = new Map<string, WorkerConn>()
   private readonly workerByHostKey = new Map<string, string>()
   private readonly phones = new Map<string, PhoneConn>()
-  private readonly challenges = new Map<string, (accepted: boolean) => void>()
   private seq = 0
   /** 今日已中转预览字节（userId → bytes；跨日清零，60s 批量落库） */
   private readonly previewUsedToday = new Map<string, number>()
@@ -100,7 +99,6 @@ export class Gateway {
       name: '',
       fingerprint: '',
       dshVersion: null,
-      pairingCode: '',
       alive: true,
     }
     const id = `wk${++this.seq}`
@@ -154,14 +152,13 @@ export class Gateway {
           name: frame.name,
           fingerprint: frame.hostFingerprint,
           dshVersion: frame.dshVersion,
-          pairingCode: frame.pairingCode,
+          pairingCode: '',
         })
         conn.workerId = workerId
         conn.hostKey = frame.hostKey
         conn.name = frame.name
         conn.fingerprint = frame.hostFingerprint
         conn.dshVersion = frame.dshVersion
-        conn.pairingCode = frame.pairingCode
         this.workerByHostKey.set(frame.hostKey, id)
         // 账号自动绑定：Worker 携带有效 session token 时把 Worker 绑到该账号，
         // 同账号手机端无需扫码配对。用户曾在手机端解绑（revoked 墓碑存在）时不复活。
@@ -192,14 +189,6 @@ export class Gateway {
               this.deliverPreview(phoneId, phone, conn.workerId, frame.inner, bytes)
             }
           }
-        }
-        break
-      }
-      case 'pairing-answer': {
-        const resolve = this.challenges.get(frame.challengeId)
-        if (resolve !== undefined) {
-          this.challenges.delete(frame.challengeId)
-          resolve(frame.accepted)
         }
         break
       }
@@ -505,25 +494,7 @@ export class Gateway {
     }
   }
 
-  // ---------- 配对（REST 调用） ----------
-
-  async bindByQr(userId: string, payload: PairingQrPayload, name: string | null): Promise<PairingResult> {
-    const connId = this.workerByHostKey.get(payload.hostKey)
-    const workerConn = connId !== undefined ? this.workers.get(connId) : undefined
-    if (workerConn === undefined || workerConn.workerId === '') {
-      return { ok: false, reason: 'worker 不在线（请先在电脑上启动 dshc）' }
-    }
-    return this.challengeAndPair(userId, workerConn, payload.code, payload.fingerprint, name)
-  }
-
-  async bindByCode(userId: string, code: string, name: string | null): Promise<PairingResult> {
-    for (const conn of this.workers.values()) {
-      if (conn.pairingCode === code && conn.workerId !== '') {
-        return this.challengeAndPair(userId, conn, code, conn.fingerprint, name)
-      }
-    }
-    return { ok: false, reason: '配对码无效或 Worker 不在线' }
-  }
+  // ---------- 账号绑定（REST 调用） ----------
 
   /**
    * 账号登录绑定（REST）：按 hostKey 找 Worker（可离线，注册过即可），
@@ -564,31 +535,6 @@ export class Gateway {
     return true
   }
 
-  private async challengeAndPair(
-    userId: string,
-    conn: WorkerConn,
-    code: string,
-    fingerprint: string,
-    name: string | null,
-  ): Promise<PairingResult> {
-    const challengeId = `ch_${randomUUID().slice(0, 12)}`
-    const decided = new Promise<boolean>((resolve) => {
-      this.challenges.set(challengeId, resolve)
-      setTimeout(() => {
-        if (this.challenges.has(challengeId)) {
-          this.challenges.delete(challengeId)
-          resolve(false)
-        }
-      }, 15_000)
-    })
-    this.sendToWorkerConn(conn, { kind: 'pairing-challenge', challengeId, code, requestedBy: userId })
-    const accepted = await decided
-    if (!accepted) return { ok: false, reason: 'Worker 拒绝了配对（配对码不匹配）' }
-    await this.store.pairWorker(userId, conn.workerId, name)
-    await this.store.recordUsage({ userId, workerId: conn.workerId, kind: 'pairing-bound', meta: { fingerprint } })
-    await this.broadcastPresence()
-    return { ok: true, workerId: conn.workerId, name: name ?? conn.name }
-  }
 
   /** REST：列出我的 Worker（含在线状态）。 */
   async listWorkers(userId: string): Promise<WorkerPresence[]> {

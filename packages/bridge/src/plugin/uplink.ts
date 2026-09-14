@@ -1,8 +1,8 @@
 /**
  * uplink 模式：插件作为客户端反向连接 Gateway（outbound WSS，断线重连）。
  *
- * 帧协议见 protocol 包 relay.ts：worker-register / ping-pong / phone-frame /
- * pairing-challenge。手机帧经 gateway 的 phone-frame 转发进出 Hub（同一套路由）。
+ * 帧协议见 protocol 包 relay.ts：worker-register / ping-pong / phone-frame。
+ * 手机帧经 gateway 的 phone-frame 转发进出 Hub（同一套路由）。
  * 连接时若账号会话文件可用（桌面端登录写入），随 worker-register 上送
  * accountToken，由 gateway 验签后自动绑定账号（同账号手机端免扫码）。
  */
@@ -26,11 +26,12 @@ export interface UplinkOptions {
   readonly fingerprint: string
   readonly dshVersion: string | null
   readonly hub: BridgeHub
-  readonly pairingCode: string
   readonly reconnectMinMs: number
   readonly reconnectMaxMs: number
   /** 账号会话文件（空 = 关闭账号自动绑定路径） */
   readonly accountSessionFile?: string
+  /** 直接注入的账号 token（优先于会话文件；e2e/测试用） */
+  readonly accountToken?: string
   readonly onNotify?: (signal: WorkerToGatewayFrame & { kind: 'notify' }) => void
 }
 
@@ -74,7 +75,7 @@ export function startUplink(ctx: Context, opts: UplinkOptions): () => void {
     ws.on('open', () => {
       attempt = 0
       // 每次连接现读会话文件：桌面端 refresh token 后无需重启即可带上新凭证
-      const accountToken = readAccountToken(opts.accountSessionFile)
+      const accountToken = opts.accountToken ?? readAccountToken(opts.accountSessionFile)
       send({
         kind: 'worker-register',
         hostKey: opts.hostKey,
@@ -82,8 +83,7 @@ export function startUplink(ctx: Context, opts: UplinkOptions): () => void {
         name: opts.workerName,
         hostFingerprint: opts.fingerprint,
         dshVersion: opts.dshVersion,
-        pairingCode: opts.pairingCode,
-        ...(accountToken !== null ? { accountToken } : {}),
+        ...(accountToken ? { accountToken } : {}),
       })
       pingTimer = setInterval(() => {
         send({ kind: 'pong', nonce: Date.now() })
@@ -111,15 +111,6 @@ export function startUplink(ctx: Context, opts: UplinkOptions): () => void {
         case 'phone-frame': {
           // 手机帧经 gateway 抵达伪连接：复用 Hub 的认证/路由（auth 也在 inner 帧里）
           opts.hub.handleFrame(uplinkConnId, frame.inner)
-          break
-        }
-        case 'pairing-challenge': {
-          // gateway 转发的绑定挑战：核对 6 位配对码
-          const accepted = frame.code === opts.pairingCode
-          send({ kind: 'pairing-answer', challengeId: frame.challengeId, accepted })
-          ctx.logger.info(
-            `deepseek-harness-pocket pairing challenge from ${frame.requestedBy}: ${accepted ? 'accepted' : 'rejected (code mismatch)'}`,
-          )
           break
         }
       }

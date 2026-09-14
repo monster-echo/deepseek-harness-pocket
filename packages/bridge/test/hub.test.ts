@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BridgeHub, capsForLevel } from '../src/plugin/hub.js'
 import type { ApprovalAsk, DshAdapter, QuestionAsk, SessionSlice, SessionSummary } from '../src/plugin/adapter-dsh.js'
-import { generateBridgeState, verifyToken, loadBridgeState, rotatePairing } from '../src/plugin/state.js'
+import { generateBridgeState, verifyToken, loadBridgeState } from '../src/plugin/state.js'
 import { PROTOCOL_VERSION, type QuestionAnswerItem } from '@deepseek-harness-pocket/bridge-protocol'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -107,9 +107,7 @@ describe('state', () => {
     expect(state.hostKey).toMatch(/^hk_/)
     const again = loadBridgeState(file)!
     expect(again.pairingToken).toBe(state.pairingToken)
-    const rotated = rotatePairing(again, file)
-    expect(rotated.pairingToken).not.toBe(state.pairingToken)
-    expect(rotated.hostKey).toBe(state.hostKey)
+    expect(again.hostKey).toBe(state.hostKey)
     rmSync(dir, { recursive: true, force: true })
   })
 

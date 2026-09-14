@@ -25,7 +25,7 @@ class MainWindowApp extends StatelessWidget {
   Widget build(BuildContext context) {
     const scheme = ShadZincColorScheme.light(primary: Color(0xFF4D6BFE));
     return ShadApp(
-      title: 'DeepSeek Harness — DSH Pocket Worker',
+      title: 'DeepSeek Harness — DSH Pocket',
       debugShowCheckedModeBanner: false,
       theme: ShadThemeData(
         brightness: Brightness.light,
@@ -110,7 +110,7 @@ class _GuidePage extends ConsumerWidget {
           children: [
             Icon(running ? Icons.hourglass_top : Icons.power_settings_new, size: 40, color: theme.colorScheme.mutedForeground),
             const SizedBox(height: 12),
-            Text(running ? 'dsh 仍在启动中' : 'Worker 未运行', style: theme.textTheme.h3),
+            Text(running ? 'dsh 仍在启动中' : '服务未运行', style: theme.textTheme.h3),
             const SizedBox(height: 6),
             Text(
               running ? '控制台就绪后本页会自动载入（约 10 秒）' : '启动后即可在本窗口操作 DeepSeek Harness',
@@ -131,7 +131,7 @@ class _GuidePage extends ConsumerWidget {
                       }
                     : null,
                 leading: const Icon(Icons.play_arrow, size: 16),
-                child: const Text('启动 Worker'),
+                child: const Text('启动'),
               )
             else
               ShadButton.outline(
@@ -182,7 +182,7 @@ class _WindowsFallback extends ConsumerWidget {
             Text('Windows 端内嵌控制台暂未支持', style: theme.textTheme.h3),
             const SizedBox(height: 6),
             Text(
-              webUrl.isEmpty ? '启动 Worker 后可复制控制台地址，在浏览器中使用完整 Harness' : '复制控制台地址，在浏览器中使用完整 Harness',
+              webUrl.isEmpty ? '启动服务后可复制控制台地址，在浏览器中使用完整 Harness' : '复制控制台地址，在浏览器中使用完整 Harness',
               textAlign: TextAlign.center,
               style: theme.textTheme.muted,
             ),

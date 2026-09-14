@@ -64,9 +64,9 @@ jobs:
       - name: Package zip + dmg
         run: |
           VER="${{ steps.ver.outputs.version }}"
-          APP="build/macos/Build/Products/Release/DSH Pocket Worker.app"
-          ZIP="DSH-Pocket-Worker-$VER-macos-arm64.zip"
-          DMG="DSH-Pocket-Worker-$VER-macos-arm64.dmg"
+          APP="build/macos/Build/Products/Release/DSH Pocket.app"
+          ZIP="DSH-Pocket-$VER-macos-arm64.zip"
+          DMG="DSH-Pocket-$VER-macos-arm64.dmg"
           ditto -c -k --keepParent "$APP" "$ZIP"
           # dmg：app + Applications 快捷方式的拖拽安装布局（样式设置失败不影响可用性）
           STAGE="dmg-stage"
@@ -74,17 +74,17 @@ jobs:
           cp -R "$APP" "$STAGE/"
           cp assets/dmg-background.png "$STAGE/.background/background.png"
           ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "DSH Pocket Worker" -srcfolder "$STAGE" -ov -format UDRW template.dmg
+          hdiutil create -volname "DSH Pocket" -srcfolder "$STAGE" -ov -format UDRW template.dmg
           DEV="$(hdiutil attach -readwrite -noverify -noautoopen template.dmg | grep -o '^/dev/disk[0-9]*' | tail -1)"
           osascript <<'AS' || echo "[dmg] 窗口样式设置跳过（无 GUI 会话/权限），dmg 仍可拖拽安装"
             tell application "Finder"
-              tell disk "DSH Pocket Worker"
+              tell disk "DSH Pocket"
                 open
                 set current view of container window to icon view
                 set toolbar visible of container window to false
                 set icon size of the icon view options of container window to 110
                 set background picture of the icon view options of container window to file ".background:background.png"
-                set position of item "DSH Pocket Worker.app" of container window to {160, 170}
+                set position of item "DSH Pocket.app" of container window to {160, 170}
                 set position of item "Applications" of container window to {500, 170}
                 set bounds of container window to {100, 100, 760, 500}
                 close
@@ -113,8 +113,8 @@ jobs:
           name: desktop-macos
           # upload-artifact 不认 defaults.run.working-directory，路径相对仓库根
           path: |
-            desktop/DSH-Pocket-Worker-*.zip
-            desktop/DSH-Pocket-Worker-*.dmg
+            desktop/DSH-Pocket-*.zip
+            desktop/DSH-Pocket-*.dmg
             desktop/macos-ed-signature.txt
             desktop/macos-zip-length.txt
           if-no-files-found: error
@@ -168,20 +168,20 @@ jobs:
         run: |
           VER="${{ steps.ver.outputs.version }}"
           RELEASE_DIR="build/windows/x64/runner/Release"
-          powershell -NoProfile -Command "Compress-Archive -Path '$RELEASE_DIR/*' -DestinationPath 'DSH-Pocket-Worker-$VER-windows-x64.zip' -Force"
+          powershell -NoProfile -Command "Compress-Archive -Path '$RELEASE_DIR/*' -DestinationPath 'DSH-Pocket-$VER-windows-x64.zip' -Force"
           # iscc 的相对路径按 .iss 所在目录解析，传 cygpath 绝对路径；
           # MSYS_NO_PATHCONV：值含 / 时 git-bash 会把 //D 整个原样传给 iscc（Unknown option）
           SRC=$(cygpath -w "$PWD/$RELEASE_DIR")
           MSYS_NO_PATHCONV=1 iscc /DAppVersion="$VER" /DSourceDir="$SRC" windows/installer.iss
-          ls -la "DSH-Pocket-Worker-Setup-$VER.exe"
+          ls -la "DSH-Pocket-Setup-$VER.exe"
       - name: Sign setup (WinSparkle DSA)
         env:
           DSA_KEY: ${{ secrets.WINSPARKLE_DSA_PRIVATE_KEY }}
         run: |
           VER="${{ steps.ver.outputs.version }}"
           printf '%s' "$DSA_KEY" > dsa_priv.pem
-          SIG="$(openssl dgst -sha1 -binary < "DSH-Pocket-Worker-Setup-$VER.exe" | openssl dgst -sha1 -sign dsa_priv.pem | openssl enc -base64)"
-          LEN="$(stat -c%s "DSH-Pocket-Worker-Setup-$VER.exe")"
+          SIG="$(openssl dgst -sha1 -binary < "DSH-Pocket-Setup-$VER.exe" | openssl dgst -sha1 -sign dsa_priv.pem | openssl enc -base64)"
+          LEN="$(stat -c%s "DSH-Pocket-Setup-$VER.exe")"
           printf '%s' "$SIG" > windows-dsa-signature.txt
           printf '%s' "$LEN" > windows-exe-length.txt
           rm -f dsa_priv.pem
@@ -190,8 +190,8 @@ jobs:
           name: desktop-windows
           # upload-artifact 不认 defaults.run.working-directory，路径相对仓库根
           path: |
-            desktop/DSH-Pocket-Worker-*.zip
-            desktop/DSH-Pocket-Worker-Setup-*.exe
+            desktop/DSH-Pocket-*.zip
+            desktop/DSH-Pocket-Setup-*.exe
             desktop/windows-dsa-signature.txt
             desktop/windows-exe-length.txt
           if-no-files-found: error
@@ -212,8 +212,8 @@ jobs:
           BUILD="${{ needs.macos.outputs.build }}"
           TAG="$GITHUB_REF_NAME"
           BASE="https://github.com/monster-echo/deepseek-harness-pocket/releases/download/$TAG"
-          MAC_ZIP="DSH-Pocket-Worker-$VER-macos-arm64.zip"
-          WIN_EXE="DSH-Pocket-Worker-Setup-$VER.exe"
+          MAC_ZIP="DSH-Pocket-$VER-macos-arm64.zip"
+          WIN_EXE="DSH-Pocket-Setup-$VER.exe"
           ED_SIG="$(cat dist/macos-ed-signature.txt)"
           ED_LEN="$(cat dist/macos-zip-length.txt)"
           DSA_SIG="$(cat dist/windows-dsa-signature.txt)"
@@ -231,11 +231,11 @@ jobs:
         run: |
           VER="${{ needs.macos.outputs.version }}"
           gh release create "$GITHUB_REF_NAME" \
-            --title "DSH Pocket Worker $VER" \
+            --title "DSH Pocket $VER" \
             --generate-notes \
-            dist/DSH-Pocket-Worker-$VER-macos-arm64.zip \
-            dist/DSH-Pocket-Worker-$VER-macos-arm64.dmg \
-            dist/DSH-Pocket-Worker-$VER-windows-x64.zip \
-            "dist/DSH-Pocket-Worker-Setup-$VER.exe" \
+            dist/DSH-Pocket-$VER-macos-arm64.zip \
+            dist/DSH-Pocket-$VER-macos-arm64.dmg \
+            dist/DSH-Pocket-$VER-windows-x64.zip \
+            "dist/DSH-Pocket-Setup-$VER.exe" \
             dist/appcast-macos.xml \
             dist/appcast-windows.xml

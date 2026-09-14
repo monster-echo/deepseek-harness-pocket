@@ -82,19 +82,13 @@ describe('直连链路', () => {
 })
 
 describe('Gateway 全链路', () => {
-  it('worker uplink → REST 配对 → 手机经 gateway 打开 worker → /mobile 全协议', async () => {
+  it('worker uplink（账号自动绑定）→ 手机经 gateway 打开 worker → /mobile 全协议', async () => {
     const gw = await startTestGateway()
     const dsh = makeFakeDsh(fixture())
-    const worker = await startFakeWorker(dsh, gw.port, '654321')
+    const worker = await startFakeWorker(dsh, gw.port, 'dev:user_e2e')
     try {
-      // 1. 配对（等 uplink 注册完成后重试）
-      let bind: Awaited<ReturnType<typeof gw.gateway.bindByCode>> | undefined
-      for (let i = 0; i < 20; i += 1) {
-        bind = await gw.gateway.bindByCode('user_e2e', '654321', '我的 Mac')
-          if (bind.ok) break
-        await sleep(100)
-      }
-      expect(bind?.ok).toBe(true)
+      // 1. 等 uplink 注册（accountToken 随注册自动绑定）
+      await sleep(300)
 
       // 2. 手机经 gateway
       const phone = new TestPhone(`ws://127.0.0.1:${gw.port}/gw/phone`)

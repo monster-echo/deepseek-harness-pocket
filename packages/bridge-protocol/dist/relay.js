@@ -95,10 +95,6 @@ export function parseGatewayToWorkerFrame(value) {
             return typeof v.phoneId === 'string' && typeof v.inner === 'string'
                 ? { kind: 'phone-frame', phoneId: v.phoneId, inner: v.inner }
                 : null;
-        case 'pairing-challenge':
-            return typeof v.challengeId === 'string' && typeof v.code === 'string' && typeof v.requestedBy === 'string'
-                ? { kind: 'pairing-challenge', challengeId: v.challengeId, code: v.code, requestedBy: v.requestedBy }
-                : null;
         default:
             return null;
     }

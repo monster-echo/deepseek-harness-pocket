@@ -89,7 +89,6 @@ export function apply(ctx: Context, config: PluginConfig): void {
       fingerprint: state.fingerprint,
       dshVersion: adapter.dshVersion(),
       hub,
-      pairingCode: state.pairingCode,
       reconnectMinMs: config.gateway.reconnectMinMs,
       reconnectMaxMs: config.gateway.reconnectMaxMs,
       accountSessionFile: config.gateway.accountSessionFile,
@@ -103,6 +102,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
   ctx.logger.info(
     `deepseek-harness-pocket bridge ready: worker="${workerName}" caps=${config.caps} ` +
       `direct=${config.listen.enabled ? `ws://${config.listen.host}:${config.listen.port}/mobile/ws` : 'off'} ` +
-      `gateway=${config.gateway.url.length > 0 ? config.gateway.url : 'off'} pairingCode=${state.pairingCode}`,
+      `gateway=${config.gateway.url.length > 0 ? config.gateway.url : 'off'} ` +
+      `accountBinding=${config.gateway.accountSessionFile.length > 0 ? 'on' : 'off'}`,
   )
 }

@@ -47,12 +47,12 @@ class _StatusPageState extends ConsumerState<StatusPage> {
           const ShadAlert.destructive(
             icon: Icon(Icons.warning_amber_rounded),
             title: Text('应用文件不完整'),
-            description: Text('Worker 功能不可用，请重新安装 DSH Pocket Worker 后再试'),
+            description: Text('服务功能不可用，请重新安装 DSH Pocket 后再试'),
           ),
           const SizedBox(height: 4),
         ],
         SectionCard(
-          title: 'Worker',
+          title: 'DSH Pocket 服务',
           trailing: _busy
               ? const SizedBox(
                   width: 16, height: 16,
@@ -128,6 +128,28 @@ class _StatusPageState extends ConsumerState<StatusPage> {
             error: (e, _) => Text('状态不可用：$e'),
           ),
         ),
+        const SizedBox(height: 10),
+        SectionCard(
+          title: '应用',
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '应用会自动检查更新；也可以手动检查（GitHub Releases）',
+                  style: theme.textTheme.muted.copyWith(fontSize: 12),
+                ),
+              ),
+              ShadButton.outline(
+                enabled: !_busy,
+                onPressed: () => _run('已是最新版本', () async {
+                  await ref.read(updaterServiceProvider).checkNow();
+                }),
+                leading: const Icon(Icons.cloud_download_outlined, size: 15),
+                child: const Text('检查更新'),
+              ),
+            ],
+          ),
+        ),
         const _AppVersionFooter(),
       ],
     );
@@ -193,7 +215,7 @@ class _AppVersionFooter extends ConsumerWidget {
       padding: const EdgeInsets.only(top: 12),
       child: Center(
         child: Text(
-          'DSH Pocket Worker v${appInfo.value?.version ?? '…'}',
+          'DSH Pocket v${appInfo.value?.version ?? '…'}',
           style: theme.textTheme.muted.copyWith(fontSize: 11),
         ),
       ),

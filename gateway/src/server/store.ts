@@ -37,7 +37,6 @@ export interface Store {
   pool: Pool
   upsertWorker(w: { id: string; hostKey: string; name: string; fingerprint: string; dshVersion: string | null; pairingCode: string }): Promise<void>
   getWorkerByHostKey(hostKey: string): Promise<WorkerRow | null>
-  getWorkerByPairingCode(code: string): Promise<WorkerRow | null>
   getWorkerById(id: string): Promise<WorkerRow | null>
   touchWorker(id: string): Promise<void>
 
@@ -80,14 +79,6 @@ export function createStore(databaseUrl: string): Store {
 
     async getWorkerByHostKey(hostKey) {
       const { rows } = await pool.query<WorkerRow>('select * from workers where host_key = $1 limit 1', [hostKey])
-      return rows[0] ?? null
-    },
-
-    async getWorkerByPairingCode(code) {
-      const { rows } = await pool.query<WorkerRow>(
-        'select * from workers where pairing_code = $1 and last_seen_at > now() - interval \'2 minutes\' limit 1',
-        [code],
-      )
       return rows[0] ?? null
     },
 

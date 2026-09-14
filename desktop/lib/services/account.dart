@@ -11,11 +11,13 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../models.dart';
 import 'paths.dart';
+import 'proc.dart';
 
 class AccountException implements Exception {
   const AccountException(this.message);
@@ -108,34 +110,137 @@ class AccountService {
 
   // ---------- 登录 / 刷新 / 登出 ----------
 
-  /// 邮箱（或用户名）+ 密码登录；成功即持久化会话。
-  Future<AccountSession> signIn({required String identifier, required String password}) async {
-    final data = await _authRequest(
-      '/api/v1/auth/sign-in',
-      body: {
-        'identifier': identifier.trim(),
-        'password': password,
-        'deviceName': '${Platform.operatingSystem} · DSH Pocket Worker',
-      },
-    );
-    final token = data['token'] as String?;
-    final refresh = data['refreshToken'] as String?;
-    if (token == null || token.isEmpty || refresh == null || refresh.isEmpty) {
-      throw const AccountException('登录响应缺少凭证（服务端异常）');
+  static const _loginPreferredPort = 37900;
+  static const _loginTimeout = Duration(minutes: 5);
+
+  HttpServer? _loginServer;
+  Completer<AccountSession>? _loginCompleter;
+
+  /// 是否有浏览器登录流程进行中。
+  bool get loginInProgress =>
+      _loginCompleter != null && !_loginCompleter!.isCompleted;
+
+  /// 浏览器登录（loopback 回调，不在应用内收集账号密码）：
+  ///
+  /// 1. 本地起一次性回调服务 `http://127.0.0.1:<port>/callback`
+  ///    （优先 37900，被占用则自动换随机端口）；
+  /// 2. 打开系统浏览器到 `{authApiUrl}/login?redirect_uri=…&state=…`；
+  /// 3. 用户在网页完成登录后，auth 服务重定向到
+  ///    `redirect_uri?state=…&token=…&refresh_token=…`（可选 user_id/email）；
+  /// 4. 校验 state、保存会话、回调页提示成功，登录完成。
+  ///
+  /// auth 服务需支持的契约（见 desktop/README.md「浏览器登录」）：
+  /// 登录页识别 `redirect_uri`（仅放行 http://127.0.0.1:*），
+  /// 登录成功后 302 回该地址并携带会话参数。
+  Future<AccountSession> loginViaBrowser() async {
+    if (loginInProgress) throw const AccountException('已有登录流程进行中，请先取消');
+    final completer = Completer<AccountSession>();
+    _loginCompleter = completer;
+    HttpServer? server;
+    try {
+      try {
+        server = await HttpServer.bind(InternetAddress.loopbackIPv4, _loginPreferredPort);
+      } on SocketException {
+        server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      }
+      _loginServer = server;
+      final state = _randomState();
+      final redirectUri = 'http://127.0.0.1:${server.port}/callback';
+      final base = _settings().authApiUrl.replaceAll(RegExp(r'/+$'), '');
+      final loginUrl =
+          '$base/login?redirect_uri=${Uri.encodeComponent(redirectUri)}&state=$state';
+
+      server.listen((HttpRequest request) async {
+        try {
+          if (request.uri.path != '/callback') {
+            request.response.statusCode = 404;
+            await request.response.close();
+            return;
+          }
+          final q = request.uri.queryParameters;
+          if (q['state'] != state) {
+            request.response.statusCode = 400;
+            await request.response.close();
+            _failLogin(const AccountException('登录回调校验失败（state 不匹配），请重试'));
+            return;
+          }
+          final token = q['token'] ?? '';
+          final refreshToken = q['refresh_token'] ?? q['refreshToken'] ?? '';
+          if (token.isEmpty || refreshToken.isEmpty) {
+            request.response.statusCode = 400;
+            await request.response.close();
+            _failLogin(const AccountException('登录回调缺少凭证（token / refresh_token），请确认认证服务已支持桌面登录跳转'));
+            return;
+          }
+          final session = AccountSession(
+            userId: q['user_id'] ?? q['userId'] ?? '',
+            email: q['email'] ?? '',
+            token: token,
+            refreshToken: refreshToken,
+            updatedAt: DateTime.now().millisecondsSinceEpoch,
+          );
+          await _saveSession(session);
+          request.response.headers.contentType = ContentType.html;
+          request.response.write(_loginCallbackHtml);
+          await request.response.close();
+          if (!completer.isCompleted) completer.complete(session);
+        } catch (e) {
+          _failLogin(AccountException('登录回调处理失败：$e'));
+        } finally {
+          _shutdownLoginServer();
+        }
+      }, onError: (Object _) {
+        _failLogin(const AccountException('本地回调服务异常，请重试'));
+      });
+
+      await openInBrowser(loginUrl);
+      return await completer.future.timeout(
+        _loginTimeout,
+        onTimeout: () {
+          _shutdownLoginServer();
+          throw const AccountException('登录超时（5 分钟），请重试');
+        },
+      );
+    } on AccountException {
+      _shutdownLoginServer();
+      rethrow;
+    } catch (e) {
+      _shutdownLoginServer();
+      throw AccountException('无法发起浏览器登录：$e');
+    } finally {
+      if (!loginInProgress) _loginCompleter = null;
     }
-    final user = data['user'];
-    final session = AccountSession(
-      userId: user is Map<String, dynamic> ? (user['id'] as String? ?? '') : '',
-      email: user is Map<String, dynamic>
-          ? ((user['email'] as String?) ?? identifier.trim())
-          : identifier.trim(),
-      token: token,
-      refreshToken: refresh,
-      updatedAt: DateTime.now().millisecondsSinceEpoch,
-    );
-    await _saveSession(session);
-    return session;
   }
+
+  /// 取消进行中的浏览器登录。
+  void cancelBrowserLogin() {
+    _failLogin(const AccountException('已取消登录'));
+    _shutdownLoginServer();
+  }
+
+  void _failLogin(AccountException error) {
+    final completer = _loginCompleter;
+    if (completer != null && !completer.isCompleted) {
+      completer.completeError(error);
+    }
+  }
+
+  void _shutdownLoginServer() {
+    _loginServer?.close(force: true);
+    _loginServer = null;
+  }
+
+  String _randomState() {
+    final random = Random.secure();
+    return List.generate(16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  static const _loginCallbackHtml = '''<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>DSH Pocket 登录成功</title>
+<style>body{font-family:-apple-system,'PingFang SC',sans-serif;display:flex;align-items:center;
+justify-content:center;height:100vh;margin:0;background:#09090b;color:#fafafa}
+div{text-align:center}h1{font-size:20px}p{color:#a1a1aa;font-size:14px}</style></head>
+<body><div><h1>✓ 登录成功</h1><p>请回到 DSH Pocket 应用继续使用，本页面可以关闭。</p></div></body></html>''';
 
   /// 用 refresh token 换新会话；会话失效返回 null（调用方决定是否清除 UI 态）。
   Future<AccountSession?> refresh() async {
@@ -184,7 +289,7 @@ class AccountService {
     if (session == null) throw const AccountException('尚未登录');
     final identity = readWorkerIdentity();
     if (identity == null) {
-      throw const AccountException('本机 Worker 标识不可用（请先启动一次 Worker）');
+      throw const AccountException('本机服务标识不可用（请先启动一次服务）');
     }
     final data = await _authRequest(
       '/api/v1/workers/bind',

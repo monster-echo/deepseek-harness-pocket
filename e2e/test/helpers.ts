@@ -63,6 +63,12 @@ export function makeMemoryStore(): Store & { pairingsByWorker: Map<string, Set<s
     async isPaired(userId, workerId) {
       return pairingsByWorker.get(workerId)?.has(userId) ?? false
     },
+    async getPairing(userId, workerId) {
+      if (pairingsByWorker.get(workerId)?.has(userId)) {
+        return { user_id: userId, worker_id: workerId, name: null, created_at: new Date(), revoked_at: null }
+      }
+      return null
+    },
     async upsertDevice() {},
     async listPushTokens() {
       return []
@@ -266,7 +272,7 @@ export async function startTestGateway(): Promise<RunningGateway> {
 }
 
 /** 启动假 Worker：BridgeHub + 直连 server + uplink 到 gateway。 */
-export async function startFakeWorker(dsh: FakeDsh, gatewayPort: number, pairingCode: string): Promise<{
+export async function startFakeWorker(dsh: FakeDsh, gatewayPort: number, accountToken: string): Promise<{
   directPort: number
   closeAll(): Promise<void>
 }> {
@@ -281,7 +287,7 @@ export async function startFakeWorker(dsh: FakeDsh, gatewayPort: number, pairing
     fingerprint: 'fp_e2e',
     dshVersion: '0.1.0-test',
     hub: dsh.hub,
-    pairingCode,
+    accountToken,
     reconnectMinMs: 100,
     reconnectMaxMs: 1000,
   })

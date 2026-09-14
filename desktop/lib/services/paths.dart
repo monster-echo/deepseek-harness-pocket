@@ -33,7 +33,7 @@ class AppPaths {
 
   // ---------- sidecar（打进应用包的 node + bridge） ----------
 
-  /// macOS: DSH Pocket Worker.app/Contents/Resources/node-sidecar
+  /// macOS: DSH Pocket.app/Contents/Resources/node-sidecar
   /// Windows: dsh-pocket-worker.exe 旁的 node-sidecar/
   static String get sidecarRoot {
     final exeDir = p.dirname(Platform.resolvedExecutable);

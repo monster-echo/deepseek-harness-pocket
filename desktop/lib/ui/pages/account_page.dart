@@ -1,9 +1,9 @@
-/// 账号页：登录 / 绑定状态 / 登出（登录机制取代同账号配对）。
+/// 账号页：浏览器登录 / 绑定状态 / 登出（登录是与手机端互联的唯一方式）。
 ///
-/// 与手机 App 同一账号体系：登录成功后会话写入 account-session.json，
-/// bridge 插件 uplink 上送 gateway 自动绑定；本页也可手动「绑定这台电脑」
-/// （REST /api/v1/workers/bind，hostKey 定位，免扫码）。
-/// 同账号手机端无需扫码即可看到这台电脑；「配对」页仅用于共享给其他账号。
+/// 登录不在应用内收集账号密码：点击「在浏览器中登录」跳转系统浏览器，
+/// 在掌鲸认证网页完成登录后重定向回本机回调（loopback），自动保存会话。
+/// 登录成功后会话写入 account-session.json，bridge 插件 uplink 上送 gateway
+/// 自动绑定；本页也可手动「绑定这台电脑」（REST /api/v1/workers/bind）。
 library;
 
 import 'package:flutter/material.dart';
@@ -22,48 +22,7 @@ class AccountPage extends ConsumerStatefulWidget {
 }
 
 class _AccountPageState extends ConsumerState<AccountPage> {
-  final _identifier = TextEditingController();
-  final _password = TextEditingController();
-  bool _signingIn = false;
   bool _binding = false;
-  String? _formError;
-
-  @override
-  void dispose() {
-    _identifier.dispose();
-    _password.dispose();
-    super.dispose();
-  }
-
-  Future<void> _signIn() async {
-    if (_signingIn) return;
-    final identifier = _identifier.text.trim();
-    if (identifier.isEmpty || _password.text.isEmpty) {
-      setState(() => _formError = '请输入账号和密码');
-      return;
-    }
-    setState(() {
-      _signingIn = true;
-      _formError = null;
-    });
-    try {
-      final svc = ref.read(accountServiceProvider);
-      await svc.signIn(identifier: identifier, password: _password.text);
-      // 登录后立即尝试绑定本机（幂等；失败不阻断登录）
-      try {
-        await svc.bindThisWorker();
-      } catch (_) {}
-      ref.invalidate(accountSnapshotProvider);
-      if (mounted) showFeedback(context, ok: '登录成功，手机端将自动看到这台电脑');
-    } catch (e) {
-      setState(() => _formError = e.toString());
-    } finally {
-      if (mounted) {
-        setState(() => _signingIn = false);
-        _password.clear();
-      }
-    }
-  }
 
   Future<void> _bind() async {
     if (_binding) return;
@@ -102,9 +61,7 @@ class _AccountPageState extends ConsumerState<AccountPage> {
         ),
       ]),
       data: (snapshot) => snapshot == null
-          ? _LoginForm(
-              this,
-            )
+          ? const _BrowserLoginCard()
           : _AccountCard(
               snapshot: snapshot,
               binding: _binding,
@@ -115,12 +72,40 @@ class _AccountPageState extends ConsumerState<AccountPage> {
   }
 }
 
-// ---------- 登录表单 ----------
+// ---------- 浏览器登录卡片 ----------
 
-class _LoginForm extends StatelessWidget {
-  const _LoginForm(this.state);
+class _BrowserLoginCard extends ConsumerStatefulWidget {
+  const _BrowserLoginCard();
 
-  final _AccountPageState state;
+  @override
+  ConsumerState<_BrowserLoginCard> createState() => _BrowserLoginCardState();
+}
+
+class _BrowserLoginCardState extends ConsumerState<_BrowserLoginCard> {
+  bool _waiting = false;
+
+  Future<void> _start() async {
+    if (_waiting) return;
+    setState(() => _waiting = true);
+    try {
+      final svc = ref.read(accountServiceProvider);
+      final session = await svc.loginViaBrowser();
+      try {
+        await svc.bindThisWorker();
+      } catch (_) {}
+      ref.invalidate(accountSnapshotProvider);
+      if (mounted) {
+        showFeedback(context, ok: session.email.isEmpty ? '登录成功' : '登录成功（${session.email}）');
+      }
+    } on AccountException catch (e) {
+      if (e.toString().contains('已取消登录')) return;
+      if (mounted) showFeedback(context, error: e);
+    } catch (e) {
+      if (mounted) showFeedback(context, error: e);
+    } finally {
+      if (mounted) setState(() => _waiting = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -129,58 +114,47 @@ class _LoginForm extends StatelessWidget {
       children: [
         SectionCard(
           title: '登录掌鲸账号',
-          trailing: ShadButton.ghost(
-            height: 26,
-            onPressed: () => state.ref.invalidate(accountSnapshotProvider),
-            leading: const Icon(Icons.refresh, size: 15),
-            child: const Text('刷新', style: TextStyle(fontSize: 12)),
-          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                '登录与手机 App 相同的账号，手机端即可直接看到这台电脑，无需扫码配对',
+                '点击下方按钮将打开浏览器，在掌鲸认证网页完成登录后自动返回本应用。\n'
+                '登录同一账号后，手机 App 即可直接看到这台电脑，无需扫码。',
                 style: theme.textTheme.muted.copyWith(fontSize: 12),
               ),
-              const SizedBox(height: 14),
-              ShadInput(
-                controller: state._identifier,
-                placeholder: const Text('邮箱'),
-                enabled: !state._signingIn,
-                onSubmitted: (_) => state._signIn(),
-              ),
-              const SizedBox(height: 8),
-              ShadInput(
-                controller: state._password,
-                placeholder: const Text('密码'),
-                obscureText: true,
-                enabled: !state._signingIn,
-                onSubmitted: (_) => state._signIn(),
-              ),
-              if (state._formError != null) ...[
-                const SizedBox(height: 8),
-                ShadAlert.destructive(
-                  icon: const Icon(Icons.error_outline),
-                  title: const Text('登录失败'),
-                  description: Text(state._formError!),
-                ),
-              ],
-              const SizedBox(height: 14),
-              ShadButton(
-                onPressed: state._signingIn ? null : state._signIn,
-                enabled: !state._signingIn,
-                leading: state._signingIn
-                    ? const SizedBox(
-                        width: 14, height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.login, size: 15),
-                child: Text(state._signingIn ? '登录中…' : '登录'),
-              ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 16),
+              _waiting
+                  ? Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            const SizedBox(width: 10),
+                            Text('已打开浏览器，等待登录完成…', style: theme.textTheme.p),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        ShadButton.outline(
+                          onPressed: () =>
+                              ref.read(accountServiceProvider).cancelBrowserLogin(),
+                          child: const Text('取消'),
+                        ),
+                      ],
+                    )
+                  : ShadButton(
+                      onPressed: _start,
+                      leading: const Icon(Icons.open_in_new, size: 15),
+                      child: const Text('在浏览器中登录'),
+                    ),
+              const SizedBox(height: 6),
               Center(
                 child: Text(
-                  '需要先在手机 App 注册账号',
+                  '没有账号？先在手机 App 注册',
                   style: theme.textTheme.muted.copyWith(fontSize: 11),
                 ),
               ),
@@ -231,7 +205,7 @@ class _AccountCard extends ConsumerWidget {
               const SizedBox(height: 10),
               Text(
                 snapshot.bound
-                    ? '这台电脑已关联到你的账号，手机 App 打开即可看到它，无需扫码配对。'
+                    ? '这台电脑已关联到你的账号，手机 App 打开即可看到它。'
                     : '这台电脑还没有关联到当前账号，点「绑定这台电脑」后手机端即可直接看到它。',
                 style: theme.textTheme.muted.copyWith(fontSize: 12),
               ),
@@ -244,7 +218,8 @@ class _AccountCard extends ConsumerWidget {
                       enabled: !binding,
                       leading: binding
                           ? const SizedBox(
-                              width: 14, height: 14,
+                              width: 14,
+                              height: 14,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.link, size: 15),
@@ -265,12 +240,12 @@ class _AccountCard extends ConsumerWidget {
           ),
         ),
         const SectionCard(
-          title: '关于登录与配对',
+          title: '关于登录',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _Bullet('同一账号登录后自动互联：电脑端登录，手机端即可见，双向都不需要扫码'),
-              _Bullet('「配对」入口保留：用于把这台电脑共享给其他掌鲸账号（扫二维码）'),
+              _Bullet('同一账号登录后自动互联：电脑端登录，手机端即可见，无需任何扫码'),
+              _Bullet('登录在系统浏览器完成，应用内不收集账号密码'),
               _Bullet('手机端解绑后，电脑端重新登录或点「绑定这台电脑」可恢复'),
             ],
           ),

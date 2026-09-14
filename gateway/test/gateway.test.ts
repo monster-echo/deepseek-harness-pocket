@@ -67,9 +67,6 @@ function makeStore(): Store & { workers: Map<string, WorkerRow>; pairings: Map<s
     async getWorkerByHostKey(hostKey) {
       return [...workers.values()].find((r) => r.host_key === hostKey) ?? null
     },
-    async getWorkerByPairingCode(code) {
-      return [...workers.values()].find((r) => r.pairing_code === code) ?? null
-    },
     async getWorkerById(id) {
       return workers.get(id) ?? null
     },
@@ -133,8 +130,8 @@ function makeGateway(): { gateway: Gateway; store: ReturnType<typeof makeStore> 
   return { gateway, store }
 }
 
-describe('gateway 配对与转发', () => {
-  it('worker 注册 → register-ok；配对码绑定 → 挑战 → 成功', async () => {
+describe('gateway 绑定与转发', () => {
+  it('worker 注册 → register-ok；账号按 hostKey 主动绑定', async () => {
     const { gateway } = makeGateway()
     const workerWs = new FakeWs()
     gateway.attachWorker(workerWs as never)
@@ -146,47 +143,19 @@ describe('gateway 配对与转发', () => {
         name: 'mac-mini',
         hostFingerprint: 'fp1',
         dshVersion: null,
-        pairingCode: '123456',
       }),
     )
     await new Promise((r) => setTimeout(r))
     expect(workerWs.lastFrame().kind).toBe('register-ok')
     const workerId = (workerWs.lastFrame() as unknown as { workerId: string }).workerId
 
-    // 配对码绑定（challenge 应答 accept）
-    const bindPromise = gateway.bindByCode('user_a', '123456', null)
-    await new Promise((r) => setTimeout(r))
-    expect(workerWs.lastFrame().kind).toBe('pairing-challenge')
-    workerWs.receive(JSON.stringify({ kind: 'pairing-answer', challengeId: (workerWs.lastFrame() as unknown as { challengeId: string }).challengeId, accepted: true }))
-    const result = await bindPromise
+    // 桌面端登录后主动绑定（REST bindByHostKey 路径）
+    const result = await gateway.bindByHostKey('user_a', 'hk_1')
     expect(result.ok).toBe(true)
     expect(result.workerId).toBe(workerId)
   })
 
-  it('配对码错误 → Worker 拒绝 → 绑定失败', async () => {
-    const { gateway } = makeGateway()
-    const workerWs = new FakeWs()
-    gateway.attachWorker(workerWs as never)
-    workerWs.receive(
-      JSON.stringify({
-        kind: 'worker-register',
-        hostKey: 'hk_2',
-        protocolVersion: 'mobile/v1',
-        name: 'pc',
-        hostFingerprint: 'fp2',
-        dshVersion: null,
-        pairingCode: '111222',
-      }),
-    )
-    await new Promise((r) => setTimeout(r))
-    const bindPromise = gateway.bindByCode('user_b', '111222', null)
-    await new Promise((r) => setTimeout(r))
-    workerWs.receive(JSON.stringify({ kind: 'pairing-answer', challengeId: (workerWs.lastFrame() as unknown as { challengeId: string }).challengeId, accepted: false }))
-    const result = await bindPromise
-    expect(result.ok).toBe(false)
-  })
-
-  it('手机认证 → worker-open（未配对拒绝）→ 配对后打开 → 帧转发', async () => {
+  it('手机认证 → 未绑定 worker-open 拒绝 → 绑定后打开 → 帧转发', async () => {
     const { gateway } = makeGateway()
     const workerWs = new FakeWs()
     gateway.attachWorker(workerWs as never)
@@ -198,23 +167,10 @@ describe('gateway 配对与转发', () => {
         name: 'mbp',
         hostFingerprint: 'fp3',
         dshVersion: null,
-        pairingCode: '333444',
       }),
     )
     await new Promise((r) => setTimeout(r))
     const workerId = (workerWs.lastFrame() as unknown as { workerId: string }).workerId
-
-    // 完成一次配对（挑战应答 accept）
-    const bindPromise = gateway.bindByCode('user_c', '333444', null)
-    await new Promise((r) => setTimeout(r))
-    workerWs.receive(
-      JSON.stringify({
-        kind: 'pairing-answer',
-        challengeId: (workerWs.lastFrame() as unknown as { challengeId: string }).challengeId,
-        accepted: true,
-      }),
-    )
-    expect((await bindPromise).ok).toBe(true)
 
     const phoneWs = new FakeWs()
     gateway.attachPhone(phoneWs as never)
@@ -224,12 +180,16 @@ describe('gateway 配对与转发', () => {
     expect(frames().some((f) => f.kind === 'auth-ok')).toBe(true)
     expect(frames().some((f) => f.kind === 'presence')).toBe(true)
 
-    // 未配对 worker → 拒绝
+    // 未绑定 worker → 拒绝
     phoneWs.receive(JSON.stringify({ kind: 'worker-open', workerId: 'w_unknown' }))
     await new Promise((r) => setTimeout(r))
     expect((phoneWs.lastFrame() as unknown as { ok: boolean }).ok).toBe(false)
+    phoneWs.receive(JSON.stringify({ kind: 'worker-open', workerId }))
+    await new Promise((r) => setTimeout(r))
+    expect((phoneWs.lastFrame() as unknown as { ok: boolean }).ok).toBe(false)
 
-    // 已配对 → 打开成功 → 上行帧转发到 worker，下行帧回手机
+    // 账号绑定后 → 打开成功 → 上行帧转发到 worker，下行帧回手机
+    expect((await gateway.bindByHostKey('user_c', 'hk_3')).ok).toBe(true)
     phoneWs.receive(JSON.stringify({ kind: 'worker-open', workerId }))
     await new Promise((r) => setTimeout(r))
     expect((phoneWs.lastFrame() as unknown as { ok: boolean }).ok).toBe(true)
@@ -245,8 +205,6 @@ describe('gateway 配对与转发', () => {
     expect(toPhone.inner).toBe('{"kind":"auth-ok"}')
   })
 
-  // ---------- 账号登录绑定（免扫码） ----------
-
   it('register 带 accountToken → 自动绑定；同账号手机 presence 可见', async () => {
     const { gateway } = makeGateway()
     const workerWs = new FakeWs()
@@ -259,7 +217,6 @@ describe('gateway 配对与转发', () => {
         name: 'accountless-pc',
         hostFingerprint: 'fp_acct',
         dshVersion: null,
-        pairingCode: '909090',
         accountToken: 'dev:user_acct',
       }),
     )
@@ -297,8 +254,7 @@ describe('gateway 配对与转发', () => {
           name: 'pc',
           hostFingerprint: 'fp',
           dshVersion: null,
-          pairingCode: '121212',
-          ...(token !== undefined ? { accountToken: token } : {}),
+            ...(token !== undefined ? { accountToken: token } : {}),
         }),
       )
       await new Promise((r) => setTimeout(r))
@@ -320,7 +276,6 @@ describe('gateway 配对与转发', () => {
         name: 'tomb-pc',
         hostFingerprint: 'fp_tomb',
         dshVersion: null,
-        pairingCode: '565656',
         accountToken: 'dev:user_tomb',
       }),
     )
@@ -344,7 +299,6 @@ describe('gateway 配对与转发', () => {
         name: 'tomb-pc',
         hostFingerprint: 'fp_tomb',
         dshVersion: null,
-        pairingCode: '565656',
         accountToken: 'dev:user_tomb',
       }),
     )
@@ -371,7 +325,7 @@ describe('gateway 作品预览配额', () => {
     gateway.attachWorker(workerWs as never)
     workerWs.receive(JSON.stringify({
       kind: 'worker-register', hostKey: 'hk_pv', protocolVersion: 'mobile/v1',
-      name: 'pv-host', hostFingerprint: 'fpv', dshVersion: null, pairingCode: '654321',
+      name: 'pv-host', hostFingerprint: 'fpv', dshVersion: null, accountToken: 'dev:pv_user',
     }))
     const phoneWs = new FakeWs()
     gateway.attachPhone(phoneWs as never)
@@ -386,11 +340,7 @@ describe('gateway 作品预览配额', () => {
       const { workerWs, phoneWs } = setupTunnel(gateway)
       await vi.advanceTimersByTimeAsync(0)
       const workerId = (workerWs.sent.map((t) => JSON.parse(t)).find((f: { kind: string }) => f.kind === 'register-ok') as { workerId: string }).workerId
-      // 绑定 + 打开
-      const bind = gateway.bindByCode('pv_user', '654321', null)
-      await vi.advanceTimersByTimeAsync(0)
-      workerWs.receive(JSON.stringify({ kind: 'pairing-answer', challengeId: (workerWs.lastFrame() as unknown as { challengeId: string }).challengeId, accepted: true }))
-      await bind
+      await vi.advanceTimersByTimeAsync(0) // accountToken 注册即自动绑定
       phoneWs.receive(JSON.stringify({ kind: 'worker-open', workerId }))
       await vi.advanceTimersByTimeAsync(0)
 
@@ -423,10 +373,7 @@ describe('gateway 作品预览配额', () => {
       const { workerWs, phoneWs } = setupTunnel(gateway)
       await new Promise((r) => setTimeout(r, 0))
       const workerId = (workerWs.sent.map((t) => JSON.parse(t)).find((f: { kind: string }) => f.kind === 'register-ok') as { workerId: string }).workerId
-      const bind = gateway.bindByCode('pv_user', '654321', null)
-      await new Promise((r) => setTimeout(r, 0))
-      workerWs.receive(JSON.stringify({ kind: 'pairing-answer', challengeId: (workerWs.lastFrame() as unknown as { challengeId: string }).challengeId, accepted: true }))
-      await bind
+      await new Promise((r) => setTimeout(r, 0)) // accountToken 注册即自动绑定
       phoneWs.receive(JSON.stringify({ kind: 'worker-open', workerId }))
       await new Promise((r) => setTimeout(r, 0))
 

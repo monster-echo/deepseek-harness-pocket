@@ -1,12 +1,9 @@
-/// 托盘常驻（主窗口引擎）：状态行 + 菜单。
+/// 托盘常驻（主窗口引擎）：状态行 + 精简菜单。
 ///
-/// 双窗口：托盘是全应用唯一管理入口。
-/// - 「打开控制台」/各管理面板 → 独立控制台窗口（services/console_window.dart）；
-/// - 「打开 Harness 主窗口」 → 主窗口（纯 harness 网页壳）。
-///
-/// 菜单与 tooltip 随 worker 运行态刷新；「开机启动」为 checkbox 菜单项，
-/// 每次弹出菜单前强制按当前自启状态重建，保证勾选态始终新鲜。
-/// 退出 = 停止 worker 再退出（固定行为）；关窗只是收托盘。
+/// 双窗口：托盘是全应用唯一管理入口，菜单只留主入口——
+/// 控制台（全部管理面板）/ Harness 主窗口 / 启停 / 开机启动 / 退出。
+/// 「开机启动」为 checkbox 菜单项，每次弹出菜单前强制按当前自启状态重建，
+/// 保证勾选态始终新鲜。退出 = 停止服务再退出；关窗只是收托盘。
 library;
 
 import 'dart:io' show Platform;
@@ -15,7 +12,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
-import '../app_nav.dart';
 import '../models.dart';
 import '../providers.dart';
 import 'worker.dart';
@@ -51,22 +47,20 @@ class TrayController with TrayListener {
     );
   }
 
-  /// 组装菜单（读当前容器状态；checkbox 直接反映自启开关）。
+  /// 精简菜单：状态 + 两个窗口入口 + 启停 + 自启 + 退出。
+  /// 管理面板（状态/账号/版本/日志）在控制台窗口的侧栏里切换。
   Menu _buildMenu() {
     final running = _container.read(workerStatusProvider).value?.running ?? false;
     final autostart = _container.read(autostartEnabledProvider).value ?? false;
     return Menu(
       items: [
-        MenuItem(key: 'worker-state', label: 'Worker：${running ? '运行中' : '已停止'}', disabled: true),
+        MenuItem(key: 'worker-state', label: 'DSH Pocket：${running ? '运行中' : '已停止'}', disabled: true),
         MenuItem.separator(),
         MenuItem(key: 'open-console', label: '打开控制台'),
-        for (final key in kPanelKeys) MenuItem(key: 'panel:$key', label: kPanelLabels[key]!),
-        MenuItem(key: 'open-main', label: '打开 Harness 主窗口'),
+        MenuItem(key: 'open-main', label: '打开 Harness'),
         MenuItem.separator(),
-        MenuItem(key: 'start', label: '启动 Worker', disabled: running),
-        MenuItem(key: 'stop', label: '停止 Worker', disabled: !running),
-        MenuItem.separator(),
-        MenuItem(key: 'update', label: '检查更新'),
+        MenuItem(key: 'start', label: '启动', disabled: running),
+        MenuItem(key: 'stop', label: '停止', disabled: !running),
         // checkbox：系统原生勾选态；右键弹出前 _refreshMenu 保证与实际自启状态一致
         MenuItem.checkbox(key: 'autostart', label: '开机启动', checked: autostart),
         MenuItem.separator(),
@@ -80,7 +74,7 @@ class TrayController with TrayListener {
     _menuBuilding = true;
     try {
       final running = _container.read(workerStatusProvider).value?.running ?? false;
-      await trayManager.setToolTip('DSH Pocket Worker — ${running ? '运行中' : '已停止'}');
+      await trayManager.setToolTip('DSH Pocket — ${running ? '运行中' : '已停止'}');
       await trayManager.setContextMenu(_buildMenu());
     } catch (_) {
       // 无会话环境等场景托盘不可用，静默
@@ -114,10 +108,6 @@ class TrayController with TrayListener {
         await _runWorkerAction((svc, s) => svc.start(s));
       case 'stop':
         await _runWorkerAction((svc, _) => svc.stop());
-      case 'update':
-        try {
-          await _container.read(updaterServiceProvider).checkNow();
-        } catch (_) {}
       case 'autostart':
         final notifier = _container.read(autostartEnabledProvider.notifier);
         final current = _container.read(autostartEnabledProvider).value ?? false;
@@ -127,13 +117,6 @@ class TrayController with TrayListener {
         await _refreshMenu();
       case 'quit':
         await quitApp();
-      default:
-        // 管理面板项：panel:<key> → 控制台窗口对应面板
-        final key = menuItem.key;
-        if (key != null && key.startsWith('panel:')) {
-          final panel = normalizePanel(key.substring('panel:'.length));
-          await _container.read(consoleWindowServiceProvider).open(panel: panel);
-        }
     }
   }
 
@@ -144,11 +127,10 @@ class TrayController with TrayListener {
       // 托盘动作静默失败（控制台里有可见的错误展示）
     } finally {
       _container.invalidate(workerStatusProvider);
-      _container.invalidate(pairingProvider);
     }
   }
 
-  /// 真正退出：停止 worker（固定行为）后退出。
+  /// 真正退出：停止服务（固定行为）后退出。
   /// windowManager.destroy = NSApp.terminate，控制台引擎随进程一起结束。
   Future<void> quitApp() async {
     try {

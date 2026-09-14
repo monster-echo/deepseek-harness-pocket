@@ -29,7 +29,7 @@ AI agent 在家里/办公室的电脑上干活，你在沙发上、地铁上、�
 
 | 组件 | 一句话解释 | 给谁用 |
 |---|---|---|
-| 🖥️ **电脑端**（DSH Pocket Worker） | 一个安静的托盘小助手：开机自动把 Harness 跑起来，主界面就是完整的 Harness，状态/配对/日志都收进托盘菜单 | 每台想干活的电脑 |
+| 🖥️ **电脑端**（DSH Pocket） | 一个安静的托盘小助手：开机自动把 Harness 跑起来，主界面就是完整的 Harness，状态/配对/日志都收进托盘菜单 | 每台想干活的电脑 |
 | 📱 **手机 App** | 和电脑上**一模一样**的会话列表和聊天界面——在外面用手机接着聊、看它跑、批审批 | 你的口袋 |
 | ☁️ **掌鲸 Gateway** | 手机和电脑之间的加密中转：电脑主动连出去，家里不需要公网 IP、不开端口 | 无感 |
 
@@ -59,14 +59,14 @@ AI agent 在家里/办公室的电脑上干活，你在沙发上、地铁上、�
 
 从 [Releases](https://github.com/monster-echo/deepseek-harness-pocket/releases/latest) 下载安装：
 
-- macOS：下载 `DSH-Pocket-Worker-<版本>-macos-arm64.dmg`，拖进「应用程序」，打开
-- Windows：下载 `DSH-Pocket-Worker-Setup-<版本>.exe`，双击安装
+- macOS：下载 `DSH-Pocket-<版本>-macos-arm64.dmg`，拖进「应用程序」，打开
+- Windows：下载 `DSH-Pocket-Setup-<版本>.exe`，双击安装
 
 打开后它会自己把 Harness 跑起来（第一次会花几分钟准备环境）。之后每次开机都自动在线，窗口关了会收进**托盘**——管理入口都在托盘右键菜单里。
 
 **② 手机：登录同一账号，自动互联**
 
-电脑端托盘菜单 →「控制台」→「账号」，登录与手机 App **相同的掌鲸账号**——手机端即刻看到这台电脑，**无需扫码配对**：
+电脑端托盘菜单 →「控制台」→「账号」→「在浏览器中登录」，登录与手机 App **相同的掌鲸账号**——手机端即刻看到这台电脑，**无需扫码配对**：
 
 <div align="center"><img src="docs/screenshots/desktop-pairing.png" width="320"><br><sub>把电脑共享给其他账号时，仍可用「配对」页扫码（示意图，非真实配对码）</sub></div>
 

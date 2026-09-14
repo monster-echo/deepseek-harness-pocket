@@ -1,7 +1,6 @@
 /**
  * REST /api/v1/*：由自定义 server 直接处理（不经 Next），与 WS 核心同一构建。
  *
- * POST   /api/v1/pairing/bind      { qr?: {payload}, code?, name? }
  * GET    /api/v1/workers           我的 Worker 列表（含在线状态）
  * POST   /api/v1/workers/bind      { hostKey } 账号登录绑定（桌面端，免扫码）
  * DELETE /api/v1/workers?workerId= 解绑
@@ -10,7 +9,6 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { parsePairingQrPayload } from '@deepseek-harness-pocket/bridge-protocol'
 import type { Store } from './store.js'
 import type { Gateway } from './gateway.js'
 import { createAuthVerifier, type VerifiedUser } from './auth-verify.js'
@@ -53,37 +51,6 @@ export function createApiRouter(deps: ApiDeps): (req: IncomingMessage, res: Serv
 
     if (url === '/api/v1/health' && req.method === 'GET') {
       json(res, 200, { ok: true, service: 'deepseek-harness-pocket-gateway', protocol: 'mobile/v1' })
-      return true
-    }
-
-    if (url === '/api/v1/pairing/bind' && req.method === 'POST') {
-      const user = await authUser(req)
-      if (user === null) {
-        json(res, 401, { error: 'unauthorized' })
-        return true
-      }
-      let body: { qr?: { payload?: string }; code?: string; name?: string }
-      try {
-        body = (await readBody(req)) as typeof body
-      } catch {
-        json(res, 400, { error: 'bad request' })
-        return true
-      }
-      let result
-      if (typeof body.qr?.payload === 'string') {
-        const payload = parsePairingQrPayload(body.qr.payload)
-        if (payload === null) {
-          json(res, 400, { error: 'invalid qr payload' })
-          return true
-        }
-        result = await deps.gateway.bindByQr(user.userId, payload, body.name ?? null)
-      } else if (typeof body.code === 'string' && /^\d{6}$/.test(body.code)) {
-        result = await deps.gateway.bindByCode(user.userId, body.code, body.name ?? null)
-      } else {
-        json(res, 400, { error: 'qr payload or 6-digit code required' })
-        return true
-      }
-      json(res, result.ok ? 200 : 422, result)
       return true
     }
 

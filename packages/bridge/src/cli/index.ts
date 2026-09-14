@@ -5,23 +5,22 @@
  *   dshc install [--gateway wss://…]     安装开机自启（launchd / systemd user）
  *   dshc uninstall                       移除自启
  *   dshc start [--gateway wss://…] [--port 3780] [--host 0.0.0.0]
- *        [--caps m1|m2|m3] [--name <名称>] [--dsh <路径>] [--detached] [--quiet]
- *                                        拉起并守护 dsh（companion profile），打印配对码
+ *        [--caps m1|m2|m3] [--name <名称>] [--dsh <路径>] [--detached]
+ *                                        拉起并守护 dsh（companion profile）
  *   dshc stop                            停止 supervisor 与 dsh
  *   dshc status [--json]                 查看运行状态（--json 机器可读，桌面端用）
- *   dshc token                           rotate 配对 token 与配对码
- *   dshc qr [--gateway wss://…] [--json] 重新打印配对二维码（--json 输出 payload）
+ *
+ * 手机端绑定走账号登录：桌面端登录后会话写入 account-session.json，
+ * 插件 uplink 随注册上送 gateway 自动绑定（同账号免扫码）。
  */
 
 import { spawnSync } from 'node:child_process'
 import { hostname, networkInterfaces } from 'node:os'
-import { loadBridgeState, rotatePairing, defaultStateFile } from '../plugin/state.js'
-import { printPairing } from './qr.js'
+import { defaultStateFile } from '../plugin/state.js'
 import { compareVersion, packageRoot, resolveDshBin } from './runtime.js'
 import { COMPANION_PROFILE, installBridgePackage, profileDir, upsertBridgePatch } from './profile.js'
 import { detachSpawn, dshcDir, isRunning, logFile, pidFile, readRunInfo, requestStop, supervise } from './supervisor.js'
 import { autostartInstall, autostartUninstall } from './autostart.js'
-import type { PairingQrPayload } from '@deepseek-harness-pocket/bridge-protocol'
 
 interface CliOptions {
   gateway: string
@@ -32,7 +31,6 @@ interface CliOptions {
   dsh: string | undefined
   detached: boolean
   json: boolean
-  quiet: boolean
 }
 
 function parseArgs(argv: readonly string[]): { command: string; options: CliOptions } {
@@ -47,7 +45,6 @@ function parseArgs(argv: readonly string[]): { command: string; options: CliOpti
     dsh: undefined,
     detached: false,
     json: false,
-    quiet: false,
   }
   const args = [...argv]
   const command = args.shift() ?? 'help'
@@ -67,45 +64,11 @@ function parseArgs(argv: readonly string[]): { command: string; options: CliOpti
       case '--dsh': options.dsh = value(); break
       case '--detached': options.detached = true; break
       case '--json': options.json = true; break
-      case '--quiet': options.quiet = true; break
       default:
         throw new Error(`未知参数 ${flag}`)
     }
   }
   return { command, options }
-}
-
-function lanUrl(port: number): string | undefined {
-  for (const nets of Object.values(networkInterfaces())) {
-    for (const net of nets ?? []) {
-      if (net.family === 'IPv4' && !net.internal) return `ws://${net.address}:${port}/mobile/ws`
-    }
-  }
-  return undefined
-}
-
-function qrPayload(gatewayUrl: string, port: number): PairingQrPayload {
-  const state = loadBridgeState(defaultStateFile())
-  if (state === undefined) throw new Error('状态文件不可用')
-  const lan = lanUrl(port)
-  return lan === undefined
-    ? {
-        v: 1,
-        gatewayUrl: gatewayUrl.length > 0 ? gatewayUrl : '(未配置 gateway，仅同网段可用)',
-        hostKey: state.hostKey,
-        token: state.pairingToken,
-        fingerprint: state.fingerprint,
-        code: state.pairingCode,
-      }
-    : {
-        v: 1,
-        gatewayUrl: gatewayUrl.length > 0 ? gatewayUrl : '(未配置 gateway，仅同网段可用)',
-        lanUrl: lan,
-        hostKey: state.hostKey,
-        token: state.pairingToken,
-        fingerprint: state.fingerprint,
-        code: state.pairingCode,
-      }
 }
 
 /** 探测 dsh 版本（run.json 元数据用；失败返回空串）。 */
@@ -139,7 +102,6 @@ async function main(): Promise<void> {
         workerName: name,
         stateFile,
       })
-      if (!options.quiet) printPairing(qrPayload(options.gateway, options.port))
       if (options.detached) {
         const args = [
           '--gateway', options.gateway,
@@ -149,7 +111,6 @@ async function main(): Promise<void> {
         ]
         if (options.name.length > 0) args.push('--name', options.name)
         if (options.dsh !== undefined) args.push('--dsh', options.dsh)
-        if (options.quiet) args.push('--quiet')
         const pid = detachSpawn(args)
         process.stdout.write(`[dshc] 后台运行中 (pid ${pid})，日志: ${logFile()}\n`)
         process.exit(0)
@@ -208,39 +169,6 @@ async function main(): Promise<void> {
       break
     }
 
-    case 'token': {
-      const state = loadBridgeState(stateFile)
-      if (state === undefined) throw new Error('状态文件不可用')
-      // 运行中的 dsh 只在启动时读状态文件：rotate 后必须重启，否则直连 token/配对码失配
-      const runBefore = readRunInfo()
-      const wasRunning = isRunning() !== null
-      const next = rotatePairing(state, stateFile)
-      if (wasRunning && runBefore !== undefined) {
-        requestStop()
-        for (let i = 0; i < 20 && isRunning() !== null; i += 1) await new Promise((r) => setTimeout(r, 500))
-        const args = [
-          '--gateway', runBefore.gatewayUrl,
-          '--port', String(runBefore.port),
-          '--host', runBefore.host,
-          '--caps', runBefore.caps.length > 0 ? runBefore.caps : 'm3',
-        ]
-        if (runBefore.name.length > 0) args.push('--name', runBefore.name)
-        args.push('--dsh', runBefore.dshBin, '--quiet')
-        const pid = detachSpawn(args)
-        process.stdout.write(`[dshc] 配对 token 已 rotate，新配对码 ${next.pairingCode}；worker 已重启生效 (pid ${pid})（运行 dshc qr 查看二维码）\n`)
-      } else {
-        process.stdout.write(`[dshc] 配对 token 已 rotate，新配对码 ${next.pairingCode}（运行 dshc qr 查看二维码）\n`)
-      }
-      break
-    }
-
-    case 'qr': {
-      const payload = qrPayload(options.gateway, options.port)
-      if (options.json) process.stdout.write(`${JSON.stringify(payload)}\n`)
-      else printPairing(payload)
-      break
-    }
-
     case 'install': {
       process.stdout.write(`${autostartInstall(options.gateway)}\n`)
       break
@@ -261,9 +189,9 @@ async function main(): Promise<void> {
           '命令:',
           '  install [--gateway wss://…]   安装开机自启（并启动）',
           '  uninstall                     移除自启',
-          '  start [--gateway …] [--port 3780] [--caps m3] [--detached] [--quiet]',
-          '                                拉起并守护 dsh，打印配对二维码',
-          '  stop / status [--json] / token / qr [--json]',
+          '  start [--gateway …] [--port 3780] [--caps m3] [--detached]',
+          '                                拉起并守护 dsh（手机端经账号登录绑定）',
+          '  stop / status [--json]',
         ].join('\n'),
       )
       if (command !== 'help') process.exit(64)

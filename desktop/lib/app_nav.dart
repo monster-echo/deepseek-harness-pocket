@@ -8,18 +8,16 @@ import 'package:flutter/material.dart';
 
 import 'ui/pages/account_page.dart';
 import 'ui/pages/logs_page.dart';
-import 'ui/pages/pairing_page.dart';
 import 'ui/pages/status_page.dart';
 import 'ui/pages/versions_page.dart';
 
 /// 面板键（托盘菜单 key 与控制台导航共用）。
-const kPanelKeys = <String>['status', 'account', 'pairing', 'versions', 'logs'];
+const kPanelKeys = <String>['status', 'account', 'versions', 'logs'];
 
 /// 面板中文标签。
 const kPanelLabels = <String, String>{
   'status': '状态',
   'account': '账号',
-  'pairing': '配对',
   'versions': 'dsh 版本',
   'logs': '日志',
 };
@@ -28,7 +26,6 @@ const kPanelLabels = <String, String>{
 IconData panelIcon(String key) => switch (key) {
       'status' => Icons.monitor_heart_outlined,
       'account' => Icons.person_outline,
-      'pairing' => Icons.qr_code_2,
       'versions' => Icons.layers_outlined,
       'logs' => Icons.article_outlined,
       _ => Icons.help_outline,
@@ -38,7 +35,6 @@ IconData panelIcon(String key) => switch (key) {
 Widget buildPanel(String key) => switch (key) {
       'status' => const StatusPage(),
       'account' => const AccountPage(),
-      'pairing' => const PairingPage(),
       'versions' => const VersionsPage(),
       'logs' => const LogsPage(),
       _ => throw ArgumentError.value(key, 'key', '未知面板'),

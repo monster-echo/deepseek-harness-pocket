@@ -6,7 +6,6 @@ import {
 } from '../src/version.js'
 import { makeRpcId, methodKey, parseWireRequest, parseWireResponse, rpcFailure, rpcSuccess } from '../src/rpc.js'
 import { parseMobileEvent } from '../src/events.js'
-import { parsePairingQrPayload, isValidPairingCode } from '../src/pairing.js'
 import { parseGatewayToPhoneFrame } from '../src/relay.js'
 import { parsePhoneFrame, serializePhoneFrame } from '../src/ws.js'
 import { normalizeQuestionAnswers, parseServerRequest } from '../src/server-requests.js'
@@ -71,28 +70,6 @@ describe('events', () => {
   })
 })
 
-describe('pairing', () => {
-  const payload = {
-    v: 1,
-    gatewayUrl: 'wss://gw.example.com',
-    hostKey: 'hk_123',
-    token: 'tok_abc',
-    fingerprint: 'fp',
-    code: '123456',
-  }
-
-  it('合法二维码 payload', () => {
-    expect(parsePairingQrPayload(JSON.stringify(payload))?.hostKey).toBe('hk_123')
-  })
-
-  it('非法 payload 与配对码', () => {
-    expect(parsePairingQrPayload('not json')).toBeNull()
-    expect(parsePairingQrPayload(JSON.stringify({ ...payload, code: '12ab56' }))).toBeNull()
-    expect(parsePairingQrPayload(JSON.stringify({ ...payload, gatewayUrl: 'https://x' }))).toBeNull()
-    expect(isValidPairingCode('12345')).toBe(false)
-    expect(isValidPairingCode('123456')).toBe(true)
-  })
-})
 
 describe('relay frames', () => {
   it('presence 帧解析', () => {

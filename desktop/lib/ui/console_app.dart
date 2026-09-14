@@ -123,7 +123,7 @@ class _Sidebar extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('DSH Pocket', style: theme.textTheme.h4),
-                Text('Worker 控制台', style: theme.textTheme.muted.copyWith(fontSize: 11)),
+                Text('控制台', style: theme.textTheme.muted.copyWith(fontSize: 11)),
               ],
             ),
           ),

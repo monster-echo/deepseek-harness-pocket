@@ -81,26 +81,6 @@ final workerStatusProvider = StreamProvider<WorkerStatus>((ref) async* {
   }
 });
 
-// ---------- 配对（同账号共享的兜底路径） ----------
-
-/// 运行态布尔派生：tick 值相同（identical）不通知下游，
-/// 配对信息只在 启动/停止 翻转时重取，二维码不再每 2 秒闪刷。
-final workerRunningProvider = Provider<bool>(
-  (ref) => ref.watch(workerStatusProvider).value?.running ?? false,
-);
-
-final pairingProvider = FutureProvider<PairingPayload?>((ref) async {
-  // 只在运行状态翻转时重取；rotate/启停动作后由 UI 手动 invalidate
-  ref.watch(workerRunningProvider);
-  final svc = ref.watch(workerServiceProvider);
-  final s = ref.watch(settingsProvider);
-  try {
-    return await svc.pairing(s);
-  } catch (_) {
-    return null;
-  }
-});
-
 // ---------- 账号 ----------
 
 /// 账号快照（登录态 + 本机绑定态）；登录/登出/绑定后 invalidate。
@@ -166,8 +146,3 @@ class AutostartEnabledNotifier extends Notifier<AsyncValue<bool>> {
 final autostartEnabledProvider =
     NotifierProvider<AutostartEnabledNotifier, AsyncValue<bool>>(AutostartEnabledNotifier.new);
 
-/// worker 动作后统一刷新。
-void refreshWorkerState(Ref ref) {
-  ref.invalidate(workerStatusProvider);
-  ref.invalidate(pairingProvider);
-}

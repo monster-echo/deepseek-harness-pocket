@@ -1,4 +1,4 @@
-/// DSH Pocket Worker 桌面端入口（双窗口架构）。
+/// DSH Pocket 桌面端入口（双窗口架构）。
 ///
 /// - 主窗口引擎：DeepSeek Harness 网页壳 + 托盘 + 自启/更新/worker 引导。
 /// - 控制台引擎（desktop_multi_window 子窗口）：全部管理面板（shadcn UI），
@@ -37,7 +37,7 @@ Future<void> _runMainEngine() async {
   const options = WindowOptions(
     size: Size(1024, 720),
     minimumSize: Size(640, 480),
-    title: 'DeepSeek Harness — DSH Pocket Worker',
+    title: 'DeepSeek Harness — DSH Pocket',
     titleBarStyle: TitleBarStyle.normal,
   );
 
@@ -78,7 +78,6 @@ Future<void> _bootstrap(ProviderContainer container) async {
     // 控制台顶部有横幅提示
   } catch (_) {}
   container.invalidate(workerStatusProvider);
-  container.invalidate(pairingProvider);
 }
 
 // ---------- 控制台引擎 ----------

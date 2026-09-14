@@ -1043,8 +1043,6 @@ function parseGatewayToWorkerFrame(value) {
       return typeof v.nonce === "number" ? { kind: "ping", nonce: v.nonce } : null;
     case "phone-frame":
       return typeof v.phoneId === "string" && typeof v.inner === "string" ? { kind: "phone-frame", phoneId: v.phoneId, inner: v.inner } : null;
-    case "pairing-challenge":
-      return typeof v.challengeId === "string" && typeof v.code === "string" && typeof v.requestedBy === "string" ? { kind: "pairing-challenge", challengeId: v.challengeId, code: v.code, requestedBy: v.requestedBy } : null;
     default:
       return null;
   }
@@ -1984,7 +1982,7 @@ function startUplink(ctx, opts) {
     ws = new WebSocket2(opts.url);
     ws.on("open", () => {
       attempt = 0;
-      const accountToken = readAccountToken(opts.accountSessionFile);
+      const accountToken = opts.accountToken ?? readAccountToken(opts.accountSessionFile);
       send({
         kind: "worker-register",
         hostKey: opts.hostKey,
@@ -1992,8 +1990,7 @@ function startUplink(ctx, opts) {
         name: opts.workerName,
         hostFingerprint: opts.fingerprint,
         dshVersion: opts.dshVersion,
-        pairingCode: opts.pairingCode,
-        ...accountToken !== null ? { accountToken } : {}
+        ...accountToken ? { accountToken } : {}
       });
       pingTimer = setInterval(() => {
         send({ kind: "pong", nonce: Date.now() });
@@ -2018,14 +2015,6 @@ function startUplink(ctx, opts) {
           break;
         case "phone-frame": {
           opts.hub.handleFrame(uplinkConnId, frame.inner);
-          break;
-        }
-        case "pairing-challenge": {
-          const accepted = frame.code === opts.pairingCode;
-          send({ kind: "pairing-answer", challengeId: frame.challengeId, accepted });
-          ctx.logger.info(
-            `deepseek-harness-pocket pairing challenge from ${frame.requestedBy}: ${accepted ? "accepted" : "rejected (code mismatch)"}`
-          );
           break;
         }
       }
@@ -2121,7 +2110,6 @@ function apply(ctx, config) {
       fingerprint: state.fingerprint,
       dshVersion: adapter.dshVersion(),
       hub,
-      pairingCode: state.pairingCode,
       reconnectMinMs: config.gateway.reconnectMinMs,
       reconnectMaxMs: config.gateway.reconnectMaxMs,
       accountSessionFile: config.gateway.accountSessionFile
@@ -2132,7 +2120,7 @@ function apply(ctx, config) {
     hub.dispose();
   });
   ctx.logger.info(
-    `deepseek-harness-pocket bridge ready: worker="${workerName}" caps=${config.caps} direct=${config.listen.enabled ? `ws://${config.listen.host}:${config.listen.port}/mobile/ws` : "off"} gateway=${config.gateway.url.length > 0 ? config.gateway.url : "off"} pairingCode=${state.pairingCode}`
+    `deepseek-harness-pocket bridge ready: worker="${workerName}" caps=${config.caps} direct=${config.listen.enabled ? `ws://${config.listen.host}:${config.listen.port}/mobile/ws` : "off"} gateway=${config.gateway.url.length > 0 ? config.gateway.url : "off"} accountBinding=${config.gateway.accountSessionFile.length > 0 ? "on" : "off"}`
   );
 }
 export {

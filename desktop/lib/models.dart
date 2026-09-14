@@ -232,49 +232,6 @@ class WorkerStatus {
       );
 }
 
-// ---------- 配对（dshc qr --json） ----------
-
-class PairingPayload {
-  const PairingPayload({
-    required this.v,
-    required this.gatewayUrl,
-    required this.lanUrl,
-    required this.hostKey,
-    required this.token,
-    required this.fingerprint,
-    required this.code,
-  });
-
-  final int v;
-  final String gatewayUrl;
-  final String? lanUrl;
-  final String hostKey;
-  final String token;
-  final String fingerprint;
-  final String code;
-
-  factory PairingPayload.fromJson(Map<String, dynamic> json) => PairingPayload(
-        v: (json['v'] as num?)?.toInt() ?? 1,
-        gatewayUrl: (json['gatewayUrl'] as String?) ?? '',
-        lanUrl: json['lanUrl'] as String?,
-        hostKey: (json['hostKey'] as String?) ?? '',
-        token: (json['token'] as String?) ?? '',
-        fingerprint: (json['fingerprint'] as String?) ?? '',
-        code: (json['code'] as String?) ?? '',
-      );
-
-  /// 与手机端扫码协议一致：payload 的 JSON 即二维码内容。
-  Map<String, dynamic> toJson() => {
-        'v': v,
-        'gatewayUrl': gatewayUrl,
-        if (lanUrl != null) 'lanUrl': lanUrl,
-        'hostKey': hostKey,
-        'token': token,
-        'fingerprint': fingerprint,
-        'code': code,
-      };
-}
-
 // ---------- 托管的 dsh 版本 ----------
 
 class InstalledDsh {

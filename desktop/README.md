@@ -1,4 +1,4 @@
-# DSH Pocket Worker 桌面端（macOS / Windows）
+# DSH Pocket 桌面端（macOS / Windows）
 
 Worker 的 GUI 壳：**Worker 逻辑唯一真相源仍是 `dshc` CLI**（`packages/bridge`），桌面应用通过内置 node sidecar 调用它，不重写 supervisor/profile 逻辑。
 
@@ -11,24 +11,40 @@ Worker 的 GUI 壳：**Worker 逻辑唯一真相源仍是 `dshc` CLI**（`packag
 
 控制台窗口由 `desktop_multi_window` 创建（独立 Flutter 引擎），关闭 = 隐藏（托盘再点秒开）；托盘菜单项经 WindowMethodChannel 通知控制台切换面板。
 
-## 账号登录（免扫码）
+## 账号登录（浏览器跳转，免扫码）
 
-- 控制台 →「账号」：用与手机 App **相同的掌鲸账号**登录（auth.zhongbei.tech）。
+- 控制台 →「账号」→「在浏览器中登录」：应用不收集账号密码，跳转系统浏览器在
+  掌鲸认证网页完成登录，重定向回本机回调后自动保存会话并绑定。
 - 登录后会话写入 `~/.deepseek-harness-pocket/account-session.json`（0600）：
   - bridge 插件 uplink 每次连接 gateway 时随 `worker-register` 上送 token，gateway 验签后**自动绑定**账号；
   - 桌面端也会主动调 `POST /api/v1/workers/bind`（hostKey 定位）立即生效。
-- 同账号手机端直接看到这台电脑，**无需扫码配对**；「配对」页仅用于共享给其他账号。
+- 同账号手机端直接看到这台电脑，**无需扫码配对**（配对功能已移除，登录是唯一绑定方式）。
 - 手机端解绑后会留墓碑（自动绑定不复活），电脑端重新登录或点「绑定这台电脑」可恢复。
+
+### 浏览器登录契约（auth 服务侧需要支持）
+
+桌面端发起的登录跳转与回调格式：
+
+```
+打开浏览器 →
+  GET {authApiUrl}/login?redirect_uri=http%3A%2F%2F127.0.0.1%3A<port>%2Fcallback&state=<随机串>
+
+网页登录成功后 →（仅放行 http://127.0.0.1:* 的 redirect_uri）
+  302 {redirect_uri}?state=<原样回传>&token=<会话token>&refresh_token=<刷新token>&user_id=<可选>&email=<可选>
+```
+
+- `<port>` 优先 37900，被占用时桌面端自动改用随机端口（redirect_uri 参数里携带实际值）。
+- `state` 原样回传用于防 CSRF，桌面端会校验。
+- 回调只监听 127.0.0.1，一次性使用，5 分钟超时。
 
 ## 功能
 
 - **状态面板**：运行状态 / pid / uptime / 在用 dsh 版本；启动 / 停止 / 重启
-- **账号登录**：同账号免扫码互联（见上）；登录/登出/绑定状态一目了然
-- **配对二维码**：共享给其他账号时的兜底路径；可 rotate 配对 token
+- **账号登录**：浏览器跳转登录，同账号免扫码互联（见上）；登录/登出/绑定状态一目了然
 - **dsh 版本管理**：安装到 `~/.deepseek-harness-pocket/runtimes/dsh/<版本>/`（npm `--prefix`，默认 npmmirror 源），多版本并存即时切换，不动系统 npm；也支持「系统 dsh」与「指定路径」
 - **日志**：tail `~/.deepseek-harness-pocket/dshc.log`
 - **开机自启**：应用注册为登录项（launch_at_startup），启动时自动确保 worker 在跑；托盘菜单 checkbox 显示勾选态
-- **托盘常驻**：关窗收托盘；托盘菜单 打开控制台/主窗口、启停、开机启动勾选、退出
+- **托盘常驻**：关窗收托盘；托盘只留主入口（控制台 / Harness / 启停 / 开机启动 / 退出），「检查更新」在控制台状态页
 - **自更新**：GitHub Releases + auto_updater（macOS Sparkle / Windows WinSparkle）
 
 ## UI

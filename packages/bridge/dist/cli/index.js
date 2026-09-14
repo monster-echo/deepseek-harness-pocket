@@ -47,10 +47,11 @@ function packageRoot() {
 
 // src/cli/profile.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync as existsSync2, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join2, resolve as resolve2 } from "node:path";
 var COMPANION_PROFILE = "companion";
+var BRIDGE_DEP_NAME = "@deepseek-harness-pocket/bridge";
 function resolveDshHomeDir() {
   const fromEnv = process.env["DSH_HOME"];
   return resolve2((fromEnv !== void 0 && fromEnv.trim().length > 0 ? fromEnv : join2(homedir2(), ".dsh")).replace(/^~(?=\/|$)/, homedir2()));
@@ -125,8 +126,33 @@ ${entry}
 `);
   }
 }
+function fileSpecPath(spec) {
+  const raw = process.platform === "win32" ? spec.replace(/^file:/, "") : spec.startsWith("file:") ? spec.slice("file:".length) : void 0;
+  if (raw === void 0) return void 0;
+  return resolve2(raw);
+}
+function migrateStaleBridgeSpec(dir, packageRootPath) {
+  const manifestPath = join2(dir, "package.json");
+  if (!existsSync2(manifestPath)) return;
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const spec = manifest.dependencies?.[BRIDGE_DEP_NAME];
+    if (spec === void 0) return;
+    const pinned = fileSpecPath(spec);
+    const wanted = resolve2(packageRootPath);
+    if (pinned === void 0 || pinned === wanted) return;
+    const nextSpec = process.platform === "win32" ? wanted : `file:${wanted}`;
+    manifest.dependencies = { ...manifest.dependencies, [BRIDGE_DEP_NAME]: nextSpec };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, void 0, 2)}
+`);
+    rmSync(join2(dir, "pnpm-lock.yaml"), { force: true });
+    rmSync(join2(dir, "node_modules", BRIDGE_DEP_NAME), { recursive: true, force: true });
+  } catch {
+  }
+}
 function installBridgePackage(dir, dshBin, packageRootPath) {
   ensureProfileManifest(dir);
+  migrateStaleBridgeSpec(dir, packageRootPath);
   const spec = process.platform === "win32" ? packageRootPath : `file:${packageRootPath}`;
   const result = spawnSync2(dshBin, ["plugin", "--profile", COMPANION_PROFILE, "add", spec], {
     stdio: "inherit"
@@ -138,7 +164,7 @@ function installBridgePackage(dir, dshBin, packageRootPath) {
 
 // src/cli/supervisor.ts
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync2, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { appendFileSync, existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname as dirname2 } from "node:path";
 var STOP_FLAG = "dshc.stop-flag";
 var RUN_INFO = "run.json";
@@ -220,8 +246,8 @@ async function supervise(dshBin, args, env, info) {
         if (child !== void 0 && child.exitCode === null) child.kill("SIGKILL");
       }, 5e3);
     }
-    rmSync(pidFile(), { force: true });
-    rmSync(runInfoFile(), { force: true });
+    rmSync2(pidFile(), { force: true });
+    rmSync2(runInfoFile(), { force: true });
     setTimeout(() => process.exit(0), 5500);
   };
   process.on("SIGINT", () => stop("SIGINT"));
@@ -232,7 +258,7 @@ async function supervise(dshBin, args, env, info) {
   flagTimer.unref();
   let backoffMs = 1e3;
   while (!stopping) {
-    rmSync(`${dshcDir()}/${STOP_FLAG}`, { force: true });
+    rmSync2(`${dshcDir()}/${STOP_FLAG}`, { force: true });
     log(`spawning ${dshBin} ${args.join(" ")}`);
     process.stdout.write(`[dshc] starting: ${dshBin} ${args.join(" ")}
 `);
@@ -263,8 +289,8 @@ async function supervise(dshBin, args, env, info) {
     backoffMs = code === 0 ? Math.max(1e3, Math.floor(backoffMs / 2)) : Math.min(backoffMs * 2, 3e4);
   }
   clearInterval(flagTimer);
-  rmSync(pidFile(), { force: true });
-  rmSync(runInfoFile(), { force: true });
+  rmSync2(pidFile(), { force: true });
+  rmSync2(runInfoFile(), { force: true });
   process.exit(0);
 }
 function detachSpawn(extraArgs) {
@@ -280,7 +306,7 @@ function requestStop() {
 }
 
 // src/cli/autostart.ts
-import { chmodSync, existsSync as existsSync4, mkdirSync as mkdirSync3, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { chmodSync, existsSync as existsSync4, mkdirSync as mkdirSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { spawnSync as spawnSync3 } from "node:child_process";
 var LABEL = "top.rwecho.deepseek-harness-pocket.worker";
@@ -293,13 +319,13 @@ function autostartUninstall() {
   if (process.platform === "darwin") {
     const target = `${homedir3()}/Library/LaunchAgents/${LABEL}.plist`;
     spawnSync3("launchctl", ["unload", target], { stdio: "ignore" });
-    rmSync2(target, { force: true });
+    rmSync3(target, { force: true });
     return `\u5DF2\u79FB\u9664 launchd LaunchAgent (${target})`;
   }
   if (process.platform === "linux") {
     const target = `${homedir3()}/.config/systemd/user/deepseek-harness-pocket.service`;
     spawnSync3("systemctl", ["--user", "disable", "--now", "deepseek-harness-pocket.service"], { stdio: "ignore" });
-    rmSync2(target, { force: true });
+    rmSync3(target, { force: true });
     spawnSync3("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
     return `\u5DF2\u79FB\u9664 systemd user \u670D\u52A1 (${target})`;
   }

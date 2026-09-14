@@ -4,11 +4,14 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 export const COMPANION_PROFILE = 'companion'
+
+/** bridge 插件在 profile manifest 里的依赖名（installBridgePackage 写入的 file: 依赖）。 */
+export const BRIDGE_DEP_NAME = '@deepseek-harness-pocket/bridge'
 
 export interface BridgePatchConfig {
   readonly gatewayUrl: string
@@ -97,9 +100,46 @@ export function upsertBridgePatch(dir: string, config: BridgePatchConfig): void 
   }
 }
 
+/** 把 file: 依赖 spec 解回绝对路径；非路径型 spec（registry 版本号等）返回 undefined。 */
+export function fileSpecPath(spec: string): string | undefined {
+  // Windows 的 file: 依赖是裸路径（也可能是 file:C:\...）；posix 统一 `file:<绝对路径>`
+  const raw = process.platform === 'win32' ? spec.replace(/^file:/, '') : spec.startsWith('file:') ? spec.slice('file:'.length) : undefined
+  if (raw === undefined) return undefined
+  return resolve(raw)
+}
+
+/**
+ * 迁移 manifest 里钉死的旧安装路径。App 改名/搬家后 file: 依赖指向已删除目录，
+ * pnpm install 第一步就会失败，`dsh plugin add` 无法自愈（install 先于 manifest 更新）。
+ * 仅在指向不同路径时改写，并清掉会卡住解析的旧 lock 与断链；manifest 残缺时交给 dsh 报错。
+ */
+export function migrateStaleBridgeSpec(dir: string, packageRootPath: string): void {
+  const manifestPath = join(dir, 'package.json')
+  if (!existsSync(manifestPath)) return
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    const spec = manifest.dependencies?.[BRIDGE_DEP_NAME]
+    if (spec === undefined) return
+    const pinned = fileSpecPath(spec)
+    const wanted = resolve(packageRootPath)
+    if (pinned === undefined || pinned === wanted) return
+    const nextSpec = process.platform === 'win32' ? wanted : `file:${wanted}`
+    manifest.dependencies = { ...manifest.dependencies, [BRIDGE_DEP_NAME]: nextSpec }
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, undefined, 2)}\n`)
+    // 旧路径时代的解析产物一并清掉，避免 pnpm 拿断链/旧 lock 复原
+    rmSync(join(dir, 'pnpm-lock.yaml'), { force: true })
+    rmSync(join(dir, 'node_modules', BRIDGE_DEP_NAME), { recursive: true, force: true })
+  } catch {
+    // manifest 残缺：保持原行为，交给 dsh plugin add 报错
+  }
+}
+
 /** 安装/更新本插件包到 profile（dsh plugin = pnpm 转发器）。 */
 export function installBridgePackage(dir: string, dshBin: string, packageRootPath: string): void {
   ensureProfileManifest(dir)
+  migrateStaleBridgeSpec(dir, packageRootPath)
   const spec = process.platform === 'win32' ? packageRootPath : `file:${packageRootPath}`
   const result = spawnSync(dshBin, ['plugin', '--profile', COMPANION_PROFILE, 'add', spec], {
     stdio: 'inherit',

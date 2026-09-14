@@ -121,8 +121,13 @@ class TrayController with TrayListener {
   }
 
   Future<void> _runWorkerAction(WorkerAction action) async {
+    final bootError = _container.read(workerBootErrorProvider.notifier);
     try {
       await action(_container.read(workerServiceProvider), _container.read(settingsProvider));
+      bootError.set(null);
+    } on WorkerActionException catch (e) {
+      // 托盘没有 context 弹 feedback：失败原因落到 bootError，主窗口引导面可见
+      bootError.set(e.message);
     } catch (_) {
       // 托盘动作静默失败（控制台里有可见的错误展示）
     } finally {

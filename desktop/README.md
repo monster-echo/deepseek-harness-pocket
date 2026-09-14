@@ -47,6 +47,18 @@ Worker 的 GUI 壳：**Worker 逻辑唯一真相源仍是 `dshc` CLI**（`packag
 - **托盘常驻**：关窗收托盘；托盘只留主入口（控制台 / Harness / 启停 / 开机启动 / 退出），「检查更新」在控制台状态页
 - **自更新**：GitHub Releases + auto_updater（macOS Sparkle / Windows WinSparkle）
 
+## 新版本自动发现（桌面通知）
+
+- **自动发现**：应用启动时后台检查一次 appcast，之后每日定时检查（`UpdaterService.init`）。
+- **桌面通知**：发现新版本即发系统通知（local_notifier；macOS 通知中心 / Windows toast），
+  文案形如「DSH Pocket 有新版本 0.1.9」，点击通知打开控制台状态页。
+- **手动入口**：控制台 →「状态」→「检查更新」（Sparkle/WinSparkle 系统对话框）。
+- ⚠️ **未签名构建无法静默自动安装**：Sparkle 2 会比对新旧版本的代码签名，
+  ad-hoc 签名（当前状态，cdhash 随构建变化）不满足，安装会被拒绝——
+  发现与下载正常，但需要用户手动安装。**补上 Developer ID 签名后**，
+  这条链路自动升级为静默安装，代码无需改动（appcast 的 EdDSA 校验已就位）。
+- 调试通知通道：以 `DSH_DEBUG_NOTIFY=1` 启动应用会立即发一条测试通知。
+
 ## UI
 
 控制台窗口（及主窗口引导面）基于 [flutter-shadcn-ui](https://github.com/nank1ro/flutter-shadcn-ui)（`shadcn_ui` 包）：ShadApp / ShadCard / ShadButton / ShadInput / ShadBadge / ShadSelect / ShadRadioGroup / sonner toast，默认 zinc 色板 + 品牌主色 `#4D6BFE`，跟随系统深浅色。

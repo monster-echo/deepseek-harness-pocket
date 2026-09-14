@@ -5,6 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   auto_updater_windows
   desktop_multi_window
+  local_notifier
   screen_retriever_windows
   tray_manager
   window_manager

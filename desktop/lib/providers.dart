@@ -67,6 +67,21 @@ final sidecarReadyProvider = Provider<bool>((ref) {
   return AppPaths.sidecarReady;
 });
 
+/// 最近一次拉起 worker 失败的原因（null = 无）。
+/// 状态轮询只反映 running 与否，起不来的根因（pnpm 路径/凭证/端口…）在这里
+/// 给主窗口引导面展示；下次启动尝试（自动或手动）成功即清除。
+class WorkerBootErrorNotifier extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? message) {
+    state = message;
+  }
+}
+
+final workerBootErrorProvider =
+    NotifierProvider<WorkerBootErrorNotifier, String?>(WorkerBootErrorNotifier.new);
+
 // ---------- worker 状态轮询 ----------
 
 final workerStatusProvider = StreamProvider<WorkerStatus>((ref) async* {

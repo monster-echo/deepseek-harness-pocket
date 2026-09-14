@@ -17,6 +17,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../providers.dart';
 import '../services/proc.dart';
+import '../services/worker.dart';
 
 class MainWindowApp extends StatelessWidget {
   const MainWindowApp({super.key});
@@ -82,7 +83,11 @@ class _ConsolePageState extends ConsumerState<ConsolePage> {
     if (webUrl.isNotEmpty && !Platform.isWindows) _ensureController(webUrl);
 
     if (webUrl.isEmpty) {
-      return _GuidePage(running: st?.running ?? false, reachable: st?.reachable ?? false);
+      return _GuidePage(
+        running: st?.running ?? false,
+        reachable: st?.reachable ?? false,
+        bootError: ref.watch(workerBootErrorProvider),
+      );
     }
     if (Platform.isWindows) return const _WindowsFallback();
     return KeyedSubtree(key: ValueKey(webUrl), child: WebViewWidget(controller: _controller!));
@@ -91,10 +96,13 @@ class _ConsolePageState extends ConsumerState<ConsolePage> {
 
 /// 引导面：Harness 控制台不可用时的接管 UI。
 class _GuidePage extends ConsumerWidget {
-  const _GuidePage({required this.running, required this.reachable});
+  const _GuidePage({required this.running, required this.reachable, this.bootError});
 
   final bool running;
   final bool reachable;
+
+  /// 最近一次自动/手动拉起失败的原因；null 或已在运行时不展示。
+  final String? bootError;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -117,6 +125,16 @@ class _GuidePage extends ConsumerWidget {
               textAlign: TextAlign.center,
               style: theme.textTheme.muted,
             ),
+            if (!running && bootError != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                '启动失败：$bootError',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.muted.copyWith(color: theme.colorScheme.destructive),
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
             const SizedBox(height: 20),
             if (!running)
               ShadButton(
@@ -124,8 +142,11 @@ class _GuidePage extends ConsumerWidget {
                     ? () async {
                         try {
                           await ref.read(workerServiceProvider).start(ref.read(settingsProvider));
-                        } catch (_) {
-                          // 状态轮询会反映失败；详细错误见控制台
+                          ref.read(workerBootErrorProvider.notifier).set(null);
+                        } on WorkerActionException catch (e) {
+                          ref.read(workerBootErrorProvider.notifier).set(e.message);
+                        } catch (e) {
+                          ref.read(workerBootErrorProvider.notifier).set('$e');
                         }
                         ref.invalidate(workerStatusProvider);
                       }

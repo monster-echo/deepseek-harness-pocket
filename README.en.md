@@ -64,11 +64,11 @@ Grab the latest build from [Releases](https://github.com/monster-echo/deepseek-h
 
 It boots the Harness by itself (first run spends a few minutes preparing the environment). From then on it comes online at every login; closing the window tucks it into the **tray** — everything is managed from the tray menu.
 
-**② Phone: scan to pair**
+**② Phone: sign in with the same account**
 
-Desktop tray menu → Pair, then scan the QR code with the mobile app (or type the 6-digit code):
+Desktop tray menu → Console → Account: sign in with the **same Zhangjing account** as the mobile app — your phone sees this computer instantly, **no QR pairing needed**:
 
-<div align="center"><img src="docs/screenshots/desktop-pairing.png" width="320"><br><sub>Tray menu → Pair: scan and connected (sample image, not a real code)</sub></div>
+<div align="center"><img src="docs/screenshots/desktop-pairing.png" width="320"><br><sub>Sharing with another account? The "Pair" QR page still works (sample image, not a real code)</sub></div>
 
 **③ Put it to work**
 
@@ -76,14 +76,15 @@ Type your first task in the desktop console — or right from your phone — and
 
 ![Status](docs/screenshots/desktop-status.png)
 
-*Tray menu → Status: the Worker at a glance; start/stop by hand from here too*
+*Tray menu → Console: status / account / pairing / versions / logs in a separate window*
 
 ## Security & privacy
 
 The plain-language version:
 
 - 🔒 **Your data stays on your computer** — sessions, files and code all live in the Harness on your machine; the relay moves messages, it doesn't store them
-- 🤝 **Only paired phones get in** — phone and computer trust each other via the QR/pairing code, one phone one key; suspect a leak? Hit "rotate code" and the old one dies instantly
+- 🪪 **Same account, auto-connected** — the desktop links to your account at sign-in; only a phone signed into that same account can see it, and you can unbind anytime
+- 🤝 **Sharing goes through pairing codes** — when you share the computer with another account; suspect a leak? Hit "rotate code" and the old one dies instantly
 - 🛡️ **The desktop console is for locals only** — it listens on 127.0.0.1 behind a one-time token; LAN and internet requests are turned away
 - 📴 **Off whenever you want** — one tray click stops the Worker and your computer goes back to being a normal computer
 

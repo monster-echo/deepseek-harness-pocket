@@ -78,7 +78,15 @@ export function parseGatewayToWorkerFrame(value) {
         return null;
     switch (v.kind) {
         case 'register-ok':
-            return typeof v.workerId === 'string' ? { kind: 'register-ok', workerId: v.workerId } : null;
+            return typeof v.workerId === 'string'
+                ? {
+                    kind: 'register-ok',
+                    workerId: v.workerId,
+                    ...(typeof v.boundUserId === 'string' || v.boundUserId === null
+                        ? { boundUserId: v.boundUserId }
+                        : {}),
+                }
+                : null;
         case 'register-rejected':
             return typeof v.reason === 'string' ? { kind: 'register-rejected', reason: v.reason } : null;
         case 'ping':

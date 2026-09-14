@@ -1,63 +1,49 @@
-/// 全局导航 + 管理面板注册：托盘菜单没有 BuildContext，
-/// 经由静态 navigatorKey 打开页面；同一面板已在栈顶时不重复推。
+/// 管理面板注册表：托盘菜单、控制台侧栏与调试路由（DSH_DEBUG_ROUTE）共用。
+///
+/// 双窗口架构下面板全部显示在控制台窗口（独立引擎），主窗口保持纯 Harness 壳；
+/// 托盘经 ConsoleWindowService 打开/唤起控制台并导航到对应面板。
 library;
 
 import 'package:flutter/material.dart';
 
-import 'ui/logs_page.dart';
-import 'ui/pairing_page.dart';
-import 'ui/status_page.dart';
-import 'ui/versions_page.dart';
-import 'ui/widgets.dart';
+import 'ui/pages/account_page.dart';
+import 'ui/pages/logs_page.dart';
+import 'ui/pages/pairing_page.dart';
+import 'ui/pages/status_page.dart';
+import 'ui/pages/versions_page.dart';
 
-/// 面板注册表：托盘菜单与调试路由（DSH_DEBUG_ROUTE）共用。
-Widget buildPanel(String name) {
-  switch (name) {
-    case 'status':
-      return const PanelPage(title: 'Worker 状态', child: StatusPage());
-    case 'pairing':
-      return const PanelPage(title: '配对', child: PairingPage());
-    case 'versions':
-      return const PanelPage(title: 'dsh 版本', child: VersionsPage());
-    case 'logs':
-      return const PanelPage(title: 'Worker 日志', child: LogsPage());
-    default:
-      throw ArgumentError.value(name, 'name', '未知面板');
-  }
-}
+/// 面板键（托盘菜单 key 与控制台导航共用）。
+const kPanelKeys = <String>['status', 'account', 'pairing', 'versions', 'logs'];
 
-class AppNav {
-  AppNav._();
+/// 面板中文标签。
+const kPanelLabels = <String, String>{
+  'status': '状态',
+  'account': '账号',
+  'pairing': '配对',
+  'versions': 'dsh 版本',
+  'logs': '日志',
+};
 
-  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+/// 面板图标（控制台侧栏用）。
+IconData panelIcon(String key) => switch (key) {
+      'status' => Icons.monitor_heart_outlined,
+      'account' => Icons.person_outline,
+      'pairing' => Icons.qr_code_2,
+      'versions' => Icons.layers_outlined,
+      'logs' => Icons.article_outlined,
+      _ => Icons.help_outline,
+    };
 
-  /// 当前栈顶面板路由名（null = 停在控制台本体）。
-  static String? _topPanelRoute;
+/// 面板页构建器（控制台窗口内使用）。
+Widget buildPanel(String key) => switch (key) {
+      'status' => const StatusPage(),
+      'account' => const AccountPage(),
+      'pairing' => const PairingPage(),
+      'versions' => const VersionsPage(),
+      'logs' => const LogsPage(),
+      _ => throw ArgumentError.value(key, 'key', '未知面板'),
+    };
 
-  static final NavigatorObserver observer = _AppNavObserver();
-
-  /// 托盘入口：推入面板；已在该面板顶部时跳过（避免连点堆栈）。
-  static void pushPanel(String name) {
-    if (_topPanelRoute == name) return;
-    final nav = navigatorKey.currentState;
-    if (nav == null) return;
-    nav.push(MaterialPageRoute<void>(
-      builder: (_) => buildPanel(name),
-      settings: RouteSettings(name: name),
-    ));
-  }
-}
-
-class _AppNavObserver extends NavigatorObserver {
-  @override
-  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    AppNav._topPanelRoute = route.settings.name;
-  }
-
-  @override
-  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    if (AppNav._topPanelRoute == route.settings.name) {
-      AppNav._topPanelRoute = previousRoute?.settings.name;
-    }
-  }
-}
+/// 调试用路由名归一（未知键回退 status）。
+String normalizePanel(String? key) =>
+    key == null || !kPanelKeys.contains(key) ? 'status' : key;

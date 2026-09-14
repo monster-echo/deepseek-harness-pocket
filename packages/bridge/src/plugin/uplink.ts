@@ -3,8 +3,13 @@
  *
  * 帧协议见 protocol 包 relay.ts：worker-register / ping-pong / phone-frame /
  * pairing-challenge。手机帧经 gateway 的 phone-frame 转发进出 Hub（同一套路由）。
+ * 连接时若账号会话文件可用（桌面端登录写入），随 worker-register 上送
+ * accountToken，由 gateway 验签后自动绑定账号（同账号手机端免扫码）。
  */
 
+import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   parseGatewayToWorkerFrame,
@@ -24,7 +29,22 @@ export interface UplinkOptions {
   readonly pairingCode: string
   readonly reconnectMinMs: number
   readonly reconnectMaxMs: number
+  /** 账号会话文件（空 = 关闭账号自动绑定路径） */
+  readonly accountSessionFile?: string
   readonly onNotify?: (signal: WorkerToGatewayFrame & { kind: 'notify' }) => void
+}
+
+/** 读取账号 session token（每次连接调用，保持桌面端刷新后取到新值）；不可用返回 null。 */
+export function readAccountToken(file: string | undefined): string | null {
+  if (file === undefined || file.length === 0) return null
+  const path = resolve(file.replace(/^~(?=\/|$)/, homedir()))
+  if (!existsSync(path)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { token?: unknown }
+    return typeof parsed.token === 'string' && parsed.token.length > 0 ? parsed.token : null
+  } catch {
+    return null
+  }
 }
 
 /** 启动 uplink（含重连循环）；dispose 后不再重连。 */
@@ -53,6 +73,8 @@ export function startUplink(ctx: Context, opts: UplinkOptions): () => void {
 
     ws.on('open', () => {
       attempt = 0
+      // 每次连接现读会话文件：桌面端 refresh token 后无需重启即可带上新凭证
+      const accountToken = readAccountToken(opts.accountSessionFile)
       send({
         kind: 'worker-register',
         hostKey: opts.hostKey,
@@ -61,6 +83,7 @@ export function startUplink(ctx: Context, opts: UplinkOptions): () => void {
         hostFingerprint: opts.fingerprint,
         dshVersion: opts.dshVersion,
         pairingCode: opts.pairingCode,
+        ...(accountToken !== null ? { accountToken } : {}),
       })
       pingTimer = setInterval(() => {
         send({ kind: 'pong', nonce: Date.now() })
@@ -73,7 +96,10 @@ export function startUplink(ctx: Context, opts: UplinkOptions): () => void {
       if (frame === null) return
       switch (frame.kind) {
         case 'register-ok':
-          ctx.logger.info(`deepseek-harness-pocket uplink registered as worker ${frame.workerId}`)
+          ctx.logger.info(
+            `deepseek-harness-pocket uplink registered as worker ${frame.workerId}`
+              + (frame.boundUserId ? ` (account ${frame.boundUserId})` : ''),
+          )
           break
         case 'register-rejected':
           ctx.logger.error(`deepseek-harness-pocket uplink rejected: ${frame.reason}`)

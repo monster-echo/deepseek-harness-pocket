@@ -43,7 +43,8 @@ let previewBytes = 0
 
 function makeStore(): Store & { workers: Map<string, WorkerRow>; pairings: Map<string, Set<string>>; usage: string[] } {
   const workers = new Map<string, WorkerRow>()
-  const pairings = new Map<string, Set<string>>() // workerId -> userIds
+  const pairings = new Map<string, Set<string>>() // workerId -> userIds（有效绑定）
+  const revoked = new Set<string>() // `workerId:userId` 解绑墓碑
   const usage: string[] = []
   const store: Store & { workers: Map<string, WorkerRow>; pairings: Map<string, Set<string>>; usage: string[] } = {
     workers,
@@ -76,9 +77,11 @@ function makeStore(): Store & { workers: Map<string, WorkerRow>; pairings: Map<s
     async pairWorker(userId, workerId) {
       if (!pairings.has(workerId)) pairings.set(workerId, new Set())
       pairings.get(workerId)!.add(userId)
+      revoked.delete(`${workerId}:${userId}`)
     },
     async unpairWorker(userId, workerId) {
       pairings.get(workerId)?.delete(userId)
+      revoked.add(`${workerId}:${userId}`)
     },
     async listPairings(userId) {
       const rows = []
@@ -94,6 +97,15 @@ function makeStore(): Store & { workers: Map<string, WorkerRow>; pairings: Map<s
     },
     async isPaired(userId, workerId) {
       return pairings.get(workerId)?.has(userId) ?? false
+    },
+    async getPairing(userId, workerId) {
+      if (pairings.get(workerId)?.has(userId)) {
+        return { user_id: userId, worker_id: workerId, name: null, created_at: new Date(), revoked_at: null }
+      }
+      if (revoked.has(`${workerId}:${userId}`)) {
+        return { user_id: userId, worker_id: workerId, name: null, created_at: new Date(), revoked_at: new Date() }
+      }
+      return null
     },
     async upsertDevice() {},
     async listPushTokens() {
@@ -231,6 +243,124 @@ describe('gateway 配对与转发', () => {
     await new Promise((r) => setTimeout(r))
     const toPhone = phoneWs.sent.map((t) => JSON.parse(t)).find((f) => f.kind === 'worker-frame')
     expect(toPhone.inner).toBe('{"kind":"auth-ok"}')
+  })
+
+  // ---------- 账号登录绑定（免扫码） ----------
+
+  it('register 带 accountToken → 自动绑定；同账号手机 presence 可见', async () => {
+    const { gateway } = makeGateway()
+    const workerWs = new FakeWs()
+    gateway.attachWorker(workerWs as never)
+    workerWs.receive(
+      JSON.stringify({
+        kind: 'worker-register',
+        hostKey: 'hk_acct',
+        protocolVersion: 'mobile/v1',
+        name: 'accountless-pc',
+        hostFingerprint: 'fp_acct',
+        dshVersion: null,
+        pairingCode: '909090',
+        accountToken: 'dev:user_acct',
+      }),
+    )
+    await new Promise((r) => setTimeout(r))
+    const ok = workerWs.lastFrame() as unknown as { kind: string; workerId: string; boundUserId: string | null }
+    expect(ok.kind).toBe('register-ok')
+    expect(ok.boundUserId).toBe('user_acct')
+
+    // 手机端登录同账号 → presence 直接可见（无需扫码配对）
+    const phoneWs = new FakeWs()
+    gateway.attachPhone(phoneWs as never)
+    phoneWs.receive(JSON.stringify({ kind: 'phone-auth', authToken: 'dev:user_acct', deviceKey: 'd_acct' }))
+    await new Promise((r) => setTimeout(r))
+    const presence = phoneWs.sent
+      .map((t) => JSON.parse(t) as { kind: string; workers?: { workerId: string; online: boolean }[] })
+      .find((f) => f.kind === 'presence')
+    expect(presence?.workers?.some((w) => w.workerId === ok.workerId && w.online)).toBe(true)
+
+    // worker-open 直接放行（已绑定）
+    phoneWs.receive(JSON.stringify({ kind: 'worker-open', workerId: ok.workerId }))
+    await new Promise((r) => setTimeout(r))
+    expect((phoneWs.lastFrame() as unknown as { ok: boolean }).ok).toBe(true)
+  })
+
+  it('register 不带 / 带无效 accountToken → 不自动绑定', async () => {
+    const { gateway } = makeGateway()
+    for (const token of [undefined, 'invalid-token']) {
+      const workerWs = new FakeWs()
+      gateway.attachWorker(workerWs as never)
+      workerWs.receive(
+        JSON.stringify({
+          kind: 'worker-register',
+          hostKey: `hk_none_${String(token)}`,
+          protocolVersion: 'mobile/v1',
+          name: 'pc',
+          hostFingerprint: 'fp',
+          dshVersion: null,
+          pairingCode: '121212',
+          ...(token !== undefined ? { accountToken: token } : {}),
+        }),
+      )
+      await new Promise((r) => setTimeout(r))
+      const ok = workerWs.lastFrame() as unknown as { kind: string; boundUserId?: string | null }
+      expect(ok.kind).toBe('register-ok')
+      expect(ok.boundUserId ?? null).toBe(null)
+    }
+  })
+
+  it('手机解绑形成墓碑 → register 带 token 不复活；bindByHostKey 主动重绑成功', async () => {
+    const { gateway, store } = makeGateway()
+    const workerWs = new FakeWs()
+    gateway.attachWorker(workerWs as never)
+    workerWs.receive(
+      JSON.stringify({
+        kind: 'worker-register',
+        hostKey: 'hk_tomb',
+        protocolVersion: 'mobile/v1',
+        name: 'tomb-pc',
+        hostFingerprint: 'fp_tomb',
+        dshVersion: null,
+        pairingCode: '565656',
+        accountToken: 'dev:user_tomb',
+      }),
+    )
+    await new Promise((r) => setTimeout(r))
+    const workerId = (workerWs.lastFrame() as unknown as { workerId: string }).workerId
+
+    // 手机端主动解绑
+    await gateway.unpair('user_tomb', workerId)
+    expect(await store.isPaired('user_tomb', workerId)).toBe(false)
+
+    // 断线重连再注册（仍带 token）→ 墓碑生效，不复活
+    workerWs.emit('close')
+    await new Promise((r) => setTimeout(r))
+    const reconnected = new FakeWs()
+    gateway.attachWorker(reconnected as never)
+    reconnected.receive(
+      JSON.stringify({
+        kind: 'worker-register',
+        hostKey: 'hk_tomb',
+        protocolVersion: 'mobile/v1',
+        name: 'tomb-pc',
+        hostFingerprint: 'fp_tomb',
+        dshVersion: null,
+        pairingCode: '565656',
+        accountToken: 'dev:user_tomb',
+      }),
+    )
+    await new Promise((r) => setTimeout(r))
+    expect(await store.isPaired('user_tomb', workerId)).toBe(false)
+
+    // 桌面端主动重新绑定（REST bindByHostKey 路径）→ 清除墓碑恢复绑定
+    const result = await gateway.bindByHostKey('user_tomb', 'hk_tomb')
+    expect(result.ok).toBe(true)
+    expect(await store.isPaired('user_tomb', workerId)).toBe(true)
+  })
+
+  it('bindByHostKey：未注册过的 hostKey → 失败', async () => {
+    const { gateway } = makeGateway()
+    const result = await gateway.bindByHostKey('user_x', 'hk_missing')
+    expect(result.ok).toBe(false)
   })
 })
 

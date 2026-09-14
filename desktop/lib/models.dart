@@ -18,6 +18,9 @@ class AppSettings {
     required this.dshMode,
     required this.managedVersion,
     required this.customDshPath,
+    required this.authApiUrl,
+    required this.authAppId,
+    required this.authAppEnvironment,
   });
 
   static const defaultGatewayUrl = 'wss://dsh-pocket.zhongbei.tech/gw/worker';
@@ -35,6 +38,13 @@ class AppSettings {
   String managedVersion;
   String customDshPath;
 
+  /// 统一认证 API 基地址（登录 / 刷新 / 绑定走这里；与手机端同一账号体系）
+  String authApiUrl;
+  /// 认证租户 id（必须与手机 App 的 EXPO_PUBLIC_APP_ID 一致，userId 才相同）
+  String authAppId;
+  /// 认证环境（development / staging / production）
+  String authAppEnvironment;
+
   factory AppSettings.defaults() => AppSettings(
         gatewayUrl: defaultGatewayUrl,
         workerName: '',
@@ -45,6 +55,9 @@ class AppSettings {
         dshMode: 'system',
         managedVersion: '',
         customDshPath: '',
+        authApiUrl: 'https://auth.zhongbei.tech',
+        authAppId: 'dshcompanion',
+        authAppEnvironment: 'production',
       );
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
@@ -59,6 +72,9 @@ class AppSettings {
       dshMode: (json['dshMode'] as String?) ?? d.dshMode,
       managedVersion: (json['managedVersion'] as String?) ?? d.managedVersion,
       customDshPath: (json['customDshPath'] as String?) ?? d.customDshPath,
+      authApiUrl: (json['authApiUrl'] as String?) ?? d.authApiUrl,
+      authAppId: (json['authAppId'] as String?) ?? d.authAppId,
+      authAppEnvironment: (json['authAppEnvironment'] as String?) ?? d.authAppEnvironment,
     );
   }
 
@@ -73,6 +89,9 @@ class AppSettings {
         'dshMode': dshMode,
         'managedVersion': managedVersion,
         'customDshPath': customDshPath,
+        'authApiUrl': authApiUrl,
+        'authAppId': authAppId,
+        'authAppEnvironment': authAppEnvironment,
       };
 
   AppSettings copyWith({
@@ -85,6 +104,9 @@ class AppSettings {
     String? dshMode,
     String? managedVersion,
     String? customDshPath,
+    String? authApiUrl,
+    String? authAppId,
+    String? authAppEnvironment,
   }) =>
       AppSettings(
         gatewayUrl: gatewayUrl ?? this.gatewayUrl,
@@ -96,6 +118,9 @@ class AppSettings {
         dshMode: dshMode ?? this.dshMode,
         managedVersion: managedVersion ?? this.managedVersion,
         customDshPath: customDshPath ?? this.customDshPath,
+        authApiUrl: authApiUrl ?? this.authApiUrl,
+        authAppId: authAppId ?? this.authAppId,
+        authAppEnvironment: authAppEnvironment ?? this.authAppEnvironment,
       );
 
   /// 解析当前选择的 dsh 可执行路径；null = 交给 dshc 从 PATH 解析。
@@ -258,4 +283,58 @@ class InstalledDsh {
   final String version;
   final String binPath;
   final DateTime installedAt;
+}
+
+// ---------- 账号会话（登录后持久化，插件 uplink 与 gateway 共用该文件） ----------
+
+class AccountSession {
+  const AccountSession({
+    required this.userId,
+    required this.email,
+    required this.token,
+    required this.refreshToken,
+    required this.updatedAt,
+  });
+
+  static const version = 1;
+
+  final String userId;
+  final String email;
+
+  /// 掌鲸 DSH Pocket session token（RS256 JWT；gateway 经 JWKS 离线验签）
+  final String token;
+  final String refreshToken;
+
+  /// epoch ms（本地写入时间，展示用）
+  final int updatedAt;
+
+  factory AccountSession.fromJson(Map<String, dynamic> json) => AccountSession(
+        userId: (json['userId'] as String?) ?? '',
+        email: (json['email'] as String?) ?? '',
+        token: (json['token'] as String?) ?? '',
+        refreshToken: (json['refreshToken'] as String?) ?? '',
+        updatedAt: (json['updatedAt'] as num?)?.toInt() ?? 0,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'version': version,
+        'userId': userId,
+        'email': email,
+        'token': token,
+        'refreshToken': refreshToken,
+        'updatedAt': updatedAt,
+      };
+}
+
+/// 本机 Worker 标识（bridge-state.json 的最小投影，账号绑定/登录态判断用）。
+class WorkerIdentity {
+  const WorkerIdentity({required this.hostKey, required this.fingerprint});
+
+  final String hostKey;
+  final String fingerprint;
+
+  factory WorkerIdentity.fromJson(Map<String, dynamic> json) => WorkerIdentity(
+        hostKey: (json['hostKey'] as String?) ?? '',
+        fingerprint: (json['fingerprint'] as String?) ?? '',
+      );
 }

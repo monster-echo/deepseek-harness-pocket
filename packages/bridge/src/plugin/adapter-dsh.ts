@@ -8,9 +8,24 @@
 
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
+import { readFile } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef, ImageMediaType, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
-import type { DshSessionEvent } from '@deepseek-harness-pocket/bridge-protocol'
+import type {
+  DshSessionEvent,
+  FeedbackCategory,
+  FeedbackItem,
+  FeedbackRating,
+  JobSnapshot,
+  QuestionAnswerItem,
+  CredentialRecordInfo,
+  AgentPresetInfo,
+  SessionSearchHit,
+  SettingsSectionInfo,
+  SettingsUpdateOutcome,
+  SkillInfo,
+  UserQuestionItem,
+} from '@deepseek-harness-pocket/bridge-protocol'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
 /**
@@ -70,6 +85,14 @@ export interface SessionSummary {
   readonly live: boolean
   /** live agent 状态；离线为 null */
   readonly agentStatus: AgentStatusValue | null
+  /** fork 来源会话（种子血缘）；无则 null */
+  readonly parentSession: string | null
+  /** 子代理会话标记（dsh SessionHeader.origin） */
+  readonly origin: 'subagent' | null
+  /** 委派深度：顶层为 0 */
+  readonly delegationDepth: number
+  /** 组合该会话的 agent preset id */
+  readonly agentPreset: string | null
 }
 
 export interface SessionSlice {
@@ -92,9 +115,12 @@ export interface ApprovalAsk {
 export interface QuestionAsk {
   readonly requestId: string
   readonly sessionId: string
+  /** 首题扁平镜像（兼容） */
   readonly question: string
   readonly options: readonly string[]
-  readonly answer: (text: string) => Promise<void>
+  /** 完整题目（多选 / 计划评审 / 题干补充说明） */
+  readonly questions: readonly UserQuestionItem[]
+  readonly answer: (answers: readonly QuestionAnswerItem[]) => Promise<void>
 }
 
 /** dsh 宿主能力探测结果（缺服务时优雅降级）。 */
@@ -148,6 +174,36 @@ export interface DshAdapter {
   listPlugins(): Promise<readonly { id: string; name: string; enabled: boolean }[]>
   /** 上下文占用（token-meter projection：projectedTokens/contextWindow/system/tools/message） */
   sessionContext(sessionId: string): Promise<{ projectedTokens: number; contextWindow: number; systemTokens: number; toolsTokens: number; messageTokens: number } | null>
+  /** 该会话的后台任务（dsh ctx.jobs 注册表，按 ownerSession 过滤） */
+  listJobs(sessionId: string): Promise<readonly JobSnapshot[]>
+  /** 订阅任务变化（注册表不存在时返回 no-op 退订） */
+  onJobsChanged(handler: () => void): () => void
+  /** 会话内已提交的消息反馈（dsh ctx.messageFeedback） */
+  listFeedback(sessionId: string): Promise<readonly FeedbackItem[]>
+  /** 提交/覆盖一条消息反馈；失败返回 null */
+  putFeedback(
+    sessionId: string,
+    messageId: string,
+    rating: FeedbackRating,
+    note?: string,
+    category?: FeedbackCategory,
+  ): Promise<FeedbackItem | null>
+  /** 删除一条消息反馈（需 CAS version） */
+  deleteFeedback(sessionId: string, messageId: string, version: string): Promise<boolean>
+  /** 跨会话内容搜索（dsh ctx.sessionQuery；服务缺失返回空数组） */
+  searchSessions(query: string, limit: number): Promise<readonly SessionSearchHit[]>
+  /** 技能目录（dsh ctx.skills；按 cwd 解析分层；服务缺失返回空数组） */
+  listSkills(cwd?: string): Promise<readonly SkillInfo[]>
+  /** 设置命名空间概览（秘密字段打码，只读） */
+  describeSettings(): Promise<readonly SettingsSectionInfo[]>
+  /** 凭据记录元信息（只有 key/kind/配置状态，绝不含秘密值） */
+  listCredentials(): Promise<readonly CredentialRecordInfo[]>
+  /** 写回一个设置命名空间（CAS：expectedRevision 不匹配则返回冲突） */
+  updateSettings(ns: string, patch: Record<string, unknown>, expectedRevision?: number): Promise<SettingsUpdateOutcome>
+  /** 写入一条凭据（秘密值只在本次调用中存在，不落日志） */
+  setCredential(ref: string, value: string): Promise<boolean>
+  /** 删除一条凭据 */
+  unsetCredential(ref: string): Promise<boolean>
   /** 在指定 cwd 创建新会话（M3）；返回 sessionId */
   createSession(cwd: string, route: { provider: string; model: string; reasoningEffort?: string }, agentPreset?: string): Promise<string>
   /** 从既有会话分叉（dsh fork：取平衡的已完成回合前缀作种子）并挂 agent；返回新 sessionId */
@@ -172,7 +228,14 @@ export interface DshAdapter {
 interface LiveSessionLike {
   readonly id: { toString(): string }
   readonly seq: number
-  readonly header: { createdAt: number; cwd?: string; agentPreset?: string }
+  readonly header: {
+    createdAt: number
+    cwd?: string
+    agentPreset?: string
+    parentSession?: unknown
+    origin?: unknown
+    delegationDepth?: unknown
+  }
   readonly events: readonly unknown[]
 }
 
@@ -197,6 +260,261 @@ interface AgentRegistryLike {
 interface AgentPresetsLike {
   resolve(presetId?: string): Promise<{ id: string }>
   mount(agentCtx: unknown, presetId: string): Promise<void>
+}
+
+/** dsh 选项：字符串或 { label, description } 两种形态都接受。 */
+function toQuestionOptions(value: unknown): readonly { label: string; description?: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const options: { label: string; description?: string }[] = []
+  for (const raw of value) {
+    if (typeof raw === 'string') {
+      options.push({ label: raw })
+      continue
+    }
+    if (typeof raw !== 'object' || raw === null) continue
+    const o = raw as Record<string, unknown>
+    if (typeof o['label'] !== 'string') continue
+    options.push(
+      typeof o['description'] === 'string'
+        ? { label: o['label'], description: o['description'] }
+        : { label: o['label'] },
+    )
+  }
+  return options.length > 0 ? options : undefined
+}
+
+/** 计划评审意图（未知 kind 丢弃，退化为普通选项列表渲染）。 */
+function toQuestionIntent(value: unknown): { kind: 'plan-review'; approve: string } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const v = value as Record<string, unknown>
+  if (v['kind'] !== 'plan-review' || typeof v['approve'] !== 'string') return undefined
+  return { kind: 'plan-review', approve: v['approve'] }
+}
+
+/**
+ * 审批详情：审批请求只带 toolName/callId，入参要用 callId 回查会话日志里的 tool/call。
+ * 纯函数（只看 events），找不到返回 null（App 侧退回只显示摘要）。
+ */
+export function approvalDetailFromEvents(
+  events: readonly unknown[],
+  callId: unknown,
+): Record<string, unknown> | null {
+  if (typeof callId !== 'string' || callId.length === 0) return null
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i] as
+      | { type?: unknown; data?: { callId?: unknown; name?: unknown; arguments?: unknown } }
+      | undefined
+    if (event?.type !== 'tool/call') continue
+    if (event.data?.callId !== callId) continue
+    const detail: Record<string, unknown> = {}
+    if (typeof event.data.name === 'string') detail['name'] = event.data.name
+    const args = event.data.arguments
+    if (typeof args === 'string') {
+      try {
+        detail['arguments'] = JSON.parse(args) as unknown
+      } catch {
+        // 流式聚合未完成：保留原文截断
+        detail['argumentsRaw'] = args.slice(0, 4000)
+      }
+    }
+    return Object.keys(detail).length > 0 ? detail : null
+  }
+  return null
+}
+
+/** 从 ctx 取会话事件（持久/实时），失败返回空数组。 */
+function sessionEventsOf(ctx: Context, sessionId: string): readonly unknown[] {
+  try {
+    const session = ctx.sessions.get(sessionId as never) as { events?: readonly unknown[] } | undefined
+    return session?.events ?? []
+  } catch {
+    return []
+  }
+}
+
+/** 审批单行摘要：优先 dsh 给的理由，否则用工具名 + 入参里的关键字段。 */
+export function approvalSummary(toolName: string, reason: unknown, detail: Record<string, unknown> | null): string {
+  if (typeof reason === 'string' && reason.length > 0) return reason
+  const args = detail?.['arguments']
+  if (typeof args === 'object' && args !== null) {
+    const a = args as Record<string, unknown>
+    for (const key of ['command', 'path', 'file_path', 'url', 'query']) {
+      const value = a[key]
+      if (typeof value === 'string' && value.length > 0) {
+        return `${toolName}: ${value.length > 120 ? `${value.slice(0, 120)}…` : value}`
+      }
+    }
+  }
+  return `approve ${toolName}`
+}
+
+/** dsh ctx.jobs 注册表的窄投影（未装载 jobs 插件时为 undefined）。 */
+interface JobRegistryLike {
+  list(caller?: unknown): readonly unknown[]
+  onJobsChanged?(listener: () => void): () => void
+}
+
+function jobsRegistry(ctx: Context): JobRegistryLike | undefined {
+  try {
+    return ctx.get('jobs') as JobRegistryLike | undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** dsh JobSnapshot → 协议快照（只取 UI 需要的字段）。 */
+function toJobSnapshot(raw: unknown): JobSnapshot {
+  const j = raw as {
+    id?: { toString(): string }
+    kind?: unknown
+    label?: unknown
+    status?: unknown
+    detail?: unknown
+    startedAt?: unknown
+    finishedAt?: unknown
+  }
+  const status = j.status
+  return {
+    id: j.id !== undefined ? j.id.toString() : 'job',
+    kind: typeof j.kind === 'string' ? j.kind : 'job',
+    label: typeof j.label === 'string' ? j.label : 'job',
+    status: status === 'stopping' || status === 'completed' || status === 'killed' || status === 'failed'
+      ? status
+      : 'running',
+    ...(typeof j.detail === 'string' ? { detail: j.detail } : {}),
+    startedAt: typeof j.startedAt === 'number' ? j.startedAt : 0,
+    ...(typeof j.finishedAt === 'number' ? { finishedAt: j.finishedAt } : {}),
+  }
+}
+
+/** dsh ctx.messageFeedback 的窄投影（未装载时为 undefined）。 */
+interface MessageFeedbackLike {
+  list(request: unknown): Promise<{ ok: boolean; value?: unknown }>
+  put(request: unknown): Promise<{ ok: boolean; value?: unknown }>
+  delete(request: unknown): Promise<{ ok: boolean; value?: unknown }>
+}
+
+function feedbackService(ctx: Context): MessageFeedbackLike | undefined {
+  try {
+    return ctx.get('messageFeedback') as MessageFeedbackLike | undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** dsh MessageFeedbackItem → 协议条目（只取 UI 需要的字段）。 */
+function toFeedbackItem(raw: unknown): FeedbackItem | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const v = raw as Record<string, unknown>
+  const messageId = v['messageId']
+  const rating = v['rating']
+  const version = v['version']
+  if (typeof messageId !== 'string' && !(messageId !== null && typeof messageId === 'object')) return null
+  if (rating !== 'positive' && rating !== 'negative') return null
+  if (typeof version !== 'string') return null
+  const category = v['category']
+  return {
+    messageId: typeof messageId === 'string' ? messageId : String(messageId),
+    rating,
+    ...(typeof v['note'] === 'string' && v['note'].length > 0 ? { note: v['note'] } : {}),
+    ...(typeof category === 'string' ? { category: category as FeedbackCategory } : {}),
+    version,
+    createdAt: typeof v['createdAt'] === 'number' ? v['createdAt'] : 0,
+    updatedAt: typeof v['updatedAt'] === 'number' ? v['updatedAt'] : 0,
+  }
+}
+
+/** dsh SessionSearchHit → 协议命中（只取 UI 需要的字段）。 */
+function toSearchHit(raw: unknown): SessionSearchHit | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const h = raw as {
+    header?: { id?: { toString(): string }; cwd?: unknown; createdAt?: unknown }
+    live?: unknown
+    bestMatch?: { snippet?: unknown }
+  }
+  const id = h.header?.id
+  if (id === undefined) return null
+  return {
+    sessionId: id.toString(),
+    snippet: typeof h.bestMatch?.snippet === 'string' ? h.bestMatch.snippet : '',
+    cwd: typeof h.header?.cwd === 'string' ? h.header.cwd : null,
+    createdAt: typeof h.header?.createdAt === 'number' ? h.header.createdAt : 0,
+    live: h.live === true,
+  }
+}
+
+/** dsh SkillSummary → 协议技能信息。 */
+function toSkillInfo(raw: unknown): SkillInfo | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const s = raw as {
+    name?: unknown
+    description?: unknown
+    whenToUse?: unknown
+    invocation?: { modelInvocable?: unknown; userInvocable?: unknown }
+    provider?: unknown
+  }
+  if (typeof s.name !== 'string' || s.name.length === 0) return null
+  return {
+    name: s.name,
+    description: typeof s.description === 'string' ? s.description : '',
+    ...(typeof s.whenToUse === 'string' && s.whenToUse.length > 0 ? { whenToUse: s.whenToUse } : {}),
+    modelInvocable: s.invocation?.modelInvocable !== false,
+    userInvocable: s.invocation?.userInvocable !== false,
+    provider: typeof s.provider === 'string' ? s.provider : '',
+  }
+}
+
+/** dsh SettingsDescriptor → 只读概览（值截断，秘密已由宿主打码）。 */
+function toSettingsSection(raw: unknown): SettingsSectionInfo | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const s = raw as {
+    ns?: unknown
+    applies?: unknown
+    revision?: unknown
+    value?: unknown
+    user?: unknown
+  }
+  if (typeof s.ns !== 'string') return null
+  let preview = '—'
+  try {
+    const json = JSON.stringify(s.value ?? null)
+    if (json !== undefined) preview = json.length > 800 ? `${json.slice(0, 800)}…` : json
+  } catch {
+    preview = '—'
+  }
+  const secrets = (raw as { secrets?: unknown }).secrets
+  const hasSecrets = Array.isArray(secrets) && secrets.length > 0
+  let valueJson: string | undefined
+  if (!hasSecrets) {
+    try {
+      valueJson = JSON.stringify(s.value ?? null, null, 2)
+    } catch {
+      valueJson = undefined
+    }
+  }
+  return {
+    ns: s.ns,
+    applies: typeof s.applies === 'string' ? s.applies : 'unknown',
+    revision: typeof s.revision === 'number' ? s.revision : 0,
+    overridden: s.user !== undefined && s.user !== null,
+    preview,
+    editable: !hasSecrets,
+    ...(valueJson !== undefined ? { valueJson } : {}),
+  }
+}
+
+/** dsh 凭据记录 → 元信息（只取地址与类型，丢弃任何秘密值）。 */
+function toCredentialRecord(raw: unknown): CredentialRecordInfo | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const r = raw as { key?: unknown; kind?: unknown; keyName?: unknown }
+  if (r.key === undefined || r.key === null) return null
+  return {
+    key: typeof r.key === 'string' ? r.key : String(r.key),
+    kind: typeof r.kind === 'string' ? r.kind : 'unknown',
+    // describe() 拿到之前先给保守默认值（后续 listCredentials 会补齐）
+    configured: false,
+    writable: false,
+  }
 }
 
 function toEvent(raw: unknown): DshSessionEvent {
@@ -303,7 +621,20 @@ export function createAdapter(ctx: Context): DshAdapter {
     return null
   }
 
-  const toSummary = (id: string, createdAt: number, cwd: string | undefined, lastSeq: number, lastActivityAt?: number, title?: string | null): SessionSummary => {
+  const toSummary = (
+    id: string,
+    createdAt: number,
+    cwd: string | undefined,
+    lastSeq: number,
+    lastActivityAt?: number,
+    title?: string | null,
+    meta?: {
+      parentSession?: unknown
+      origin?: unknown
+      delegationDepth?: unknown
+      agentPreset?: unknown
+    },
+  ): SessionSummary => {
     const status = agentStatusById().get(id)
     return {
       id,
@@ -314,6 +645,14 @@ export function createAdapter(ctx: Context): DshAdapter {
       lastSeq,
       live: status !== undefined,
       agentStatus: status ?? null,
+      parentSession: typeof meta?.parentSession === 'string'
+        ? meta.parentSession
+        : meta?.parentSession !== undefined && meta?.parentSession !== null
+          ? String(meta.parentSession)
+          : null,
+      origin: meta?.origin === 'subagent' ? 'subagent' : null,
+      delegationDepth: typeof meta?.delegationDepth === 'number' ? meta.delegationDepth : 0,
+      agentPreset: typeof meta?.agentPreset === 'string' ? meta.agentPreset : null,
     }
   }
 
@@ -333,7 +672,20 @@ export function createAdapter(ctx: Context): DshAdapter {
           const headers = await per.list()
           for (const h of headers) {
             const id = h.id.toString()
-            summaries.set(id, toSummary(id, h.createdAt, h.cwd, h.lastSeq ?? -1, lastActivityById.get(id)))
+            summaries.set(id, toSummary(
+              id,
+              h.createdAt,
+              h.cwd,
+              h.lastSeq ?? -1,
+              lastActivityById.get(id),
+              null,
+              {
+                parentSession: (h as { parentSession?: unknown }).parentSession,
+                origin: (h as { origin?: unknown }).origin,
+                delegationDepth: (h as { delegationDepth?: unknown }).delegationDepth,
+                agentPreset: (h as { agentPreset?: unknown }).agentPreset,
+              },
+            ))
           }
         } catch {
           // 持久化后端不可用时仅返回 live
@@ -343,7 +695,15 @@ export function createAdapter(ctx: Context): DshAdapter {
       for (const s of live) {
         const id = s.id.toString()
         const tail = s.events[s.events.length - 1]
-        summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1, lastActivityById.get(id) ?? eventTimeOf(tail), extractTitle(s.events)))
+        summaries.set(id, toSummary(
+          id,
+          s.header.createdAt,
+          s.header.cwd,
+          s.seq - 1,
+          lastActivityById.get(id) ?? eventTimeOf(tail),
+          extractTitle(s.events),
+          s.header,
+        ))
       }
       return [...summaries.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt)
     },
@@ -414,16 +774,42 @@ export function createAdapter(ctx: Context): DshAdapter {
 
     async listPresets() {
       const presets = ctx.get('agentPresets') as
-        | { list(): Promise<readonly { id: string; name?: string; description?: string; isDefault?: boolean }[]> }
+        | {
+          defaultId?: string
+          list(): Promise<readonly {
+            id: string
+            name?: string
+            description?: string
+            path?: string
+            trust?: unknown
+            broken?: unknown
+          }[]>
+        }
         | undefined
       if (presets === undefined) return []
       try {
+        const defaultId = presets.defaultId
         const list = await presets.list()
-        return list.map((entry) => ({
-          id: entry.id,
-          ...(entry.name !== undefined ? { name: entry.name } : {}),
-          ...(entry.description !== undefined ? { description: entry.description } : {}),
-          isDefault: entry.isDefault === true,
+        return await Promise.all(list.map(async (entry): Promise<AgentPresetInfo> => {
+          // 组成文件正文（只读、截断）：Web 的 preset 卡「查看」等价物
+          let composition: string | undefined
+          if (typeof entry.path === 'string' && entry.path.length > 0) {
+            try {
+              const text = await readFile(entry.path, 'utf8')
+              composition = text.length > 4000 ? `${text.slice(0, 4000)}\n…（已截断）` : text
+            } catch {
+              composition = undefined
+            }
+          }
+          return {
+            id: entry.id,
+            ...(entry.name !== undefined ? { name: entry.name } : {}),
+            ...(entry.description !== undefined ? { description: entry.description } : {}),
+            isDefault: defaultId !== undefined ? entry.id === defaultId : false,
+            trust: entry.trust === 'user' ? 'user' : 'system',
+            ...(typeof entry.broken === 'string' && entry.broken.length > 0 ? { broken: entry.broken } : {}),
+            ...(composition !== undefined ? { composition } : {}),
+          }
         }))
       } catch {
         return []
@@ -584,6 +970,227 @@ export function createAdapter(ctx: Context): DshAdapter {
         }
       } catch {
         return null
+      }
+    },
+
+    async describeSettings() {
+      const provider = ctx.get('settings') as
+        | {
+          writable?: boolean
+          describe(options?: { redactSecrets?: boolean }): readonly unknown[]
+        }
+        | undefined
+      if (provider === undefined) return []
+      try {
+        // redactSecrets 是关键：schema 声明的秘密位置由宿主打码后再下发
+        const list = provider.describe({ redactSecrets: true })
+        return list.flatMap((raw) => {
+          const section = toSettingsSection(raw)
+          return section === null ? [] : [section]
+        })
+      } catch {
+        return []
+      }
+    },
+
+    async setCredential(ref, value) {
+      const provider = ctx.get('credentials') as
+        | { set(ref: unknown, value: string): Promise<void> }
+        | undefined
+      if (provider === undefined) return false
+      try {
+        await provider.set(ref, value)
+        return true
+      } catch {
+        return false
+      }
+    },
+
+    async unsetCredential(ref) {
+      const provider = ctx.get('credentials') as
+        | { unset(ref: unknown): Promise<void> }
+        | undefined
+      if (provider === undefined) return false
+      try {
+        await provider.unset(ref)
+        return true
+      } catch {
+        return false
+      }
+    },
+
+    async updateSettings(ns, patch, expectedRevision) {
+      const provider = ctx.get('settings') as
+        | {
+          writable?: boolean
+          update(ns: string, patch: object, expectedRevision?: number): Promise<void>
+          describe(options?: { redactSecrets?: boolean }): readonly unknown[]
+        }
+        | undefined
+      if (provider === undefined) throw new Error('settings 服务不可用')
+      if (provider.writable === false) throw new Error('配置为只读，无法写回')
+      try {
+        await provider.update(ns, patch, expectedRevision)
+      } catch (error) {
+        // 版本冲突：把当前修订号回给客户端，便于提示后重试
+        const code = (error as { code?: unknown }).code
+        if (code === 'SETTINGS_CONFLICT') {
+          const descriptor = provider.describe({ redactSecrets: true }).find(
+            (raw) => typeof raw === 'object' && raw !== null && (raw as { ns?: unknown }).ns === ns,
+          )
+          const actual = (descriptor as { revision?: unknown } | undefined)?.revision
+          return {
+            updated: false,
+            conflict: true,
+            actualRevision: typeof actual === 'number' ? actual : 0,
+          }
+        }
+        throw error
+      }
+      const descriptor = provider.describe({ redactSecrets: true }).find(
+        (raw) => typeof raw === 'object' && raw !== null && (raw as { ns?: unknown }).ns === ns,
+      )
+      const revision = (descriptor as { revision?: unknown } | undefined)?.revision
+      return { updated: true, revision: typeof revision === 'number' ? revision : 0 }
+    },
+
+    async listCredentials() {
+      const provider = ctx.get('credentials') as
+        | {
+          listRecords?: () => Promise<readonly unknown[]>
+          describe?: (ref: unknown) => Promise<{ configured?: unknown; source?: unknown; writable?: unknown }>
+        }
+        | undefined
+      if (provider?.listRecords === undefined) return []
+      try {
+        const records = await provider.listRecords()
+        const infos = await Promise.all(records.map(async (raw) => {
+          const record = toCredentialRecord(raw)
+          if (record === null) return null
+          // describe 只返回 {configured, source, writable}，不含秘密
+          try {
+            const info = await provider.describe?.(record.key)
+            return {
+              ...record,
+              configured: info?.configured === true,
+              ...(typeof info?.source === 'string' ? { source: info.source } : {}),
+              writable: info?.writable === true,
+            }
+          } catch {
+            return { ...record, configured: false, writable: false }
+          }
+        }))
+        return infos.flatMap((info) => (info === null ? [] : [info]))
+      } catch {
+        return []
+      }
+    },
+
+    async listSkills(cwd) {
+      const registry = ctx.get('skills') as
+        | { list(options?: { cwd?: string }): Promise<readonly unknown[]> }
+        | undefined
+      if (registry === undefined) return []
+      try {
+        const list = await registry.list(cwd !== undefined ? { cwd } : undefined)
+        return list.flatMap((raw) => {
+          const skill = toSkillInfo(raw)
+          return skill === null ? [] : [skill]
+        })
+      } catch {
+        return []
+      }
+    },
+
+    async searchSessions(query, limit) {
+      const engine = ctx.get('sessionQuery') as
+        | { searchSessions(req: { query: string; limit?: number }): Promise<{ items?: unknown }> }
+        | undefined
+      if (engine === undefined) return []
+      try {
+        const page = await engine.searchSessions({ query, limit })
+        const items = page?.items
+        if (!Array.isArray(items)) return []
+        return items.flatMap((raw) => {
+          const hit = toSearchHit(raw)
+          return hit === null ? [] : [hit]
+        })
+      } catch {
+        // 搜索未启用/索引失败：静默降级为空结果
+        return []
+      }
+    },
+
+    async listFeedback(sessionId) {
+      const service = feedbackService(ctx)
+      if (service === undefined) return []
+      try {
+        const result = await service.list({ sessionId })
+        if (result?.ok !== true) return []
+        const items = (result.value as { items?: unknown } | undefined)?.items
+        return Array.isArray(items) ? items.flatMap((raw) => {
+          const item = toFeedbackItem(raw)
+          return item === null ? [] : [item]
+        }) : []
+      } catch {
+        return []
+      }
+    },
+
+    async putFeedback(sessionId, messageId, rating, note, category) {
+      const service = feedbackService(ctx)
+      if (service === undefined) return null
+      try {
+        const result = await service.put({
+          sessionId,
+          messageId,
+          rating,
+          ...(note !== undefined && note.length > 0 ? { note } : {}),
+          ...(category !== undefined ? { category } : {}),
+          ifVersion: null,
+        })
+        if (result?.ok !== true) return null
+        return toFeedbackItem(result.value)
+      } catch {
+        return null
+      }
+    },
+
+    async deleteFeedback(sessionId, messageId, version) {
+      const service = feedbackService(ctx)
+      if (service === undefined) return false
+      try {
+        const result = await service.delete({ sessionId, messageId, ifVersion: version })
+        return result?.ok === true
+      } catch {
+        return false
+      }
+    },
+
+    async listJobs(sessionId) {
+      const registry = jobsRegistry(ctx)
+      if (registry === undefined) return []
+      try {
+        const all = registry.list() ?? []
+        return all.flatMap((job) => {
+          if (job === null || typeof job !== 'object') return []
+          const owner = (job as { ownerSession?: { toString(): string } }).ownerSession
+          if (owner === undefined || owner === null) return []
+          if (owner.toString() !== sessionId) return []
+          return [toJobSnapshot(job)]
+        })
+      } catch {
+        return []
+      }
+    },
+
+    onJobsChanged(handler) {
+      const registry = jobsRegistry(ctx)
+      if (registry?.onJobsChanged === undefined) return () => {}
+      try {
+        return registry.onJobsChanged(() => handler())
+      } catch {
+        return () => {}
       }
     },
 
@@ -761,12 +1368,13 @@ export function createAdapter(ctx: Context): DshAdapter {
         const decided = new Promise<'allow' | 'deny'>((resolve) => {
           release = resolve
         })
+        const detail = approvalDetailFromEvents(sessionEventsOf(ctx, sessionId), r.callId)
         ask({
           requestId,
           sessionId,
           toolName: r.toolName,
-          summary: typeof r.reason === 'string' ? r.reason : `approve ${r.toolName}`,
-          detail: null,
+          summary: approvalSummary(r.toolName, r.reason, detail),
+          detail,
           decide: async (decision) => {
             if (decision === 'pass') return
             release?.(decision)
@@ -793,10 +1401,32 @@ export function createAdapter(ctx: Context): DshAdapter {
         return service.registerProvider({
           async ask(request: unknown) {
             const r = request as {
-              questions: readonly { question: string; options?: readonly string[] }[]
+              questions: readonly {
+                id?: unknown
+                question?: unknown
+                detail?: unknown
+                header?: unknown
+                options?: readonly unknown[]
+                multiSelect?: unknown
+                intent?: unknown
+              }[]
               agent?: { session?: { id: { toString(): string } }; id: { toString(): string } }
             }
-            const first = r.questions[0]
+            const questions: UserQuestionItem[] = (r.questions ?? []).flatMap((q, index) => {
+              if (typeof q.question !== 'string') return []
+              const options = toQuestionOptions(q.options)
+              const intent = toQuestionIntent(q.intent)
+              return [{
+                id: typeof q.id === 'string' ? q.id : `q${index}`,
+                question: q.question,
+                ...(typeof q.detail === 'string' ? { detail: q.detail } : {}),
+                ...(typeof q.header === 'string' ? { header: q.header } : {}),
+                ...(options !== undefined ? { options } : {}),
+                ...(q.multiSelect === true ? { multiSelect: true } : {}),
+                ...(intent !== undefined ? { intent } : {}),
+              }]
+            })
+            const first = questions[0]
             const sessionId = r.agent?.session?.id.toString() ?? r.agent?.id.toString() ?? ''
             const requestId = `q_${Math.random().toString(36).slice(2, 10)}`
             return await new Promise((resolve) => {
@@ -804,8 +1434,10 @@ export function createAdapter(ctx: Context): DshAdapter {
                 requestId,
                 sessionId,
                 question: first?.question ?? '',
-                options: first?.options ? [...first.options] : [],
-                answer: async (text) => resolve({ answer: text }),
+                options: first?.options?.map((o) => o.label) ?? [],
+                questions,
+                // dsh 的 AskUserQuestionAnswer 是结构化的 { answers: [...] }
+                answer: async (answers) => resolve({ answers: [...answers] }),
               })
             })
           },

@@ -16,8 +16,14 @@ var pluginConfig = z.object({
     /** 由 dshc 生成并注入，避免与状态文件双源 */
     hostKey: z.string().default(""),
     reconnectMinMs: z.number().default(1e3),
-    reconnectMaxMs: z.number().default(3e4)
-  }).default({ url: "", hostKey: "", reconnectMinMs: 1e3, reconnectMaxMs: 3e4 }),
+    reconnectMaxMs: z.number().default(3e4),
+    /**
+     * 账号会话文件（桌面端登录后写入）。文件存在且含 token 时，
+     * 每次连接 gateway 都会读取并随 worker-register 上送（账号自动绑定，
+     * 同账号手机端免扫码）。留空关闭该路径。
+     */
+    accountSessionFile: z.string().default("~/.deepseek-harness-pocket/account-session.json")
+  }).default({ url: "", hostKey: "", reconnectMinMs: 1e3, reconnectMaxMs: 3e4, accountSessionFile: "~/.deepseek-harness-pocket/account-session.json" }),
   /** 能力面：按里程碑声明，handshake 下发给 app */
   caps: z.union(["m1", "m2", "m3"]).default("m2"),
   /** 状态文件路径（hostKey/pairingToken） */
@@ -42,7 +48,189 @@ var pluginConfig = z.object({
 // src/plugin/adapter-dsh.ts
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
+function toQuestionOptions(value) {
+  if (!Array.isArray(value)) return void 0;
+  const options = [];
+  for (const raw of value) {
+    if (typeof raw === "string") {
+      options.push({ label: raw });
+      continue;
+    }
+    if (typeof raw !== "object" || raw === null) continue;
+    const o = raw;
+    if (typeof o["label"] !== "string") continue;
+    options.push(
+      typeof o["description"] === "string" ? { label: o["label"], description: o["description"] } : { label: o["label"] }
+    );
+  }
+  return options.length > 0 ? options : void 0;
+}
+function toQuestionIntent(value) {
+  if (typeof value !== "object" || value === null) return void 0;
+  const v = value;
+  if (v["kind"] !== "plan-review" || typeof v["approve"] !== "string") return void 0;
+  return { kind: "plan-review", approve: v["approve"] };
+}
+function approvalDetailFromEvents(events, callId) {
+  if (typeof callId !== "string" || callId.length === 0) return null;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event?.type !== "tool/call") continue;
+    if (event.data?.callId !== callId) continue;
+    const detail = {};
+    if (typeof event.data.name === "string") detail["name"] = event.data.name;
+    const args = event.data.arguments;
+    if (typeof args === "string") {
+      try {
+        detail["arguments"] = JSON.parse(args);
+      } catch {
+        detail["argumentsRaw"] = args.slice(0, 4e3);
+      }
+    }
+    return Object.keys(detail).length > 0 ? detail : null;
+  }
+  return null;
+}
+function sessionEventsOf(ctx, sessionId) {
+  try {
+    const session = ctx.sessions.get(sessionId);
+    return session?.events ?? [];
+  } catch {
+    return [];
+  }
+}
+function approvalSummary(toolName, reason, detail) {
+  if (typeof reason === "string" && reason.length > 0) return reason;
+  const args = detail?.["arguments"];
+  if (typeof args === "object" && args !== null) {
+    const a = args;
+    for (const key of ["command", "path", "file_path", "url", "query"]) {
+      const value = a[key];
+      if (typeof value === "string" && value.length > 0) {
+        return `${toolName}: ${value.length > 120 ? `${value.slice(0, 120)}\u2026` : value}`;
+      }
+    }
+  }
+  return `approve ${toolName}`;
+}
+function jobsRegistry(ctx) {
+  try {
+    return ctx.get("jobs");
+  } catch {
+    return void 0;
+  }
+}
+function toJobSnapshot(raw) {
+  const j = raw;
+  const status = j.status;
+  return {
+    id: j.id !== void 0 ? j.id.toString() : "job",
+    kind: typeof j.kind === "string" ? j.kind : "job",
+    label: typeof j.label === "string" ? j.label : "job",
+    status: status === "stopping" || status === "completed" || status === "killed" || status === "failed" ? status : "running",
+    ...typeof j.detail === "string" ? { detail: j.detail } : {},
+    startedAt: typeof j.startedAt === "number" ? j.startedAt : 0,
+    ...typeof j.finishedAt === "number" ? { finishedAt: j.finishedAt } : {}
+  };
+}
+function feedbackService(ctx) {
+  try {
+    return ctx.get("messageFeedback");
+  } catch {
+    return void 0;
+  }
+}
+function toFeedbackItem(raw) {
+  if (typeof raw !== "object" || raw === null) return null;
+  const v = raw;
+  const messageId = v["messageId"];
+  const rating = v["rating"];
+  const version = v["version"];
+  if (typeof messageId !== "string" && !(messageId !== null && typeof messageId === "object")) return null;
+  if (rating !== "positive" && rating !== "negative") return null;
+  if (typeof version !== "string") return null;
+  const category = v["category"];
+  return {
+    messageId: typeof messageId === "string" ? messageId : String(messageId),
+    rating,
+    ...typeof v["note"] === "string" && v["note"].length > 0 ? { note: v["note"] } : {},
+    ...typeof category === "string" ? { category } : {},
+    version,
+    createdAt: typeof v["createdAt"] === "number" ? v["createdAt"] : 0,
+    updatedAt: typeof v["updatedAt"] === "number" ? v["updatedAt"] : 0
+  };
+}
+function toSearchHit(raw) {
+  if (typeof raw !== "object" || raw === null) return null;
+  const h = raw;
+  const id = h.header?.id;
+  if (id === void 0) return null;
+  return {
+    sessionId: id.toString(),
+    snippet: typeof h.bestMatch?.snippet === "string" ? h.bestMatch.snippet : "",
+    cwd: typeof h.header?.cwd === "string" ? h.header.cwd : null,
+    createdAt: typeof h.header?.createdAt === "number" ? h.header.createdAt : 0,
+    live: h.live === true
+  };
+}
+function toSkillInfo(raw) {
+  if (typeof raw !== "object" || raw === null) return null;
+  const s = raw;
+  if (typeof s.name !== "string" || s.name.length === 0) return null;
+  return {
+    name: s.name,
+    description: typeof s.description === "string" ? s.description : "",
+    ...typeof s.whenToUse === "string" && s.whenToUse.length > 0 ? { whenToUse: s.whenToUse } : {},
+    modelInvocable: s.invocation?.modelInvocable !== false,
+    userInvocable: s.invocation?.userInvocable !== false,
+    provider: typeof s.provider === "string" ? s.provider : ""
+  };
+}
+function toSettingsSection(raw) {
+  if (typeof raw !== "object" || raw === null) return null;
+  const s = raw;
+  if (typeof s.ns !== "string") return null;
+  let preview = "\u2014";
+  try {
+    const json = JSON.stringify(s.value ?? null);
+    if (json !== void 0) preview = json.length > 800 ? `${json.slice(0, 800)}\u2026` : json;
+  } catch {
+    preview = "\u2014";
+  }
+  const secrets = raw.secrets;
+  const hasSecrets = Array.isArray(secrets) && secrets.length > 0;
+  let valueJson;
+  if (!hasSecrets) {
+    try {
+      valueJson = JSON.stringify(s.value ?? null, null, 2);
+    } catch {
+      valueJson = void 0;
+    }
+  }
+  return {
+    ns: s.ns,
+    applies: typeof s.applies === "string" ? s.applies : "unknown",
+    revision: typeof s.revision === "number" ? s.revision : 0,
+    overridden: s.user !== void 0 && s.user !== null,
+    preview,
+    editable: !hasSecrets,
+    ...valueJson !== void 0 ? { valueJson } : {}
+  };
+}
+function toCredentialRecord(raw) {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw;
+  if (r.key === void 0 || r.key === null) return null;
+  return {
+    key: typeof r.key === "string" ? r.key : String(r.key),
+    kind: typeof r.kind === "string" ? r.kind : "unknown",
+    // describe() 拿到之前先给保守默认值（后续 listCredentials 会补齐）
+    configured: false,
+    writable: false
+  };
+}
 function toEvent(raw) {
   return raw;
 }
@@ -122,7 +310,7 @@ function createAdapter(ctx) {
     }
     return null;
   };
-  const toSummary = (id, createdAt, cwd, lastSeq, lastActivityAt, title) => {
+  const toSummary = (id, createdAt, cwd, lastSeq, lastActivityAt, title, meta) => {
     const status = agentStatusById().get(id);
     return {
       id,
@@ -132,7 +320,11 @@ function createAdapter(ctx) {
       cwd: cwd ?? null,
       lastSeq,
       live: status !== void 0,
-      agentStatus: status ?? null
+      agentStatus: status ?? null,
+      parentSession: typeof meta?.parentSession === "string" ? meta.parentSession : meta?.parentSession !== void 0 && meta?.parentSession !== null ? String(meta.parentSession) : null,
+      origin: meta?.origin === "subagent" ? "subagent" : null,
+      delegationDepth: typeof meta?.delegationDepth === "number" ? meta.delegationDepth : 0,
+      agentPreset: typeof meta?.agentPreset === "string" ? meta.agentPreset : null
     };
   };
   return {
@@ -148,7 +340,20 @@ function createAdapter(ctx) {
           const headers = await per.list();
           for (const h of headers) {
             const id = h.id.toString();
-            summaries.set(id, toSummary(id, h.createdAt, h.cwd, h.lastSeq ?? -1, lastActivityById.get(id)));
+            summaries.set(id, toSummary(
+              id,
+              h.createdAt,
+              h.cwd,
+              h.lastSeq ?? -1,
+              lastActivityById.get(id),
+              null,
+              {
+                parentSession: h.parentSession,
+                origin: h.origin,
+                delegationDepth: h.delegationDepth,
+                agentPreset: h.agentPreset
+              }
+            ));
           }
         } catch {
         }
@@ -157,7 +362,15 @@ function createAdapter(ctx) {
       for (const s of live) {
         const id = s.id.toString();
         const tail = s.events[s.events.length - 1];
-        summaries.set(id, toSummary(id, s.header.createdAt, s.header.cwd, s.seq - 1, lastActivityById.get(id) ?? eventTimeOf(tail), extractTitle(s.events)));
+        summaries.set(id, toSummary(
+          id,
+          s.header.createdAt,
+          s.header.cwd,
+          s.seq - 1,
+          lastActivityById.get(id) ?? eventTimeOf(tail),
+          extractTitle(s.events),
+          s.header
+        ));
       }
       return [...summaries.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     },
@@ -210,12 +423,28 @@ function createAdapter(ctx) {
       const presets2 = ctx.get("agentPresets");
       if (presets2 === void 0) return [];
       try {
+        const defaultId = presets2.defaultId;
         const list = await presets2.list();
-        return list.map((entry) => ({
-          id: entry.id,
-          ...entry.name !== void 0 ? { name: entry.name } : {},
-          ...entry.description !== void 0 ? { description: entry.description } : {},
-          isDefault: entry.isDefault === true
+        return await Promise.all(list.map(async (entry) => {
+          let composition;
+          if (typeof entry.path === "string" && entry.path.length > 0) {
+            try {
+              const text = await readFile(entry.path, "utf8");
+              composition = text.length > 4e3 ? `${text.slice(0, 4e3)}
+\u2026\uFF08\u5DF2\u622A\u65AD\uFF09` : text;
+            } catch {
+              composition = void 0;
+            }
+          }
+          return {
+            id: entry.id,
+            ...entry.name !== void 0 ? { name: entry.name } : {},
+            ...entry.description !== void 0 ? { description: entry.description } : {},
+            isDefault: defaultId !== void 0 ? entry.id === defaultId : false,
+            trust: entry.trust === "user" ? "user" : "system",
+            ...typeof entry.broken === "string" && entry.broken.length > 0 ? { broken: entry.broken } : {},
+            ...composition !== void 0 ? { composition } : {}
+          };
         }));
       } catch {
         return [];
@@ -339,6 +568,189 @@ function createAdapter(ctx) {
         return null;
       }
     },
+    async describeSettings() {
+      const provider = ctx.get("settings");
+      if (provider === void 0) return [];
+      try {
+        const list = provider.describe({ redactSecrets: true });
+        return list.flatMap((raw) => {
+          const section = toSettingsSection(raw);
+          return section === null ? [] : [section];
+        });
+      } catch {
+        return [];
+      }
+    },
+    async setCredential(ref, value) {
+      const provider = ctx.get("credentials");
+      if (provider === void 0) return false;
+      try {
+        await provider.set(ref, value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async unsetCredential(ref) {
+      const provider = ctx.get("credentials");
+      if (provider === void 0) return false;
+      try {
+        await provider.unset(ref);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async updateSettings(ns, patch, expectedRevision) {
+      const provider = ctx.get("settings");
+      if (provider === void 0) throw new Error("settings \u670D\u52A1\u4E0D\u53EF\u7528");
+      if (provider.writable === false) throw new Error("\u914D\u7F6E\u4E3A\u53EA\u8BFB\uFF0C\u65E0\u6CD5\u5199\u56DE");
+      try {
+        await provider.update(ns, patch, expectedRevision);
+      } catch (error) {
+        const code = error.code;
+        if (code === "SETTINGS_CONFLICT") {
+          const descriptor2 = provider.describe({ redactSecrets: true }).find(
+            (raw) => typeof raw === "object" && raw !== null && raw.ns === ns
+          );
+          const actual = descriptor2?.revision;
+          return {
+            updated: false,
+            conflict: true,
+            actualRevision: typeof actual === "number" ? actual : 0
+          };
+        }
+        throw error;
+      }
+      const descriptor = provider.describe({ redactSecrets: true }).find(
+        (raw) => typeof raw === "object" && raw !== null && raw.ns === ns
+      );
+      const revision = descriptor?.revision;
+      return { updated: true, revision: typeof revision === "number" ? revision : 0 };
+    },
+    async listCredentials() {
+      const provider = ctx.get("credentials");
+      if (provider?.listRecords === void 0) return [];
+      try {
+        const records = await provider.listRecords();
+        const infos = await Promise.all(records.map(async (raw) => {
+          const record = toCredentialRecord(raw);
+          if (record === null) return null;
+          try {
+            const info = await provider.describe?.(record.key);
+            return {
+              ...record,
+              configured: info?.configured === true,
+              ...typeof info?.source === "string" ? { source: info.source } : {},
+              writable: info?.writable === true
+            };
+          } catch {
+            return { ...record, configured: false, writable: false };
+          }
+        }));
+        return infos.flatMap((info) => info === null ? [] : [info]);
+      } catch {
+        return [];
+      }
+    },
+    async listSkills(cwd) {
+      const registry = ctx.get("skills");
+      if (registry === void 0) return [];
+      try {
+        const list = await registry.list(cwd !== void 0 ? { cwd } : void 0);
+        return list.flatMap((raw) => {
+          const skill = toSkillInfo(raw);
+          return skill === null ? [] : [skill];
+        });
+      } catch {
+        return [];
+      }
+    },
+    async searchSessions(query, limit) {
+      const engine = ctx.get("sessionQuery");
+      if (engine === void 0) return [];
+      try {
+        const page = await engine.searchSessions({ query, limit });
+        const items = page?.items;
+        if (!Array.isArray(items)) return [];
+        return items.flatMap((raw) => {
+          const hit = toSearchHit(raw);
+          return hit === null ? [] : [hit];
+        });
+      } catch {
+        return [];
+      }
+    },
+    async listFeedback(sessionId) {
+      const service = feedbackService(ctx);
+      if (service === void 0) return [];
+      try {
+        const result = await service.list({ sessionId });
+        if (result?.ok !== true) return [];
+        const items = result.value?.items;
+        return Array.isArray(items) ? items.flatMap((raw) => {
+          const item = toFeedbackItem(raw);
+          return item === null ? [] : [item];
+        }) : [];
+      } catch {
+        return [];
+      }
+    },
+    async putFeedback(sessionId, messageId, rating, note, category) {
+      const service = feedbackService(ctx);
+      if (service === void 0) return null;
+      try {
+        const result = await service.put({
+          sessionId,
+          messageId,
+          rating,
+          ...note !== void 0 && note.length > 0 ? { note } : {},
+          ...category !== void 0 ? { category } : {},
+          ifVersion: null
+        });
+        if (result?.ok !== true) return null;
+        return toFeedbackItem(result.value);
+      } catch {
+        return null;
+      }
+    },
+    async deleteFeedback(sessionId, messageId, version) {
+      const service = feedbackService(ctx);
+      if (service === void 0) return false;
+      try {
+        const result = await service.delete({ sessionId, messageId, ifVersion: version });
+        return result?.ok === true;
+      } catch {
+        return false;
+      }
+    },
+    async listJobs(sessionId) {
+      const registry = jobsRegistry(ctx);
+      if (registry === void 0) return [];
+      try {
+        const all = registry.list() ?? [];
+        return all.flatMap((job) => {
+          if (job === null || typeof job !== "object") return [];
+          const owner = job.ownerSession;
+          if (owner === void 0 || owner === null) return [];
+          if (owner.toString() !== sessionId) return [];
+          return [toJobSnapshot(job)];
+        });
+      } catch {
+        return [];
+      }
+    },
+    onJobsChanged(handler) {
+      const registry = jobsRegistry(ctx);
+      if (registry?.onJobsChanged === void 0) return () => {
+      };
+      try {
+        return registry.onJobsChanged(() => handler());
+      } catch {
+        return () => {
+        };
+      }
+    },
     async createSession(cwd, route, agentPreset) {
       const registry = agents();
       if (registry === void 0) throw new Error("no agent factory (dsh \u672A\u8FD0\u884C agent loop)");
@@ -458,15 +870,16 @@ function createAdapter(ctx) {
         const sessionId = r.agent.session?.id.toString() ?? r.agent.id.toString();
         const requestId = `ap_${String(r.callId ?? Math.random().toString(36).slice(2, 10))}`;
         let release = null;
-        const decided = new Promise((resolve2) => {
-          release = resolve2;
+        const decided = new Promise((resolve3) => {
+          release = resolve3;
         });
+        const detail = approvalDetailFromEvents(sessionEventsOf(ctx, sessionId), r.callId);
         ask({
           requestId,
           sessionId,
           toolName: r.toolName,
-          summary: typeof r.reason === "string" ? r.reason : `approve ${r.toolName}`,
-          detail: null,
+          summary: approvalSummary(r.toolName, r.reason, detail),
+          detail,
           decide: async (decision) => {
             if (decision === "pass") return;
             release?.(decision);
@@ -474,7 +887,7 @@ function createAdapter(ctx) {
         });
         const outcome = await Promise.race([
           decided,
-          new Promise((resolve2) => setTimeout(resolve2, 3e4, "timeout"))
+          new Promise((resolve3) => setTimeout(resolve3, 3e4, "timeout"))
         ]);
         if (outcome === "timeout") return next();
         return outcome === "allow" ? "allowed-once" : "rejected";
@@ -489,16 +902,32 @@ function createAdapter(ctx) {
         return service.registerProvider({
           async ask(request) {
             const r = request;
-            const first = r.questions[0];
+            const questions = (r.questions ?? []).flatMap((q, index) => {
+              if (typeof q.question !== "string") return [];
+              const options = toQuestionOptions(q.options);
+              const intent = toQuestionIntent(q.intent);
+              return [{
+                id: typeof q.id === "string" ? q.id : `q${index}`,
+                question: q.question,
+                ...typeof q.detail === "string" ? { detail: q.detail } : {},
+                ...typeof q.header === "string" ? { header: q.header } : {},
+                ...options !== void 0 ? { options } : {},
+                ...q.multiSelect === true ? { multiSelect: true } : {},
+                ...intent !== void 0 ? { intent } : {}
+              }];
+            });
+            const first = questions[0];
             const sessionId = r.agent?.session?.id.toString() ?? r.agent?.id.toString() ?? "";
             const requestId = `q_${Math.random().toString(36).slice(2, 10)}`;
-            return await new Promise((resolve2) => {
+            return await new Promise((resolve3) => {
               ask({
                 requestId,
                 sessionId,
                 question: first?.question ?? "",
-                options: first?.options ? [...first.options] : [],
-                answer: async (text) => resolve2({ answer: text })
+                options: first?.options?.map((o) => o.label) ?? [],
+                questions,
+                // dsh 的 AskUserQuestionAnswer 是结构化的 { answers: [...] }
+                answer: async (answers) => resolve3({ answers: [...answers] })
               });
             });
           }
@@ -556,6 +985,34 @@ function methodKey(ns, method) {
   return `${ns}.${method}`;
 }
 
+// ../bridge-protocol/dist/server-requests.js
+function normalizeQuestionAnswers(args) {
+  const raw = args.answers;
+  if (Array.isArray(raw)) {
+    const answers = [];
+    for (const entry of raw) {
+      if (typeof entry !== "object" || entry === null)
+        return null;
+      const e = entry;
+      if (typeof e["id"] !== "string")
+        return null;
+      const selected = e["selected"];
+      if (!Array.isArray(selected) || !selected.every((s) => typeof s === "string"))
+        return null;
+      answers.push({
+        id: e["id"],
+        selected,
+        ...typeof e["custom"] === "string" ? { custom: e["custom"] } : {}
+      });
+    }
+    return answers;
+  }
+  if (typeof args.answer === "string") {
+    return [{ id: "", selected: [], custom: args.answer }];
+  }
+  return null;
+}
+
 // ../bridge-protocol/dist/handshake.js
 var M1_CAPABILITIES = {
   sessionsReadonly: true,
@@ -575,7 +1032,11 @@ function parseGatewayToWorkerFrame(value) {
     return null;
   switch (v.kind) {
     case "register-ok":
-      return typeof v.workerId === "string" ? { kind: "register-ok", workerId: v.workerId } : null;
+      return typeof v.workerId === "string" ? {
+        kind: "register-ok",
+        workerId: v.workerId,
+        ...typeof v.boundUserId === "string" || v.boundUserId === null ? { boundUserId: v.boundUserId } : {}
+      } : null;
     case "register-rejected":
       return typeof v.reason === "string" ? { kind: "register-rejected", reason: v.reason } : null;
     case "ping":
@@ -850,6 +1311,8 @@ var BridgeHub = class {
           if (c.authed) c.subscribed.add(sessionId);
         }
         this.broadcast(snapshotFrame(slice));
+        void this.sendJobs(sessionId).catch(() => {
+        });
         try {
           void this.adapter.openSession(sessionId, this.opts.defaultModel).catch(() => {
           });
@@ -994,6 +1457,133 @@ var BridgeHub = class {
           return fail("bad-request", error instanceof Error ? error.message : "set failed");
         }
       }
+      case "feedback.list": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
+        if (denied) return denied;
+        const sessionId = req.args["sessionId"];
+        if (typeof sessionId !== "string") return fail("bad-request", "sessionId required");
+        return rpcSuccess(req.id, { items: await this.adapter.listFeedback(sessionId) });
+      }
+      case "feedback.put": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const sessionId = req.args["sessionId"];
+        const messageId = req.args["messageId"];
+        const rating = req.args["rating"];
+        if (typeof sessionId !== "string" || typeof messageId !== "string") {
+          return fail("bad-request", "sessionId and messageId required");
+        }
+        if (rating !== "positive" && rating !== "negative") {
+          return fail("bad-request", "rating must be positive or negative");
+        }
+        const rawNote = req.args["note"];
+        const rawCategory = req.args["category"];
+        const item = await this.adapter.putFeedback(
+          sessionId,
+          messageId,
+          rating,
+          typeof rawNote === "string" ? rawNote : void 0,
+          typeof rawCategory === "string" ? rawCategory : void 0
+        );
+        if (item === null) return fail("bad-request", "feedback rejected");
+        return rpcSuccess(req.id, { item });
+      }
+      case "feedback.delete": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const sessionId = req.args["sessionId"];
+        const messageId = req.args["messageId"];
+        const version = req.args["version"];
+        if (typeof sessionId !== "string" || typeof messageId !== "string" || typeof version !== "string") {
+          return fail("bad-request", "sessionId, messageId and version required");
+        }
+        const removed = await this.adapter.deleteFeedback(sessionId, messageId, version);
+        if (!removed) return fail("not-found", "feedback not found or version changed");
+        return rpcSuccess(req.id, { ok: true });
+      }
+      case "credentials.set": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const ref = req.args["ref"];
+        const value = req.args["value"];
+        if (typeof ref !== "string" || ref.length === 0 || ref.length > 200) {
+          return fail("bad-request", "ref required");
+        }
+        if (typeof value !== "string" || value.length === 0 || value.length > 8192) {
+          return fail("bad-request", "value required");
+        }
+        const ok = await this.adapter.setCredential(ref, value);
+        if (!ok) return fail("bad-request", "credential write rejected");
+        return rpcSuccess(req.id, { ok: true });
+      }
+      case "credentials.unset": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const ref = req.args["ref"];
+        if (typeof ref !== "string" || ref.length === 0 || ref.length > 200) {
+          return fail("bad-request", "ref required");
+        }
+        const ok = await this.adapter.unsetCredential(ref);
+        if (!ok) return fail("bad-request", "credential delete rejected");
+        return rpcSuccess(req.id, { ok: true });
+      }
+      case "settings.update": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled") ?? denyIf(this.opts.readOnly, "forbidden", "worker is read-only");
+        if (denied) return denied;
+        const ns = req.args["ns"];
+        const patch = req.args["patch"];
+        if (typeof ns !== "string" || ns.length === 0 || ns.length > 200) {
+          return fail("bad-request", "ns required");
+        }
+        if (typeof patch !== "object" || patch === null || Array.isArray(patch)) {
+          return fail("bad-request", "patch object required");
+        }
+        const rawRevision = req.args["expectedRevision"];
+        const expectedRevision = typeof rawRevision === "number" && Number.isInteger(rawRevision) ? rawRevision : void 0;
+        try {
+          const outcome = await this.adapter.updateSettings(
+            ns,
+            patch,
+            expectedRevision
+          );
+          return rpcSuccess(req.id, outcome);
+        } catch (error) {
+          return fail("bad-request", error instanceof Error ? error.message : "settings update failed");
+        }
+      }
+      case "settings.describe": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
+        if (denied) return denied;
+        return rpcSuccess(req.id, {
+          sections: await this.adapter.describeSettings(),
+          credentials: await this.adapter.listCredentials()
+        });
+      }
+      case "skills.list": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
+        if (denied) return denied;
+        const rawCwd = req.args["cwd"];
+        const cwd = typeof rawCwd === "string" && rawCwd.startsWith("/") ? rawCwd : void 0;
+        return rpcSuccess(req.id, { skills: await this.adapter.listSkills(cwd) });
+      }
+      case "sessions.search": {
+        const denied = denyIf(!this.capabilities.sessionsReadonly, "unavailable", "sessions read not enabled");
+        if (denied) return denied;
+        const query = req.args["query"];
+        if (typeof query !== "string" || query.trim().length === 0) {
+          return fail("bad-request", "query required");
+        }
+        const rawLimit = req.args["limit"];
+        const limit = typeof rawLimit === "number" && Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 50) : 20;
+        return rpcSuccess(req.id, { hits: await this.adapter.searchSessions(query.trim(), limit) });
+      }
+      case "jobs.list": {
+        const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
+        if (denied) return denied;
+        const sessionId = req.args["sessionId"];
+        if (typeof sessionId !== "string") return fail("bad-request", "sessionId required");
+        return rpcSuccess(req.id, { jobs: await this.adapter.listJobs(sessionId) });
+      }
       case "commands.list": {
         const denied = denyIf(!this.capabilities.turnControl, "unavailable", "turn control not enabled");
         if (denied) return denied;
@@ -1074,19 +1664,45 @@ var BridgeHub = class {
         const denied = denyIf(!this.capabilities.approvals, "unavailable", "approvals not enabled");
         if (denied) return denied;
         const requestId = req.args["requestId"];
-        const answer = req.args["answer"];
-        if (typeof requestId !== "string" || typeof answer !== "string") {
-          return fail("bad-request", "requestId and answer required");
+        if (typeof requestId !== "string") {
+          return fail("bad-request", "requestId required");
+        }
+        const answers = normalizeQuestionAnswers({
+          answer: req.args["answer"],
+          answers: req.args["answers"]
+        });
+        if (answers === null) {
+          return fail("bad-request", "answer or answers required");
         }
         const ask = this.pendingAsks.get(requestId);
         if (!ask || !("answer" in ask)) return fail("not-found", `no pending question ${requestId}`);
         this.pendingAsks.delete(requestId);
-        await ask.answer(answer);
+        const normalized = answers.length === 1 && answers[0].id === "" ? [{ ...answers[0], id: ask.questions?.[0]?.id ?? "" }] : answers;
+        await ask.answer(normalized);
         return rpcSuccess(req.id, { ok: true });
       }
       default:
         return fail("not-found", `unknown method ${key}`);
     }
+  }
+  /** 推送某会话的后台任务快照。 */
+  async sendJobs(sessionId) {
+    if (typeof this.adapter.listJobs !== "function") return;
+    const jobs = await this.adapter.listJobs(sessionId);
+    for (const c of this.conns.values()) {
+      if (c.authed && c.subscribed.has(sessionId)) {
+        this.sendTo(c, { kind: "jobs", sessionId, jobs });
+      }
+    }
+  }
+  /** 任务注册表变化：为所有已订阅连接刷新各自会话的任务快照。 */
+  async broadcastJobs() {
+    const sessions = /* @__PURE__ */ new Set();
+    for (const c of this.conns.values()) {
+      if (!c.authed) continue;
+      for (const sessionId of c.subscribed) sessions.add(sessionId);
+    }
+    for (const sessionId of sessions) await this.sendJobs(sessionId);
   }
   broadcastEvent(sessionId, event) {
     for (const c of this.conns.values()) {
@@ -1106,13 +1722,23 @@ var BridgeHub = class {
   }
   registerQuestion(ask) {
     if (this.connectedCount() === 0) {
-      void ask.answer("");
+      void ask.answer([]);
       return;
     }
     this.pendingAsks.set(ask.requestId, ask);
     this.broadcast({
       kind: "server-request",
-      request: { kind: "question", body: { requestId: ask.requestId, sessionId: ask.sessionId, question: ask.question, ...ask.options.length > 0 ? { options: ask.options } : {} } }
+      request: {
+        kind: "question",
+        body: {
+          requestId: ask.requestId,
+          sessionId: ask.sessionId,
+          question: ask.question,
+          ...ask.options.length > 0 ? { options: ask.options } : {},
+          // 完整题目：多选、计划评审、题干补充说明
+          ...Array.isArray(ask.questions) && ask.questions.length > 0 ? { questions: ask.questions } : {}
+        }
+      }
     });
   }
   broadcast(frame) {
@@ -1302,13 +1928,13 @@ function startDirectServer(ctx, opts) {
       ws.ping();
     }
   }, PING_INTERVAL_MS);
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     httpServer.once("error", reject);
     httpServer.listen(opts.port, opts.host, () => {
       const address = httpServer.address();
       const port = typeof address === "object" && address !== null ? address.port : opts.port;
       ctx.logger.info(`deepseek-harness-pocket bridge listening on ws://${opts.host}:${port}/mobile/ws`);
-      resolve2({
+      resolve3({
         port,
         async dispose() {
           clearInterval(pingTimer);
@@ -1322,7 +1948,21 @@ function startDirectServer(ctx, opts) {
 }
 
 // src/plugin/uplink.ts
+import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { resolve as resolve2 } from "node:path";
 import { WebSocket as WebSocket2 } from "ws";
+function readAccountToken(file) {
+  if (file === void 0 || file.length === 0) return null;
+  const path = resolve2(file.replace(/^~(?=\/|$)/, homedir3()));
+  if (!existsSync2(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync2(path, "utf8"));
+    return typeof parsed.token === "string" && parsed.token.length > 0 ? parsed.token : null;
+  } catch {
+    return null;
+  }
+}
 function startUplink(ctx, opts) {
   let disposed = false;
   let attempt = 0;
@@ -1344,6 +1984,7 @@ function startUplink(ctx, opts) {
     ws = new WebSocket2(opts.url);
     ws.on("open", () => {
       attempt = 0;
+      const accountToken = readAccountToken(opts.accountSessionFile);
       send({
         kind: "worker-register",
         hostKey: opts.hostKey,
@@ -1351,7 +1992,8 @@ function startUplink(ctx, opts) {
         name: opts.workerName,
         hostFingerprint: opts.fingerprint,
         dshVersion: opts.dshVersion,
-        pairingCode: opts.pairingCode
+        pairingCode: opts.pairingCode,
+        ...accountToken !== null ? { accountToken } : {}
       });
       pingTimer = setInterval(() => {
         send({ kind: "pong", nonce: Date.now() });
@@ -1363,7 +2005,9 @@ function startUplink(ctx, opts) {
       if (frame === null) return;
       switch (frame.kind) {
         case "register-ok":
-          ctx.logger.info(`deepseek-harness-pocket uplink registered as worker ${frame.workerId}`);
+          ctx.logger.info(
+            `deepseek-harness-pocket uplink registered as worker ${frame.workerId}` + (frame.boundUserId ? ` (account ${frame.boundUserId})` : "")
+          );
           break;
         case "register-rejected":
           ctx.logger.error(`deepseek-harness-pocket uplink rejected: ${frame.reason}`);
@@ -1446,6 +2090,11 @@ function apply(ctx, config) {
       adapter.registerQuestionAsker((ask) => hub.registerQuestion(ask));
     }
   }
+  if (hub.capabilities.turnControl) {
+    adapter.onJobsChanged(() => {
+      void hub.broadcastJobs();
+    });
+  }
   if (config.listen.enabled) {
     let disposeServer;
     void startDirectServer(ctx, {
@@ -1474,7 +2123,8 @@ function apply(ctx, config) {
       hub,
       pairingCode: state.pairingCode,
       reconnectMinMs: config.gateway.reconnectMinMs,
-      reconnectMaxMs: config.gateway.reconnectMaxMs
+      reconnectMaxMs: config.gateway.reconnectMaxMs,
+      accountSessionFile: config.gateway.accountSessionFile
     });
   }
   ctx.effect(() => () => {

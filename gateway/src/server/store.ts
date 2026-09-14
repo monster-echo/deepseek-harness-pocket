@@ -46,6 +46,8 @@ export interface Store {
   listPairings(userId: string): Promise<PairingRow[]>
   listPairingsByWorker(workerId: string): Promise<string[]>
   isPaired(userId: string, workerId: string): Promise<boolean>
+  /** 单条绑定记录（含 revoked_at）；账号自动绑定前查墓碑用 */
+  getPairing(userId: string, workerId: string): Promise<PairingRow | null>
 
   upsertDevice(d: { userId: string; deviceKey: string; platform: string; expoPushToken: string | null }): Promise<void>
   listPushTokens(userId: string): Promise<string[]>
@@ -136,6 +138,14 @@ export function createStore(databaseUrl: string): Store {
         [userId, workerId],
       )
       return rowCount === 1
+    },
+
+    async getPairing(userId, workerId) {
+      const { rows } = await pool.query<PairingRow>(
+        'select * from pairings where user_id = $1 and worker_id = $2 limit 1',
+        [userId, workerId],
+      )
+      return rows[0] ?? null
     },
 
     async upsertDevice(d) {

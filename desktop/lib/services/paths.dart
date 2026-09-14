@@ -16,6 +16,13 @@ class AppPaths {
 
   static String get settingsFile => p.join(pocketHome, 'desktop-settings.json');
 
+  /// 账号会话文件（登录后写入；bridge 插件 uplink 每次连接读取 token，
+  /// gateway 验签后自动绑定账号）。文件名与 bridge 插件默认值一致。
+  static String get accountSessionFile => p.join(pocketHome, 'account-session.json');
+
+  /// bridge 状态文件（hostKey / 配对 token / 指纹，dshc 生成）。
+  static String get bridgeStateFile => p.join(pocketHome, 'bridge-state.json');
+
   static String get workerLogFile => p.join(pocketHome, 'dshc.log');
 
   /// supervisor 运行态文件（dshc status 的文件版，供降级探测）。

@@ -28,7 +28,13 @@ export const pluginConfig = z.object({
     hostKey: z.string().default(''),
     reconnectMinMs: z.number().default(1000),
     reconnectMaxMs: z.number().default(30000),
-  }).default({ url: '', hostKey: '', reconnectMinMs: 1000, reconnectMaxMs: 30000 }),
+    /**
+     * 账号会话文件（桌面端登录后写入）。文件存在且含 token 时，
+     * 每次连接 gateway 都会读取并随 worker-register 上送（账号自动绑定，
+     * 同账号手机端免扫码）。留空关闭该路径。
+     */
+    accountSessionFile: z.string().default('~/.deepseek-harness-pocket/account-session.json'),
+  }).default({ url: '', hostKey: '', reconnectMinMs: 1000, reconnectMaxMs: 30000, accountSessionFile: '~/.deepseek-harness-pocket/account-session.json' }),
   /** 能力面：按里程碑声明，handshake 下发给 app */
   caps: z.union(['m1', 'm2', 'm3']).default('m2'),
   /** 状态文件路径（hostKey/pairingToken） */
@@ -53,7 +59,7 @@ export const pluginConfig = z.object({
 /** 与 schema 对应的手写类型（schemastery 无 infer 辅助）。 */
 export interface PluginConfig {
   listen: { enabled: boolean; host: string; port: number }
-  gateway: { url: string; hostKey: string; reconnectMinMs: number; reconnectMaxMs: number }
+  gateway: { url: string; hostKey: string; reconnectMinMs: number; reconnectMaxMs: number; accountSessionFile: string }
   caps: 'm1' | 'm2' | 'm3'
   stateFile: string
   name: string

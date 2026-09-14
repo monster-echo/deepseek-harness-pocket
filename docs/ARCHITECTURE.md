@@ -11,17 +11,22 @@
 Gateway (gateway/, Next.js + 自定义 server 承载 WS, 自有 PG)
   ├─ 验票：auth.zhongbei.tech 内部校验端点
   ├─ Worker 注册/presence、配对绑定（worker↔user）
+  │   └─ 账号自动绑定：worker-register 带 accountToken（验签通过即绑）；
+  │       手机端解绑留墓碑不复活；POST /api/v1/workers/bind 按 hostKey 主动绑
   ├─ 帧转发隧道（不理解 /mobile 会话协议）
   └─ 通知 → Expo Push；用量记录（计费预留）
          ▲ outbound wss uplink（断线重连）
 电脑 ×N = Worker (packages/bridge/)
   ├─ dshc CLI：install(开机自启)/start(拉起守护 dsh)/stop/status/token/qr（--json 供 GUI）
-  ├─ 桌面 GUI（desktop/，Flutter macOS/Windows）：
+  ├─ 桌面 GUI（desktop/，Flutter macOS/Windows，双窗口）：
+  │    主窗口 = harness 网页壳（webview）；控制台 = desktop_multi_window 独立引擎
+  │    （shadcn_ui：状态/账号/配对/版本/日志；托盘跨窗口导航 + 自启 checkbox）；
+  │    账号登录（与手机同账号体系）写 account-session.json → uplink 自动绑定，免扫码；
   │    spawn 内置 node sidecar → dshc；托管 dsh 多版本（runtimes/dsh/<版本>）；
   │    开机自启（登录项）+ 托盘常驻 + auto_updater（GitHub Releases appcast）
   └─ cordis 插件（dsh 内运行）：/mobile 协议服务端
        ├─ 直连模式 node:http :3780（或 shareWebServer 挂 ctx.webServer）
-       ├─ uplink 模式反连 gateway
+       ├─ uplink 模式反连 gateway（连接时读 account-session.json 上送 accountToken）
        └─ 白名单方法 mobile/v1 → ctx.sessions/agents/interaction
             （dsh 适配收敛在 adapter-dsh.ts）
 ```

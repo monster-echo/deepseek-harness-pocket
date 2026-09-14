@@ -1,8 +1,12 @@
-/// 托盘常驻：状态行 + 菜单（打开/管理面板/启停/检查更新/开机启动/退出）。
-/// 托盘是全应用唯一的管理入口（窗口本体 = 纯 harness 控制台）。
+/// 托盘常驻（主窗口引擎）：状态行 + 菜单。
 ///
-/// 菜单与 tooltip 随 worker 运行态刷新（只在翻转时重建，不随轮询 tick 抖动）；
-/// 退出 = 停止 worker 再退出（固定行为）；关窗只是收托盘（app.dart）。
+/// 双窗口：托盘是全应用唯一管理入口。
+/// - 「打开控制台」/各管理面板 → 独立控制台窗口（services/console_window.dart）；
+/// - 「打开 Harness 主窗口」 → 主窗口（纯 harness 网页壳）。
+///
+/// 菜单与 tooltip 随 worker 运行态刷新；「开机启动」为 checkbox 菜单项，
+/// 每次弹出菜单前强制按当前自启状态重建，保证勾选态始终新鲜。
+/// 退出 = 停止 worker 再退出（固定行为）；关窗只是收托盘。
 library;
 
 import 'dart:io' show Platform;
@@ -16,11 +20,6 @@ import '../models.dart';
 import '../providers.dart';
 import 'worker.dart';
 
-/// 管理面板菜单项（key 与 app_nav 面板注册表对应）。
-const _panelMenuKeys = ['status', 'pairing', 'versions', 'logs'];
-
-const _panelMenuLabels = {'status': '状态', 'pairing': '配对', 'versions': 'dsh 版本', 'logs': '日志'};
-
 typedef WorkerAction = Future<void> Function(WorkerService svc, AppSettings settings);
 
 class TrayController with TrayListener {
@@ -28,6 +27,7 @@ class TrayController with TrayListener {
 
   final ProviderContainer _container;
   bool _inited = false;
+  bool _menuBuilding = false;
 
   Future<void> init() async {
     if (_inited) return;
@@ -40,7 +40,7 @@ class TrayController with TrayListener {
     }
     await _refreshMenu();
     trayManager.addListener(this);
-    // 运行态翻转 / 自启开关变化 → 重建菜单（workerRunningProvider 值不变时不通知）
+    // 运行态翻转 / 自启开关变化 → 重建菜单（值不变时不通知，不随轮询 tick 抖动）
     _container.listen<AsyncValue<WorkerStatus>>(
       workerStatusProvider,
       (_, _) => _refreshMenu(),
@@ -51,44 +51,63 @@ class TrayController with TrayListener {
     );
   }
 
-  Future<void> _refreshMenu() async {
+  /// 组装菜单（读当前容器状态；checkbox 直接反映自启开关）。
+  Menu _buildMenu() {
     final running = _container.read(workerStatusProvider).value?.running ?? false;
     final autostart = _container.read(autostartEnabledProvider).value ?? false;
-    await trayManager.setToolTip('DSH Pocket Worker — ${running ? '运行中' : '已停止'}');
-    await trayManager.setContextMenu(
-      Menu(
-        items: [
-          MenuItem(key: 'worker-state', label: 'Worker：${running ? '运行中' : '已停止'}', disabled: true),
-          MenuItem.separator(),
-          MenuItem(key: 'open', label: '打开控制台'),
-          for (final key in _panelMenuKeys) MenuItem(key: key, label: _panelMenuLabels[key]),
-          MenuItem.separator(),
-          MenuItem(key: 'start', label: '启动 Worker', disabled: running),
-          MenuItem(key: 'stop', label: '停止 Worker', disabled: !running),
-          MenuItem.separator(),
-          MenuItem(key: 'update', label: '检查更新'),
-          MenuItem.checkbox(key: 'autostart', label: '开机启动', checked: autostart),
-          MenuItem.separator(),
-          MenuItem(key: 'quit', label: '退出'),
-        ],
-      ),
+    return Menu(
+      items: [
+        MenuItem(key: 'worker-state', label: 'Worker：${running ? '运行中' : '已停止'}', disabled: true),
+        MenuItem.separator(),
+        MenuItem(key: 'open-console', label: '打开控制台'),
+        for (final key in kPanelKeys) MenuItem(key: 'panel:$key', label: kPanelLabels[key]!),
+        MenuItem(key: 'open-main', label: '打开 Harness 主窗口'),
+        MenuItem.separator(),
+        MenuItem(key: 'start', label: '启动 Worker', disabled: running),
+        MenuItem(key: 'stop', label: '停止 Worker', disabled: !running),
+        MenuItem.separator(),
+        MenuItem(key: 'update', label: '检查更新'),
+        // checkbox：系统原生勾选态；右键弹出前 _refreshMenu 保证与实际自启状态一致
+        MenuItem.checkbox(key: 'autostart', label: '开机启动', checked: autostart),
+        MenuItem.separator(),
+        MenuItem(key: 'quit', label: '退出'),
+      ],
     );
+  }
+
+  Future<void> _refreshMenu() async {
+    if (_menuBuilding) return;
+    _menuBuilding = true;
+    try {
+      final running = _container.read(workerStatusProvider).value?.running ?? false;
+      await trayManager.setToolTip('DSH Pocket Worker — ${running ? '运行中' : '已停止'}');
+      await trayManager.setContextMenu(_buildMenu());
+    } catch (_) {
+      // 无会话环境等场景托盘不可用，静默
+    } finally {
+      _menuBuilding = false;
+    }
   }
 
   @override
   void onTrayIconMouseDown() {
-    windowManager.show();
+    // 左键 = 控制台（管理是托盘的本职；主窗口从菜单或使用习惯进入）
+    _container.read(consoleWindowServiceProvider).open(panel: 'status');
   }
 
   @override
-  void onTrayIconRightMouseDown() {
+  void onTrayIconRightMouseDown() async {
+    // 弹出前强制刷新：checkbox（开机启动）等状态永远反映真实值
+    await _refreshMenu();
     trayManager.popUpContextMenu();
   }
 
   @override
   void onTrayMenuItemClick(MenuItem menuItem) async {
     switch (menuItem.key) {
-      case 'open':
+      case 'open-console':
+        await _container.read(consoleWindowServiceProvider).open(panel: 'status');
+      case 'open-main':
         await windowManager.show();
         await windowManager.focus();
       case 'start':
@@ -109,11 +128,11 @@ class TrayController with TrayListener {
       case 'quit':
         await quitApp();
       default:
-        // 管理面板项（status/pairing/versions/logs）：显示窗口并推入对应页
-        if (_panelMenuKeys.contains(menuItem.key)) {
-          await windowManager.show();
-          await windowManager.focus();
-          AppNav.pushPanel(menuItem.key!);
+        // 管理面板项：panel:<key> → 控制台窗口对应面板
+        final key = menuItem.key;
+        if (key != null && key.startsWith('panel:')) {
+          final panel = normalizePanel(key.substring('panel:'.length));
+          await _container.read(consoleWindowServiceProvider).open(panel: panel);
         }
     }
   }
@@ -122,7 +141,7 @@ class TrayController with TrayListener {
     try {
       await action(_container.read(workerServiceProvider), _container.read(settingsProvider));
     } catch (_) {
-      // 托盘动作静默失败（面板里有可见的错误展示）
+      // 托盘动作静默失败（控制台里有可见的错误展示）
     } finally {
       _container.invalidate(workerStatusProvider);
       _container.invalidate(pairingProvider);
@@ -130,6 +149,7 @@ class TrayController with TrayListener {
   }
 
   /// 真正退出：停止 worker（固定行为）后退出。
+  /// windowManager.destroy = NSApp.terminate，控制台引擎随进程一起结束。
   Future<void> quitApp() async {
     try {
       await _container.read(workerServiceProvider).stop();

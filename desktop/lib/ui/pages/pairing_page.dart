@@ -1,4 +1,5 @@
-/// 配对页：二维码 + 配对码 + rotate（原状态页配对卡片独立成页，托盘菜单入口）。
+/// 配对页：二维码 + 配对码 + rotate（兜底路径，用于把电脑共享给其他账号）。
+/// 同账号用户直接登录即可（账号页），无需使用本页。
 library;
 
 import 'dart:convert';
@@ -6,9 +7,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
-import '../providers.dart';
-import 'widgets.dart';
+import '../../providers.dart';
+import '../widgets.dart';
 
 class PairingPage extends ConsumerStatefulWidget {
   const PairingPage({super.key});
@@ -25,9 +27,9 @@ class _PairingPageState extends ConsumerState<PairingPage> {
     setState(() => _busy = true);
     try {
       await action();
-      if (mounted) showActionFeedback(context, ok: okMsg);
+      if (mounted) showFeedback(context, ok: okMsg);
     } catch (e) {
-      if (mounted) showActionFeedback(context, error: e);
+      if (mounted) showFeedback(context, error: e);
     } finally {
       if (mounted) setState(() => _busy = false);
       ref.invalidate(workerStatusProvider);
@@ -37,22 +39,21 @@ class _PairingPageState extends ConsumerState<PairingPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final theme = ShadTheme.of(context);
     final pairingAsync = ref.watch(pairingProvider);
 
     return ListView(
-      padding: const EdgeInsets.only(bottom: 16),
       children: [
         SectionCard(
-          title: '配对',
-          trailing: TextButton.icon(
-            onPressed: _busy
-                ? null
-                : () => _run('配对码已更新', () async {
-                      await ref.read(workerServiceProvider).rotateToken();
-                    }),
-            icon: const Icon(Icons.key_outlined, size: 16),
-            label: const Text('换配对码'),
+          title: '扫码配对（共享给其他账号）',
+          trailing: ShadButton.ghost(
+            height: 26,
+            enabled: !_busy,
+            onPressed: () => _run('配对码已更新', () async {
+              await ref.read(workerServiceProvider).rotateToken();
+            }),
+            leading: const Icon(Icons.key_outlined, size: 15),
+            child: const Text('换配对码', style: TextStyle(fontSize: 12)),
           ),
           child: pairingAsync.when(
             data: (payload) => payload == null
@@ -78,13 +79,10 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Text('配对码  ', style: theme.textTheme.bodySmall),
+                          Text('配对码  ', style: theme.textTheme.muted.copyWith(fontSize: 12)),
                           SelectableText(
                             payload.code,
-                            style: theme.textTheme.headlineSmall?.copyWith(
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 4,
-                            ),
+                            style: theme.textTheme.h3.copyWith(letterSpacing: 4),
                           ),
                         ],
                       ),
@@ -92,12 +90,14 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                       InfoRow('主机指纹', payload.fingerprint, copyable: true),
                       const SizedBox(height: 4),
                       Text(
-                        '手机 App → 扫码，或输入配对码',
-                        style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+                        '手机 App → 扫码，或输入配对码（同账号无需此步）',
+                        style: theme.textTheme.muted.copyWith(fontSize: 11),
                       ),
                     ],
                   ),
-            loading: () => const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())),
+            loading: () => const Center(
+              child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()),
+            ),
             error: (e, _) => Text('配对信息读取失败：$e'),
           ),
         ),

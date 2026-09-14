@@ -51,6 +51,13 @@ export function apply(ctx: Context, config: PluginConfig): void {
     }
   }
 
+  // 后台任务变化 → 广播（未装载 jobs 插件时为 no-op 退订）
+  if (hub.capabilities.turnControl) {
+    adapter.onJobsChanged(() => {
+      void hub.broadcastJobs()
+    })
+  }
+
   if (config.listen.enabled) {
     let disposeServer: (() => Promise<void>) | undefined
     void startDirectServer(ctx, {
@@ -85,6 +92,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
       pairingCode: state.pairingCode,
       reconnectMinMs: config.gateway.reconnectMinMs,
       reconnectMaxMs: config.gateway.reconnectMaxMs,
+      accountSessionFile: config.gateway.accountSessionFile,
     })
   }
   ctx.effect(() => () => {

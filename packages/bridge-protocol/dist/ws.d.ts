@@ -8,6 +8,7 @@ import type { WireRequest, WireResponse } from './rpc.js';
 import type { ServerRequest } from './server-requests.js';
 import type { MobileEvent, SessionSnapshot } from './events.js';
 import type { PreviewFrame } from './preview.js';
+import type { JobSnapshot } from './jobs.js';
 export type PhoneToWorkerFrame = {
     readonly kind: 'auth';
     readonly token: string;
@@ -39,6 +40,10 @@ export type WorkerToPhoneFrame = {
 } | {
     readonly kind: 'server-request';
     readonly request: ServerRequest;
+} | {
+    readonly kind: 'jobs';
+    readonly sessionId: string;
+    readonly jobs: readonly JobSnapshot[];
 } | {
     readonly kind: 'ping';
     readonly nonce: number;

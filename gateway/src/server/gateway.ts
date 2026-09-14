@@ -163,7 +163,16 @@ export class Gateway {
         conn.dshVersion = frame.dshVersion
         conn.pairingCode = frame.pairingCode
         this.workerByHostKey.set(frame.hostKey, id)
-        this.sendToWorkerConn(conn, { kind: 'register-ok', workerId })
+        // 账号自动绑定：Worker 携带有效 session token 时把 Worker 绑到该账号，
+        // 同账号手机端无需扫码配对。用户曾在手机端解绑（revoked 墓碑存在）时不复活。
+        let boundUserId: string | null = null
+        if (typeof frame.accountToken === 'string' && frame.accountToken.length > 0) {
+          const user = await this.verify(frame.accountToken)
+          if (user !== null && (await this.autoBindOwner(user.userId, workerId, frame.name))) {
+            boundUserId = user.userId
+          }
+        }
+        this.sendToWorkerConn(conn, { kind: 'register-ok', workerId, boundUserId })
         await this.store.recordUsage({ userId: null, workerId, kind: 'worker-online' })
         await this.broadcastPresence()
         break
@@ -514,6 +523,45 @@ export class Gateway {
       }
     }
     return { ok: false, reason: '配对码无效或 Worker 不在线' }
+  }
+
+  /**
+   * 账号登录绑定（REST）：按 hostKey 找 Worker（可离线，注册过即可），
+   * 把它绑到当前登录账号。桌面端登录成功/重新绑定后主动调用，
+   * 与 worker-register 里的 accountToken 被动路径共用此逻辑。
+   */
+  async bindByHostKey(userId: string, hostKey: string): Promise<PairingResult> {
+    const row = await this.store.getWorkerByHostKey(hostKey)
+    if (row === null) {
+      return { ok: false, reason: 'Worker 不存在（请先在电脑上启动一次 Worker）' }
+    }
+    // 主动绑定：用户在桌面端点了「重新绑定」，清墓碑恢复
+    const bound = await this.autoBindOwner(userId, row.id, row.name, { force: true })
+    if (!bound) {
+      return { ok: false, reason: '绑定失败' }
+    }
+    return { ok: true, workerId: row.id, name: row.name }
+  }
+
+  /**
+   * 账号自动绑定核心：把 (userId, workerId) 写为有效绑定。
+   * 返回是否绑定成功；存在 revoked 墓碑（用户主动解绑过）且非 force 时拒绝复活，
+   * force=true（桌面端主动重绑）清除墓碑。
+   */
+  private async autoBindOwner(
+    userId: string,
+    workerId: string,
+    name: string | null,
+    options: { force?: boolean } = {},
+  ): Promise<boolean> {
+    const existing = await this.store.getPairing(userId, workerId)
+    const active = existing !== null && existing.revoked_at === null
+    if (active) return true
+    if (existing !== null && !options.force) return false
+    await this.store.pairWorker(userId, workerId, name)
+    await this.store.recordUsage({ userId, workerId, kind: 'account-bind' })
+    await this.broadcastPresence()
+    return true
   }
 
   private async challengeAndPair(

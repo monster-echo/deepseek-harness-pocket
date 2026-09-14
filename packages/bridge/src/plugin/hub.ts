@@ -13,11 +13,12 @@ import {
   PROTOCOL_VERSION,
   parsePhoneFrame,
   type BridgeCapabilities,
+  type FeedbackCategory,
   type DshSessionEvent,
   type WireRequest,
   type WireResponse,
 } from '@deepseek-harness-pocket/bridge-protocol'
-import { makeRpcId, methodKey, parseWireRequest, rpcFailure, rpcSuccess } from '@deepseek-harness-pocket/bridge-protocol'
+import { makeRpcId, methodKey, normalizeQuestionAnswers, parseWireRequest, rpcFailure, rpcSuccess } from '@deepseek-harness-pocket/bridge-protocol'
 import type { ApprovalAsk, DshAdapter, QuestionAsk } from './adapter-dsh.js'
 import type { DirEntry } from './adapter-dsh.js'
 import { isSafePreviewPath, isUnderRoot, mimeOfPath } from './preview.js'
@@ -242,6 +243,8 @@ export class BridgeHub {
         // 快照先广播：历史渲染只依赖事件流，agent 挂载（秒级）不阻塞打开。
         // 先订阅后广播保证快照之后的事件按序跟随，不产生 seq 空洞。
         this.broadcast(snapshotFrame(slice))
+        // 后台任务基线：任务不在会话日志里，随打开补发一次
+        void this.sendJobs(sessionId).catch(() => {})
         // 挂 live agent（无 agent 时）使命令目录/当前模型可查询；后台执行，失败也不影响已打开的会话
         try {
           void this.adapter.openSession(sessionId, this.opts.defaultModel).catch(() => {
@@ -415,6 +418,158 @@ export class BridgeHub {
         }
       }
 
+      case 'feedback.list': {
+        const denied = denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled')
+        if (denied) return denied
+        const sessionId = req.args['sessionId']
+        if (typeof sessionId !== 'string') return fail('bad-request', 'sessionId required')
+        return rpcSuccess(req.id, { items: await this.adapter.listFeedback(sessionId) })
+      }
+
+      case 'feedback.put': {
+        const denied =
+          denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const sessionId = req.args['sessionId']
+        const messageId = req.args['messageId']
+        const rating = req.args['rating']
+        if (typeof sessionId !== 'string' || typeof messageId !== 'string') {
+          return fail('bad-request', 'sessionId and messageId required')
+        }
+        if (rating !== 'positive' && rating !== 'negative') {
+          return fail('bad-request', 'rating must be positive or negative')
+        }
+        const rawNote = req.args['note']
+        const rawCategory = req.args['category']
+        const item = await this.adapter.putFeedback(
+          sessionId,
+          messageId,
+          rating,
+          typeof rawNote === 'string' ? rawNote : undefined,
+          typeof rawCategory === 'string' ? rawCategory as FeedbackCategory : undefined,
+        )
+        if (item === null) return fail('bad-request', 'feedback rejected')
+        return rpcSuccess(req.id, { item })
+      }
+
+      case 'feedback.delete': {
+        const denied =
+          denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const sessionId = req.args['sessionId']
+        const messageId = req.args['messageId']
+        const version = req.args['version']
+        if (typeof sessionId !== 'string' || typeof messageId !== 'string' || typeof version !== 'string') {
+          return fail('bad-request', 'sessionId, messageId and version required')
+        }
+        const removed = await this.adapter.deleteFeedback(sessionId, messageId, version)
+        if (!removed) return fail('not-found', 'feedback not found or version changed')
+        return rpcSuccess(req.id, { ok: true })
+      }
+
+      case 'credentials.set': {
+        const denied =
+          denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const ref = req.args['ref']
+        const value = req.args['value']
+        if (typeof ref !== 'string' || ref.length === 0 || ref.length > 200) {
+          return fail('bad-request', 'ref required')
+        }
+        if (typeof value !== 'string' || value.length === 0 || value.length > 8192) {
+          return fail('bad-request', 'value required')
+        }
+        const ok = await this.adapter.setCredential(ref, value)
+        if (!ok) return fail('bad-request', 'credential write rejected')
+        return rpcSuccess(req.id, { ok: true })
+      }
+
+      case 'credentials.unset': {
+        const denied =
+          denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const ref = req.args['ref']
+        if (typeof ref !== 'string' || ref.length === 0 || ref.length > 200) {
+          return fail('bad-request', 'ref required')
+        }
+        const ok = await this.adapter.unsetCredential(ref)
+        if (!ok) return fail('bad-request', 'credential delete rejected')
+        return rpcSuccess(req.id, { ok: true })
+      }
+
+      case 'settings.update': {
+        const denied =
+          denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled') ??
+          denyIf(this.opts.readOnly, 'forbidden', 'worker is read-only')
+        if (denied) return denied
+        const ns = req.args['ns']
+        const patch = req.args['patch']
+        if (typeof ns !== 'string' || ns.length === 0 || ns.length > 200) {
+          return fail('bad-request', 'ns required')
+        }
+        if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+          return fail('bad-request', 'patch object required')
+        }
+        const rawRevision = req.args['expectedRevision']
+        const expectedRevision = typeof rawRevision === 'number' && Number.isInteger(rawRevision)
+          ? rawRevision
+          : undefined
+        try {
+          const outcome = await this.adapter.updateSettings(
+            ns,
+            patch as Record<string, unknown>,
+            expectedRevision,
+          )
+          return rpcSuccess(req.id, outcome)
+        } catch (error) {
+          return fail('bad-request', error instanceof Error ? error.message : 'settings update failed')
+        }
+      }
+
+      case 'settings.describe': {
+        const denied = denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled')
+        if (denied) return denied
+        return rpcSuccess(req.id, {
+          sections: await this.adapter.describeSettings(),
+          credentials: await this.adapter.listCredentials(),
+        })
+      }
+
+      case 'skills.list': {
+        const denied = denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled')
+        if (denied) return denied
+        // cwd 由客户端带上（会话工作区），决定技能分层解析；缺省用全局目录
+        const rawCwd = req.args['cwd']
+        const cwd = typeof rawCwd === 'string' && rawCwd.startsWith('/') ? rawCwd : undefined
+        return rpcSuccess(req.id, { skills: await this.adapter.listSkills(cwd) })
+      }
+
+      case 'sessions.search': {
+        const denied = denyIf(!this.capabilities.sessionsReadonly, 'unavailable', 'sessions read not enabled')
+        if (denied) return denied
+        const query = req.args['query']
+        if (typeof query !== 'string' || query.trim().length === 0) {
+          return fail('bad-request', 'query required')
+        }
+        const rawLimit = req.args['limit']
+        const limit = typeof rawLimit === 'number' && Number.isInteger(rawLimit) && rawLimit > 0
+          ? Math.min(rawLimit, 50)
+          : 20
+        return rpcSuccess(req.id, { hits: await this.adapter.searchSessions(query.trim(), limit) })
+      }
+
+      case 'jobs.list': {
+        const denied = denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled')
+        if (denied) return denied
+        const sessionId = req.args['sessionId']
+        if (typeof sessionId !== 'string') return fail('bad-request', 'sessionId required')
+        return rpcSuccess(req.id, { jobs: await this.adapter.listJobs(sessionId) })
+      }
+
       case 'commands.list': {
         const denied = denyIf(!this.capabilities.turnControl, 'unavailable', 'turn control not enabled')
         if (denied) return denied
@@ -508,20 +663,53 @@ export class BridgeHub {
         const denied = denyIf(!this.capabilities.approvals, 'unavailable', 'approvals not enabled')
         if (denied) return denied
         const requestId = req.args['requestId']
-        const answer = req.args['answer']
-        if (typeof requestId !== 'string' || typeof answer !== 'string') {
-          return fail('bad-request', 'requestId and answer required')
+        if (typeof requestId !== 'string') {
+          return fail('bad-request', 'requestId required')
+        }
+        // answers（结构化，多选/计划评审）优先；answer（旧版自由文本）兼容
+        const answers = normalizeQuestionAnswers({
+          answer: req.args['answer'],
+          answers: req.args['answers'],
+        })
+        if (answers === null) {
+          return fail('bad-request', 'answer or answers required')
         }
         const ask = this.pendingAsks.get(requestId)
         if (!ask || !('answer' in ask)) return fail('not-found', `no pending question ${requestId}`)
         this.pendingAsks.delete(requestId)
-        await ask.answer(answer)
+        // 旧字段未带 id：回填首题 id，避免答案对不上题
+        const normalized = answers.length === 1 && answers[0]!.id === ''
+          ? [{ ...answers[0]!, id: ask.questions?.[0]?.id ?? '' }]
+          : answers
+        await ask.answer(normalized)
         return rpcSuccess(req.id, { ok: true })
       }
 
       default:
         return fail('not-found', `unknown method ${key}`)
     }
+  }
+
+  /** 推送某会话的后台任务快照。 */
+  async sendJobs(sessionId: string): Promise<void> {
+    // 旧适配器/测试替身可能没有实现 jobs：静默跳过
+    if (typeof this.adapter.listJobs !== 'function') return
+    const jobs = await this.adapter.listJobs(sessionId)
+    for (const c of this.conns.values()) {
+      if (c.authed && c.subscribed.has(sessionId)) {
+        this.sendTo(c, { kind: 'jobs', sessionId, jobs })
+      }
+    }
+  }
+
+  /** 任务注册表变化：为所有已订阅连接刷新各自会话的任务快照。 */
+  async broadcastJobs(): Promise<void> {
+    const sessions = new Set<string>()
+    for (const c of this.conns.values()) {
+      if (!c.authed) continue
+      for (const sessionId of c.subscribed) sessions.add(sessionId)
+    }
+    for (const sessionId of sessions) await this.sendJobs(sessionId)
   }
 
   broadcastEvent(sessionId: string, event: DshSessionEvent): void {
@@ -544,13 +732,24 @@ export class BridgeHub {
 
   registerQuestion(ask: QuestionAsk): void {
     if (this.connectedCount() === 0) {
-      void ask.answer('')
+      // 无手机在线：视为跳过（空答案），不阻塞 turn
+      void ask.answer([])
       return
     }
     this.pendingAsks.set(ask.requestId, ask)
     this.broadcast({
       kind: 'server-request',
-      request: { kind: 'question', body: { requestId: ask.requestId, sessionId: ask.sessionId, question: ask.question, ...(ask.options.length > 0 ? { options: ask.options } : {}) } },
+      request: {
+        kind: 'question',
+        body: {
+          requestId: ask.requestId,
+          sessionId: ask.sessionId,
+          question: ask.question,
+          ...(ask.options.length > 0 ? { options: ask.options } : {}),
+          // 完整题目：多选、计划评审、题干补充说明
+          ...(Array.isArray(ask.questions) && ask.questions.length > 0 ? { questions: ask.questions } : {}),
+        },
+      },
     })
   }
 

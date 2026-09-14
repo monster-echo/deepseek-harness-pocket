@@ -3,6 +3,7 @@
  *
  * POST   /api/v1/pairing/bind      { qr?: {payload}, code?, name? }
  * GET    /api/v1/workers           我的 Worker 列表（含在线状态）
+ * POST   /api/v1/workers/bind      { hostKey } 账号登录绑定（桌面端，免扫码）
  * DELETE /api/v1/workers?workerId= 解绑
  * POST   /api/v1/devices/push-token { deviceKey, platform, expoPushToken }
  * GET    /api/v1/health
@@ -93,6 +94,29 @@ export function createApiRouter(deps: ApiDeps): (req: IncomingMessage, res: Serv
         return true
       }
       json(res, 200, { workers: await deps.gateway.listWorkers(user.userId) })
+      return true
+    }
+
+    if (url === '/api/v1/workers/bind' && req.method === 'POST') {
+      // 账号登录绑定：桌面端登录后按 hostKey 主动绑定（无需扫码/配对码）
+      const user = await authUser(req)
+      if (user === null) {
+        json(res, 401, { error: 'unauthorized' })
+        return true
+      }
+      let body: { hostKey?: string }
+      try {
+        body = (await readBody(req)) as typeof body
+      } catch {
+        json(res, 400, { error: 'bad request' })
+        return true
+      }
+      if (typeof body.hostKey !== 'string' || !body.hostKey.startsWith('hk_')) {
+        json(res, 400, { error: 'hostKey required' })
+        return true
+      }
+      const result = await deps.gateway.bindByHostKey(user.userId, body.hostKey)
+      json(res, result.ok ? 200 : 422, result)
       return true
     }
 

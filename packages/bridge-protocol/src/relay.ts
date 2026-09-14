@@ -18,6 +18,12 @@ export interface WorkerRegisterFrame {
   readonly dshVersion: string | null
   /** 当前 6 位配对码（手动绑定路径：gateway 按码找 worker） */
   readonly pairingCode: string
+  /**
+   * Worker 持有的账号 session token（可选；桌面端登录后写入本机会话文件，
+   * 插件每次连接时读取）。gateway 验签通过后把该 Worker 自动绑定到对应账号，
+   * 同账号手机端无需扫码配对。
+   */
+  readonly accountToken?: string
 }
 
 export interface PairingAnswerFrame {
@@ -44,7 +50,12 @@ export type WorkerToGatewayFrame =
 // ---------- Gateway → Worker ----------
 
 export type GatewayToWorkerFrame =
-  | { readonly kind: 'register-ok'; readonly workerId: string }
+  | {
+      readonly kind: 'register-ok'
+      readonly workerId: string
+      /** 本次注册经 accountToken 自动绑定的账号（null = 未携带/验签失败/已解绑） */
+      readonly boundUserId?: string | null
+    }
   | { readonly kind: 'register-rejected'; readonly reason: string }
   | { readonly kind: 'ping'; readonly nonce: number }
   /** 来自手机的内层 /mobile 帧（文本 JSON） */
@@ -174,7 +185,15 @@ export function parseGatewayToWorkerFrame(value: unknown): GatewayToWorkerFrame 
   if (!v || typeof v.kind !== 'string') return null
   switch (v.kind) {
     case 'register-ok':
-      return typeof v.workerId === 'string' ? { kind: 'register-ok', workerId: v.workerId } : null
+      return typeof v.workerId === 'string'
+        ? {
+            kind: 'register-ok',
+            workerId: v.workerId,
+            ...(typeof v.boundUserId === 'string' || v.boundUserId === null
+              ? { boundUserId: v.boundUserId as string | null }
+              : {}),
+          }
+        : null
     case 'register-rejected':
       return typeof v.reason === 'string' ? { kind: 'register-rejected', reason: v.reason } : null
     case 'ping':

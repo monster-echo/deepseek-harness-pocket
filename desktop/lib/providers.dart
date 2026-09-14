@@ -1,4 +1,4 @@
-/// Riverpod 装配：settings 持久化 + worker 状态轮询 + 版本列表。
+/// Riverpod 装配：settings 持久化 + worker 状态轮询 + 版本列表 + 账号会话。
 library;
 
 import 'dart:async';
@@ -9,7 +9,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'models.dart';
+import 'services/account.dart';
 import 'services/autostart.dart';
+import 'services/console_window.dart';
 import 'services/paths.dart';
 import 'services/runtime.dart';
 import 'services/updater.dart';
@@ -55,9 +57,11 @@ final workerServiceProvider = Provider<WorkerService>((ref) => WorkerService());
 final runtimeServiceProvider = Provider<DshRuntimeService>((ref) => DshRuntimeService());
 final autostartServiceProvider = Provider<AutostartService>((ref) => AutostartService());
 final updaterServiceProvider = Provider<UpdaterService>((ref) => UpdaterService());
+final accountServiceProvider =
+    Provider<AccountService>((ref) => AccountService(() => ref.read(settingsProvider)));
+final consoleWindowServiceProvider = Provider<ConsoleWindowService>((ref) => ConsoleWindowService());
 
-/// sidecar 就绪状态（缺失时 UI 顶部横幅提示）；
-/// 跟随状态轮询复查，应用文件恢复后横幅自行消失。
+/// sidecar 就绪状态（缺失时控制台顶部提示；主窗口引导面亦有入口）。
 final sidecarReadyProvider = Provider<bool>((ref) {
   ref.watch(workerStatusProvider);
   return AppPaths.sidecarReady;
@@ -77,7 +81,7 @@ final workerStatusProvider = StreamProvider<WorkerStatus>((ref) async* {
   }
 });
 
-// ---------- 配对 ----------
+// ---------- 配对（同账号共享的兜底路径） ----------
 
 /// 运行态布尔派生：tick 值相同（identical）不通知下游，
 /// 配对信息只在 启动/停止 翻转时重取，二维码不再每 2 秒闪刷。
@@ -94,6 +98,23 @@ final pairingProvider = FutureProvider<PairingPayload?>((ref) async {
     return await svc.pairing(s);
   } catch (_) {
     return null;
+  }
+});
+
+// ---------- 账号 ----------
+
+/// 账号快照（登录态 + 本机绑定态）；登录/登出/绑定后 invalidate。
+/// 未登录时 data 为 null。
+final accountSnapshotProvider = FutureProvider<AccountSnapshot?>((ref) async {
+  final svc = ref.watch(accountServiceProvider);
+  if (svc.readSession() == null) return null;
+  try {
+    return await svc.snapshot();
+  } on AccountException {
+    // 已登录但查询失败（网络等）：退回仅本地会话的快照
+    final session = svc.readSession();
+    if (session == null) return null;
+    return AccountSnapshot(session: session, bound: false, workerKnown: false);
   }
 });
 

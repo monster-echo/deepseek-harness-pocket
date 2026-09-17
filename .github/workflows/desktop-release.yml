@@ -93,18 +93,19 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build
 
-      # release 作业要靠这些 artifact 组装 Release 与 latest.json（缺了会空跑失败）
+      # release 作业要靠这些 artifact 组装 Release 与 latest.json（缺了会空跑失败）。
+      # 注意 upload-artifact 的路径相对仓库根（不受 working-directory 影响），须带 desktop-tauri/ 前缀
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: desktop-tauri-${{ matrix.target }}
           path: |
-            ${{ matrix.bundle_glob }}/dmg/*.dmg
-            ${{ matrix.bundle_glob }}/macos/*.app.tar.gz
-            ${{ matrix.bundle_glob }}/macos/*.app.tar.gz.sig
-            ${{ matrix.bundle_glob }}/nsis/*-setup.exe
-            ${{ matrix.bundle_glob }}/nsis/*.nsis.zip
-            ${{ matrix.bundle_glob }}/nsis/*.nsis.zip.sig
+            desktop-tauri/${{ matrix.bundle_glob }}/dmg/*.dmg
+            desktop-tauri/${{ matrix.bundle_glob }}/macos/*.app.tar.gz
+            desktop-tauri/${{ matrix.bundle_glob }}/macos/*.app.tar.gz.sig
+            desktop-tauri/${{ matrix.bundle_glob }}/nsis/*-setup.exe
+            desktop-tauri/${{ matrix.bundle_glob }}/nsis/*.nsis.zip
+            desktop-tauri/${{ matrix.bundle_glob }}/nsis/*.nsis.zip.sig
           if-no-files-found: error
 
   release:

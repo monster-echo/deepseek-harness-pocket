@@ -100,7 +100,7 @@ export function NodeStep({
         choiceCard(
           major as 24 | 22,
           `下载 Node ${major} LTS`,
-          `v ${version.replace(/^v/, "")} · 约 30MB · npmmirror 镜像 + 官方校验`,
+          `v ${version.replace(/^v/, "")} · 约 50MB · npmmirror 镜像 + 官方校验`,
           true,
         ),
       )}

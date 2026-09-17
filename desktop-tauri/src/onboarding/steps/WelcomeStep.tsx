@@ -6,7 +6,7 @@ import { Download, HardDriveDownload, LogIn, Rocket } from "lucide-react";
  */
 export function WelcomeStep({ reason }: { reason?: string | null }) {
   const rows = [
-    { icon: HardDriveDownload, title: "准备运行环境", desc: "复用本机已有的 Node.js，或下载轻量运行时（约 30MB）" },
+    { icon: HardDriveDownload, title: "准备运行环境", desc: "复用本机已有的 Node.js，或下载受管运行时（约 50MB）" },
     { icon: Download, title: "安装 Worker 核心", desc: "从 npm 安装 dshc 与 DeepSeek Harness（后者约需几分钟）" },
     { icon: LogIn, title: "扫码登录", desc: "手机 DSH Pocket 扫一下，像 Telegram 那样" },
     { icon: Rocket, title: "启动", desc: "完成后本窗口直接进入 Harness 控制台" },

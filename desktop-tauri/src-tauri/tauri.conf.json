@@ -1,0 +1,83 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DSH Pocket",
+  "identifier": "top.rwecho.deepseek-harness-pocket.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "DSH Pocket — DeepSeek Harness",
+        "width": 1180,
+        "height": 820,
+        "minWidth": 880,
+        "minHeight": 600,
+        "resizable": true,
+        "center": true
+      },
+      {
+        "label": "console",
+        "title": "控制台",
+        "width": 920,
+        "height": 680,
+        "minWidth": 760,
+        "minHeight": 520,
+        "resizable": true,
+        "center": true,
+        "visible": false,
+        "url": "index.html?window=console"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "../node-sidecar/**/*",
+      "icons/tray-icon.png",
+      "icons/tray-icon-color.png"
+    ],
+    "createUpdaterArtifacts": true,
+    "copyright": "Copyright © 2026 掌鲸 DSH Pocket. All rights reserved.",
+    "category": "DeveloperTool",
+    "shortDescription": "DeepSeek Harness 的桌面 Worker",
+    "longDescription": "把 DeepSeek Harness 装进你自己的电脑：托盘常驻、开机即在线、手机随时遥控。",
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/monster-echo/deepseek-harness-pocket/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUyNTgyODBFMTJBMDlCREIKUldUYm02QVNEaWhZVXEzYk9Ud2tYa2Q0dUxvVjB6bHg0QktnSFFBOENjUU5oaGM1dThrdWNhUTUK"
+    }
+  },
+  "version": "0.1.9"
+}

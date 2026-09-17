@@ -1,11 +1,13 @@
-name: desktop-release
+name: desktop-tauri-release
 
-# 桌面端发布：tag desktop-v<版本> 触发（或手动 dispatch）。
-# 产物：macOS zip(Sparkle 更新用)/dmg、Windows Inno 安装器/zip、双平台 appcast。
+# 桌面端（Tauri 2）发布：tag desktop-v<版本> 触发，或手动 dispatch。
+# 产物：macOS dmg + .app.tar.gz(+sig)、Windows NSIS setup + nsis.zip(+sig)、latest.json。
 #
-# 需要的 GitHub Secrets（一次性配置，见 desktop/README.md）：
-#   SPARKLE_ED_PRIVATE_KEY      macOS EdDSA 私钥（~/.deepseek-harness-pocket/keys/sparkle-ed-private.key 内容）
-#   WINSPARKLE_DSA_PRIVATE_KEY  Windows DSA 私钥（winsparkle-dsa-priv.pem 内容）
+# 触发标签 desktop-v<版本>（原 Flutter 流水线已移除，本流水线接管该前缀）。
+#
+# 需要的 GitHub Secrets（一次性配置）：
+#   TAURI_SIGNING_PRIVATE_KEY           ~/.tauri/dsh-pocket.key 的内容
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  该私钥的密码（本项目生成时为空，可留空）
 
 on:
   push:
@@ -13,229 +15,127 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（如 0.1.0）'
+        description: '版本号（如 0.1.9，需与 tauri.conf.json version 一致）'
         required: true
-      dry_run:
-        description: '只构建不出 Release'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
 
 env:
-  FLUTTER_VERSION: '3.44.6'
+  NODE_VERSION: '22'
 
 jobs:
-  macos:
-    runs-on: macos-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: darwin-arm64
+            bundle_glob: src-tauri/target/release/bundle
+          - os: windows-latest
+            target: windows-x64
+            bundle_glob: src-tauri/target/release/bundle
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
-        working-directory: desktop
-    outputs:
-      version: ${{ steps.ver.outputs.version }}
-      build: ${{ steps.ver.outputs.build }}
+        # Windows 默认 shell 是 pwsh，跑不了 .sh（sidecar 脚本）；统一用 bash
+        shell: bash
+        working-directory: desktop-tauri
     steps:
       - uses: actions/checkout@v4
-      - id: ver
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/desktop-v* ]]; then
-            echo "version=${GITHUB_REF_NAME#desktop-v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          fi
-          echo "build=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-      - name: Prepare sidecar
-        run: tool/build-sidecar.sh darwin-arm64
-        env:
-          NODE_MIRROR: https://nodejs.org/dist
-          NPM_REGISTRY: https://registry.npmjs.org
-      - name: Build app
-        run: |
-          flutter config --enable-macos-desktop
-          flutter build macos --release \
-            --build-name="${{ steps.ver.outputs.version }}" \
-            --build-number="${{ steps.ver.outputs.build }}"
-      - name: Package zip + dmg
-        run: |
-          VER="${{ steps.ver.outputs.version }}"
-          APP="build/macos/Build/Products/Release/DSH Pocket.app"
-          ZIP="DSH-Pocket-$VER-macos-arm64.zip"
-          DMG="DSH-Pocket-$VER-macos-arm64.dmg"
-          ditto -c -k --keepParent "$APP" "$ZIP"
-          # dmg：app + Applications 快捷方式的拖拽安装布局（样式设置失败不影响可用性）
-          STAGE="dmg-stage"
-          rm -rf "$STAGE" && mkdir -p "$STAGE/.background"
-          cp -R "$APP" "$STAGE/"
-          cp assets/dmg-background.png "$STAGE/.background/background.png"
-          ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "DSH Pocket" -srcfolder "$STAGE" -ov -format UDRW template.dmg
-          DEV="$(hdiutil attach -readwrite -noverify -noautoopen template.dmg | grep -o '^/dev/disk[0-9]*' | tail -1)"
-          osascript <<'AS' || echo "[dmg] 窗口样式设置跳过（无 GUI 会话/权限），dmg 仍可拖拽安装"
-            tell application "Finder"
-              tell disk "DSH Pocket"
-                open
-                set current view of container window to icon view
-                set toolbar visible of container window to false
-                set icon size of the icon view options of container window to 110
-                set background picture of the icon view options of container window to file ".background:background.png"
-                set position of item "DSH Pocket.app" of container window to {160, 170}
-                set position of item "Applications" of container window to {500, 170}
-                set bounds of container window to {100, 100, 760, 500}
-                close
-              end tell
-            end tell
-          AS
-          hdiutil detach "$DEV" -force
-          hdiutil convert template.dmg -format UDZO -o "$DMG"
-          rm -f template.dmg
-          echo "ZIP_PATH=$ZIP" >> "$GITHUB_ENV"
-          echo "DMG_PATH=$DMG" >> "$GITHUB_ENV"
-      - name: Sign zip (Sparkle EdDSA)
-        env:
-          SPARKLE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
-        run: |
-          printf '%s' "$SPARKLE_KEY" > ed.key
-          chmod 600 ed.key
-          SIGN_BIN="macos/Pods/Sparkle/bin/sign_update"
-          SIG="$("$SIGN_BIN" --ed-key-file ed.key -p "$ZIP_PATH")"
-          LEN="$(stat -f%z "$ZIP_PATH")"
-          printf '%s' "$SIG" > macos-ed-signature.txt
-          printf '%s' "$LEN" > macos-zip-length.txt
-          rm -f ed.key
-      - uses: actions/upload-artifact@v4
-        with:
-          name: desktop-macos
-          # upload-artifact 不认 defaults.run.working-directory，路径相对仓库根
-          path: |
-            desktop/DSH-Pocket-*.zip
-            desktop/DSH-Pocket-*.dmg
-            desktop/macos-ed-signature.txt
-            desktop/macos-zip-length.txt
-          if-no-files-found: error
 
-  windows:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
-        working-directory: desktop
-    outputs:
-      version: ${{ steps.ver.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: ver
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/desktop-v* ]]; then
-            echo "version=${GITHUB_REF_NAME#desktop-v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: subosito/flutter-action@v2
+      - uses: pnpm/action-setup@v4
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-      - name: Install Inno Setup
-        shell: bash
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop-tauri/src-tauri
+
+      - name: Install workspace deps
         working-directory: .
-        run: choco install innosetup -y --no-progress
-      - name: Prepare sidecar
-        run: tool/build-sidecar.sh windows-x64
+        run: pnpm install --frozen-lockfile
+
+      - name: Build sidecar (node + dshc)
+        # CI 无预置产物，脚本会自行拉 node 并构建 bridge
         env:
           NODE_MIRROR: https://nodejs.org/dist
           NPM_REGISTRY: https://registry.npmjs.org
-      - name: Build app
+        run: ./tool/build-sidecar.sh ${{ matrix.target }}
+
+      - name: Verify version consistency
+        # tauri.conf.json 的 version 决定更新器比对基准。若 tag 与它不一致，
+        # 会出现「更新后版本号没变 → 又被提示更新」的无限循环。
+        # 用 node 而不是 python3：Windows runner 上 python3 别名不可靠。
+        shell: bash
         run: |
-          flutter config --enable-windows-desktop
-          flutter build windows --release \
-            --build-name="${{ steps.ver.outputs.version }}" \
-            --build-number="${{ github.run_number }}"
-      - name: Bundle sidecar
-        run: |
-          RELEASE_DIR="build/windows/x64/runner/Release"
-          [[ -f node-sidecar/windows-x64/node/node.exe && -d node-sidecar/windows-x64/bridge/dist ]] \
-            || { echo "node sidecar 缺失" >&2; exit 1; }
-          powershell -NoProfile -Command "New-Item -ItemType Directory -Force '$RELEASE_DIR/node-sidecar' | Out-Null; Copy-Item -Recurse -Force node-sidecar/windows-x64/node '$RELEASE_DIR/node-sidecar/node'; Copy-Item -Recurse -Force node-sidecar/windows-x64/bridge '$RELEASE_DIR/node-sidecar/bridge'"
-          ls "$RELEASE_DIR/node-sidecar"
-      - name: Package setup + zip
-        run: |
-          VER="${{ steps.ver.outputs.version }}"
-          RELEASE_DIR="build/windows/x64/runner/Release"
-          powershell -NoProfile -Command "Compress-Archive -Path '$RELEASE_DIR/*' -DestinationPath 'DSH-Pocket-$VER-windows-x64.zip' -Force"
-          # iscc 的相对路径按 .iss 所在目录解析，传 cygpath 绝对路径；
-          # MSYS_NO_PATHCONV：值含 / 时 git-bash 会把 //D 整个原样传给 iscc（Unknown option）
-          SRC=$(cygpath -w "$PWD/$RELEASE_DIR")
-          MSYS_NO_PATHCONV=1 iscc /DAppVersion="$VER" /DSourceDir="$SRC" windows/installer.iss
-          ls -la "DSH-Pocket-Setup-$VER.exe"
-      - name: Sign setup (WinSparkle DSA)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            WANT="${{ github.event.inputs.version }}"
+          else
+            WANT="${GITHUB_REF_NAME#desktop-v}"
+          fi
+          HAVE=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CARGO=$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)
+          echo "tag=$WANT conf=$HAVE cargo=$CARGO"
+          [ "$WANT" = "$HAVE" ] || { echo "::error::tag 版本 $WANT 与 tauri.conf.json 的 $HAVE 不一致"; exit 1; }
+          [ "$HAVE" = "$CARGO" ] || { echo "::error::tauri.conf.json 的 $HAVE 与 Cargo.toml 的 $CARGO 不一致"; exit 1; }
+
+      - name: Build app (tauri)
         env:
-          DSA_KEY: ${{ secrets.WINSPARKLE_DSA_PRIVATE_KEY }}
-        run: |
-          VER="${{ steps.ver.outputs.version }}"
-          printf '%s' "$DSA_KEY" > dsa_priv.pem
-          SIG="$(openssl dgst -sha1 -binary < "DSH-Pocket-Setup-$VER.exe" | openssl dgst -sha1 -sign dsa_priv.pem | openssl enc -base64)"
-          LEN="$(stat -c%s "DSH-Pocket-Setup-$VER.exe")"
-          printf '%s' "$SIG" > windows-dsa-signature.txt
-          printf '%s' "$LEN" > windows-exe-length.txt
-          rm -f dsa_priv.pem
-      - uses: actions/upload-artifact@v4
-        with:
-          name: desktop-windows
-          # upload-artifact 不认 defaults.run.working-directory，路径相对仓库根
-          path: |
-            desktop/DSH-Pocket-*.zip
-            desktop/DSH-Pocket-Setup-*.exe
-            desktop/windows-dsa-signature.txt
-            desktop/windows-exe-length.txt
-          if-no-files-found: error
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build
 
   release:
-    needs: [macos, windows]
-    if: ${{ github.ref_type == 'tag' && !inputs.dry_run }}
+    needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: dist
-          merge-multiple: true
-      - name: Make appcasts
+          path: artifacts
+
+      - name: Flatten artifacts
         run: |
-          VER="${{ needs.macos.outputs.version }}"
-          BUILD="${{ needs.macos.outputs.build }}"
-          TAG="$GITHUB_REF_NAME"
-          BASE="https://github.com/monster-echo/deepseek-harness-pocket/releases/download/$TAG"
-          MAC_ZIP="DSH-Pocket-$VER-macos-arm64.zip"
-          WIN_EXE="DSH-Pocket-Setup-$VER.exe"
-          ED_SIG="$(cat dist/macos-ed-signature.txt)"
-          ED_LEN="$(cat dist/macos-zip-length.txt)"
-          DSA_SIG="$(cat dist/windows-dsa-signature.txt)"
-          EXE_LEN="$(cat dist/windows-exe-length.txt)"
-          python3 desktop/tool/make-appcast.py macos --version "$VER" --build "$BUILD" \
-            --url "$BASE/$MAC_ZIP" --signature "$ED_SIG" --length "$ED_LEN" \
-            --out dist/appcast-macos.xml
-          python3 desktop/tool/make-appcast.py windows --version "$VER" --build "$BUILD" \
-            --url "$BASE/$WIN_EXE" --signature "$DSA_SIG" --length "$EXE_LEN" \
-            --out dist/appcast-windows.xml
-          cat dist/appcast-macos.xml
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -la dist
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#desktop-v}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "版本: $V"
+
+      - name: Generate latest.json
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: python3 .github/scripts/make-latest-json.py
+
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          VER="${{ needs.macos.outputs.version }}"
-          gh release create "$GITHUB_REF_NAME" \
-            --title "DSH Pocket $VER" \
+          TAG="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="desktop-v$VERSION"; fi
+          gh release create "$TAG" \
+            --title "DSH Pocket 桌面端 $VERSION（Tauri）" \
             --generate-notes \
-            dist/DSH-Pocket-$VER-macos-arm64.zip \
-            dist/DSH-Pocket-$VER-macos-arm64.dmg \
-            dist/DSH-Pocket-$VER-windows-x64.zip \
-            "dist/DSH-Pocket-Setup-$VER.exe" \
-            dist/appcast-macos.xml \
-            dist/appcast-windows.xml
+            dist/*.dmg \
+            dist/*.app.tar.gz \
+            dist/*-setup.exe \
+            dist/latest.json

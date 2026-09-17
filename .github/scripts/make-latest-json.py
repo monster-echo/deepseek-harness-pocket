@@ -2,8 +2,10 @@
 """生成 Tauri updater 清单 latest.json。
 
 配对基准是 Release 上「已上传的真实资产名」（gh api 查询），不是本地文件名——
-upload-artifact 会对文件名做消毒（空格→点），按本地名拼 URL 会与 Release 资产
-对不上，升级下载 404（v0.1.9 的真实事故）。
+`gh release create/upload` 会对资产名做消毒（空格→点：`DSH Pocket.app.tar.gz`
+落库成 `DSH.Pocket.app.tar.gz`），按本地名拼 URL 会与 Release 资产对不上，
+升级下载 404（v0.1.9/v0.1.10 两次真实事故）。本地找 .sig 时同样把空格归一化
+成点再匹配。
 
 用法（CI 内，必须在 `gh release create` 上传安装包**之后**跑）：
   VERSION=0.1.10 REPO=owner/name TAG=desktop-v0.1.10 \
@@ -56,16 +58,29 @@ def updater_assets(names: list[str]) -> dict[str, str]:
     return out
 
 
+def local_files_normalized() -> dict[str, pathlib.Path]:
+    """dist/ 文件名按 gh 的资产名消毒规则（空格→点）归一化 → 本地路径。"""
+    out: dict[str, pathlib.Path] = {}
+    for f in DIST.iterdir():
+        if f.is_file():
+            out[f.name.replace(" ", ".")] = f
+    return out
+
+
 def main() -> None:
     names = release_asset_names()
+    lookup = local_files_normalized()
     platforms: dict[str, dict[str, str]] = {}
     for key, name in updater_assets(names).items():
         sig_name = name + ".sig"
         if sig_name not in names:
             sys.exit(f"Release 缺少签名资产 {sig_name}（检查 TAURI_SIGNING_PRIVATE_KEY）")
-        sig_local = DIST / sig_name
-        if not sig_local.exists():
-            sys.exit(f"本地工作区缺少签名文件 {sig_local}（download-artifact 名单不全？）")
+        sig_local = lookup.get(sig_name)
+        if sig_local is None:
+            sys.exit(
+                f"本地工作区缺少签名文件（按资产名 {sig_name} 归一化匹配失败）；"
+                f"dist/ 现有: {sorted(p.name for p in DIST.iterdir())}"
+            )
         platforms[key] = {
             "signature": sig_local.read_text(encoding="utf-8").strip(),
             "url": f"{BASE}/{urllib.parse.quote(name)}",

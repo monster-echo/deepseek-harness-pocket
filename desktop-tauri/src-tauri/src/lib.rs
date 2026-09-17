@@ -19,6 +19,8 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuild
 
 /// 状态轮询间隔（与 Flutter 端一致量级）
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
+/// 轮询连续失败时的退避上限（3→6→…→60s；避免环境坏掉时每 3s 冷启动一个 node 空转）
+const POLL_MAX_INTERVAL: Duration = Duration::from_secs(60);
 
 /// 上一次已加载的 dsh Web URL —— 变了才导航（dsh 重启后 token 必变）
 static LAST_WEB_URL: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
@@ -347,8 +349,20 @@ fn notify<R: Runtime>(app: &AppHandle<R>, title: &str, body: &str) {
 fn start_poller<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || {
     let mut prev_running: Option<bool> = None;
+    let mut consecutive_failures: u32 = 0;
     loop {
-        let status = read_status(&app);
+        // sidecar 缺失（新机器/安装包损坏）时不 spawn node：60s 重探。
+        // 否则「环境坏掉」的机器上每 3s 冷启动一个 node，永不停止。
+        let status = match sidecar(&app) {
+            Ok(sc) if sc.ready() => read_status(&app),
+            _ => serde_json::json!({
+                "running": false,
+                "sidecarMissing": true,
+                "error": "内置 node sidecar 缺失，请重新安装应用",
+            }),
+        };
+        let failed = status.get("error").is_some() || status.get("parseError").is_some();
+        consecutive_failures = if failed { consecutive_failures.saturating_add(1) } else { 0 };
         let running = status.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
         let web_url = status
             .get("run")
@@ -373,14 +387,20 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
         {
             let err = status.get("error").and_then(|v| v.as_str()).unwrap_or("");
             eprintln!(
-                "[poll] running={running} webUrl={} {}",
+                "[poll] running={running} webUrl={} failures={consecutive_failures} {}",
                 if web_url.is_empty() { "(none)" } else { &web_url },
                 if err.is_empty() { String::new() } else { format!("err={err}") }
             );
         }
         navigate_main(&app, &web_url);
         let _ = app.emit("worker-status", &status);
-        std::thread::sleep(POLL_INTERVAL);
+        // 失败时指数退避（1<<1 … 1<<5），成功即回 3s
+        let interval = if consecutive_failures == 0 {
+            POLL_INTERVAL
+        } else {
+            (POLL_INTERVAL * (1u32 << consecutive_failures.min(5))).min(POLL_MAX_INTERVAL)
+        };
+        std::thread::sleep(interval);
     }
     });
 }
@@ -487,6 +507,149 @@ fn runtime_info<R: Runtime>(app: AppHandle<R>) -> serde_json::Value {
     })
 }
 
+/// 恢复待机中的 supervisor（bridge `dshc resume`：写 resume-flag，数秒内重试启动）
+#[tauri::command]
+fn dshc_resume<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    run_dshc(&app, &["resume", "--json"])
+}
+
+// ─────────────── 引导页环境预检（preflight）───────────────
+
+fn preflight_item(id: &str, state: &str, detail: impl Into<String>, fix: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "state": state,
+        "detail": detail.into(),
+        "fix": fix,
+    })
+}
+
+/// 网关健康检查（3s 超时；引导页预检用）
+fn gateway_health<R: Runtime>(app: &AppHandle<R>) -> Result<bool, String> {
+    ensure_tls_provider();
+    let base = gateway_rest_base(app)?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("HTTP 客户端创建失败: {e}"))?;
+    let resp = client
+        .get(format!("{base}/api/v1/health"))
+        .send()
+        .map_err(|e| e.to_string())?;
+    Ok(resp.status().is_success())
+}
+
+/// 引导页环境预检实现：sidecar / runtime / account / port / gateway 一次性快照。
+/// 每项独立容错；gateway 只 warn 不 fail（离线也能用本机 GUI）。
+fn preflight_impl<R: Runtime>(app: &AppHandle<R>) -> Result<serde_json::Value, String> {
+    let mut items: Vec<serde_json::Value> = Vec::new();
+
+    // 1) sidecar：内置 node + bridge（安装包问题，应用内无法自修）
+    items.push(match sidecar(app) {
+        Ok(sc) if sc.ready() => preflight_item("sidecar", "pass", "内置 Node.js 与 bridge 就绪", None),
+        Ok(_) => preflight_item("sidecar", "fail", "内置 node sidecar 不完整，请重新安装应用", None),
+        Err(e) => preflight_item("sidecar", "fail", e, None),
+    });
+
+    // 2) dsh 运行时（托管安装；缺失可在引导页一键安装）
+    items.push(match managed_dsh_bin_for(app) {
+        Some(bin) => {
+            // <home>/runtimes/dsh/<版本>/node_modules/.bin/dsh → 取 <版本>
+            let version = bin
+                .split(std::path::MAIN_SEPARATOR)
+                .rev()
+                .nth(4)
+                .unwrap_or("")
+                .to_string();
+            preflight_item(
+                "runtime",
+                "pass",
+                if version.is_empty() { "dsh 运行时就绪".to_string() } else { format!("dsh {version} 就绪") },
+                None,
+            )
+        }
+        None => preflight_item("runtime", "fail", "尚未安装 dsh 运行时", Some("install_runtime")),
+    });
+
+    // 3) 账号：浏览器登录会话或扫码设备凭据，二选一即可
+    let session_ok = account_session_file(app)
+        .ok()
+        .filter(|f| f.exists())
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(t.trim()).ok())
+        .map(|v| {
+            !v.get("token").and_then(|x| x.as_str()).unwrap_or_default().is_empty()
+                && !v.get("refreshToken").and_then(|x| x.as_str()).unwrap_or_default().is_empty()
+        })
+        .unwrap_or(false);
+    let link_ok = device_link_file(app)
+        .ok()
+        .filter(|f| f.exists())
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(t.trim()).ok())
+        .map(|v| !v.get("credential").and_then(|x| x.as_str()).unwrap_or_default().is_empty())
+        .unwrap_or(false);
+    items.push(if session_ok || link_ok {
+        preflight_item("account", "pass", "已登录", None)
+    } else {
+        preflight_item("account", "fail", "尚未登录掌鲸账号", Some("login"))
+    });
+
+    // 4) 端口：Worker 已运行则端口归它所有，视为通过；否则探测业务口与 dsh 内部口
+    let running = read_status(app)
+        .get("running")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if running {
+        items.push(preflight_item("port", "pass", "Worker 已在运行", None));
+    } else {
+        let port = u16::try_from(
+            read_settings(app).get("port").and_then(|v| v.as_i64()).unwrap_or(DEFAULT_PORT),
+        )
+        .unwrap_or(3780);
+        let busy: Vec<u16> = [port, 3080]
+            .into_iter()
+            .filter(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_err())
+            .collect();
+        if busy.is_empty() {
+            items.push(preflight_item("port", "pass", "端口可用", None));
+        } else {
+            let list = busy.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("、");
+            items.push(preflight_item(
+                "port",
+                "fail",
+                format!("端口 {list} 被其他程序占用（可能是另一个 DSH 实例）"),
+                Some("free_port"),
+            ));
+        }
+    }
+
+    // 5) 网关可达性：只 warn 不 fail（离线也能用本机 GUI）
+    items.push(match gateway_health(app) {
+        Ok(true) => preflight_item("gateway", "pass", "网关可达", None),
+        Ok(false) => preflight_item("gateway", "warn", "网关响应异常（离线时仍可使用本机控制台）", None),
+        Err(e) => preflight_item("gateway", "warn", format!("无法访问网关：{e}（离线时仍可使用本机控制台）"), None),
+    });
+
+    let overall = if items
+        .iter()
+        .any(|i| i.get("state").and_then(|s| s.as_str()) == Some("fail"))
+    {
+        "action_required"
+    } else {
+        "ready"
+    };
+    Ok(serde_json::json!({ "overall": overall, "items": items, "checkedAt": now_ms() }))
+}
+
+/// 引导页环境预检：一次性返回五项检查快照（单项 ~3s 超时，整体 <10s）
+#[tauri::command]
+async fn preflight_check<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || preflight_impl(&app))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
 
 // ───────────── 控制台数据源（只读） ─────────────
 
@@ -538,7 +701,7 @@ fn list_dsh_versions<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value,
         }
     }
     versions.sort_by(|a, b| {
-        b["version"].as_str().unwrap_or("").cmp(a["version"].as_str().unwrap_or(""))
+        compare_versions(b["version"].as_str().unwrap_or(""), a["version"].as_str().unwrap_or(""))
     });
 
     // 当前生效版本：run.json 里 supervisor 记录的实际二进制路径
@@ -609,7 +772,8 @@ fn settings_file<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     Ok(pocket_home(app)?.join("desktop-settings.json"))
 }
 
-/// 读取设置（缺项用默认值补齐）
+/// 读取设置（缺项用默认值补齐）。
+/// gatewayUrl 不从设置文件读：网关是官方固定服务，不接受用户改指（设置页也不展示）。
 fn read_settings<R: Runtime>(app: &AppHandle<R>) -> serde_json::Value {
     let mut v = serde_json::json!({
         "gatewayUrl": DEFAULT_GATEWAY_URL,
@@ -625,7 +789,9 @@ fn read_settings<R: Runtime>(app: &AppHandle<R>) -> serde_json::Value {
                 if let Ok(saved) = serde_json::from_str::<serde_json::Value>(text.trim()) {
                     if let (Some(obj), Some(base)) = (v.as_object_mut(), saved.as_object()) {
                         for (k, val) in base {
-                            if !val.is_null() { obj.insert(k.clone(), val.clone()); }
+                            // gatewayUrl 固定：设置文件里残留的旧值一律忽略
+                            if k == "gatewayUrl" || val.is_null() { continue; }
+                            obj.insert(k.clone(), val.clone());
                         }
                     }
                 }
@@ -688,9 +854,12 @@ fn worker_start_args<R: Runtime>(app: &AppHandle<R>, dsh: Option<&str>) -> Vec<S
     args
 }
 
-/// 启动 Worker（读设置，含端口/网关/监听/能力档位/名称）
+/// 启动 Worker（读设置，含端口/网关/监听/能力档位/名称）。
+/// 有托管 runtime 时必须显式传 --dsh：新机器没有全局 dsh，PATH 探测必然失败，
+/// 也不该依赖 GUI 进程的 PATH（bridge 的 resolveDshBin 只作兜底）。
 fn start_worker<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
-    let args = worker_start_args(app, None);
+    let dsh = managed_dsh_bin_for(app);
+    let args = worker_start_args(app, dsh.as_deref());
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     run_dshc(app, &refs)
 }
@@ -885,6 +1054,51 @@ const NPM_INSTALL_TIMEOUT_SECS: u64 = 30 * 60;
 fn managed_dsh_bin(version_dir: &std::path::Path) -> PathBuf {
     let name = if cfg!(target_os = "windows") { "dsh.cmd" } else { "dsh" };
     version_dir.join("node_modules").join(".bin").join(name)
+}
+
+/// 版本字符串逐段数字比较（0.1.10 > 0.1.9；非数字段按 0）。字典序比较在这里是错的。
+fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let seg = |v: &str| -> Vec<u64> {
+        v.trim()
+            .trim_start_matches('v')
+            .split(|c: char| c == '.' || c == '-')
+            .map(|s| s.parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let (pa, pb) = (seg(a), seg(b));
+    for i in 0..pa.len().max(pb.len()) {
+        let x = pa.get(i).copied().unwrap_or(0);
+        let y = pb.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x.cmp(&y);
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+/// 扫描托管 runtime 目录，返回「已安装且带可执行」的最高版本 dsh bin 路径（没有则 None）。
+fn managed_dsh_bin_for<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    let root = pocket_home(app).ok()?.join("runtimes").join("dsh");
+    let mut best: Option<(String, PathBuf)> = None;
+    for entry in std::fs::read_dir(&root).ok()?.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let bin = managed_dsh_bin(&path);
+        if !bin.exists() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let better = match &best {
+            None => true,
+            Some((v, _)) => compare_versions(&name, v) == std::cmp::Ordering::Greater,
+        };
+        if better {
+            best = Some((name, bin));
+        }
+    }
+    best.map(|(_, bin)| bin.to_string_lossy().to_string())
 }
 
 /// sidecar 内 npm-cli.js 的位置
@@ -1106,15 +1320,39 @@ async fn dsh_switch_version<R: Runtime>(
 
 // ─────────────── 应用自更新 ───────────────
 //
-// 清单由 CI 生成并挂在 Release 上（.github/scripts/make-latest-json.py），
-// 地址写在 tauri.conf.json 的 plugins.updater.endpoints，签名公钥同处。
+// 清单由 CI 生成并挂在 Release 上（.github/scripts/make-latest-json.py）。
+// 国内直连 GitHub 基本不可达：更新检查与安装包下载都走自建代理（路径前缀式转发），
+// 并带 x-proxy-token 头防滥用（静态 token 只是防扫，不构成安全边界——
+// 防篡改靠 minisign 签名校验）。代理不可用时回落 GitHub 直连。
+
+const UPDATE_PROXY_BASE: &str = "https://proxy.0x2a.top";
+const UPDATE_PROXY_TOKEN: &str = "MySecretPass_2026_SecureKey";
+const UPDATE_MANIFEST_URL: &str =
+    "https://github.com/monster-echo/deepseek-harness-pocket/releases/latest/download/latest.json";
+
+/// 带「代理优先 + 直连兜底」端点与 token 的更新器客户端。
+/// header 对清单请求与安装包下载同样生效（tauri-plugin-updater 复用 builder headers）。
+fn updater_client<R: Runtime>(app: &AppHandle<R>) -> Result<tauri_plugin_updater::Updater, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let proxied: tauri::Url = format!("{UPDATE_PROXY_BASE}/{UPDATE_MANIFEST_URL}")
+        .parse()
+        .map_err(|e| format!("代理更新地址无效: {e}"))?;
+    let direct: tauri::Url = UPDATE_MANIFEST_URL
+        .parse()
+        .map_err(|e| format!("更新地址无效: {e}"))?;
+    app.updater_builder()
+        .endpoints(vec![proxied, direct])
+        .map_err(|e| format!("配置更新端点失败: {e}"))?
+        .header("x-proxy-token", UPDATE_PROXY_TOKEN)
+        .map_err(|e| format!("设置更新请求头失败: {e}"))?
+        .build()
+        .map_err(|e| format!("更新器初始化失败: {e}"))
+}
 
 /// 检查是否有新版本；无更新返回 null
 #[tauri::command]
 async fn check_update<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
-    use tauri_plugin_updater::UpdaterExt;
-    let updater = app.updater().map_err(|e| format!("更新器初始化失败: {e}"))?;
-    match updater.check().await {
+    match updater_client(&app)?.check().await {
         Ok(Some(u)) => Ok(serde_json::json!({
             "available": true,
             "version": u.version,
@@ -1129,9 +1367,7 @@ async fn check_update<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value
 /// 下载并安装更新，成功后重启应用
 #[tauri::command]
 async fn install_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    use tauri_plugin_updater::UpdaterExt;
-    let updater = app.updater().map_err(|e| format!("更新器初始化失败: {e}"))?;
-    let update = updater
+    let update = updater_client(&app)?
         .check()
         .await
         .map_err(|e| format!("检查更新失败: {e}"))?
@@ -1546,7 +1782,9 @@ pub fn run() {
             dshc_status,
             dshc_start,
             dshc_stop,
+            dshc_resume,
             dshc_qr,
+            preflight_check,
             show_console,
             open_external,
             runtime_info,
@@ -1623,7 +1861,7 @@ pub fn run() {
             build_tray(app.handle())?;
             set_window_menu(app.handle())?;
             start_poller(app.handle().clone());
-            // 开机即在线：未运行则拉起（与原 Flutter 端行为一致）
+            // 开机即在线：未运行则拉起（与原 Flutter 端行为一致）；失败不再静默吞掉
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let running = read_status(&handle)
@@ -1631,7 +1869,11 @@ pub fn run() {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 if !running {
-                    let _ = start_worker(&handle);
+                    if let Err(e) = start_worker(&handle) {
+                        eprintln!("[boot] 自动启动失败: {e}");
+                        notify(&handle, "DSH Pocket", &format!("Worker 自动启动失败：{e}"));
+                        let _ = handle.emit("worker-start-error", &e);
+                    }
                 }
             });
             Ok(())

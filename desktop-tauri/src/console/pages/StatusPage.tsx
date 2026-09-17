@@ -7,14 +7,14 @@ import {
   Dot, EmptyState, Field,
 } from "../../components/ui";
 import {
-  checkUpdate, installUpdate, openExternal, workerStart, workerStop,
+  checkUpdate, giveUpText, installUpdate, openExternal, workerResume, workerStart, workerStop,
   type UpdateInfo, type WorkerStatus,
 } from "../../lib/worker";
 import { Page, PageHeader } from "./PageHeader";
 
 /** 状态页：一眼看清 Worker 死活，并在原地把它拉起来 / 停下来。 */
 export function StatusPage({ status }: { status: WorkerStatus | null }) {
-  const [busy, setBusy] = useState<"start" | "stop" | null>(null);
+  const [busy, setBusy] = useState<"start" | "stop" | "resume" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
@@ -44,13 +44,16 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
 
   const running = status?.running ?? false;
   const run = status?.run;
+  // supervisor 待机：进程活着但已放弃自动重启（giveUp 说明原因）——不是"运行中"，更不是没事
+  const standby = status?.standby ?? run?.supervisor === "standby";
   const webUrl = run?.webUrl ?? "";
 
-  const act = async (kind: "start" | "stop") => {
+  const act = async (kind: "start" | "stop" | "resume") => {
     setBusy(kind);
     setError(null);
     try {
       if (kind === "start") await workerStart();
+      else if (kind === "resume") await workerResume();
       else await workerStop();
     } catch (e) {
       setError(String(e));
@@ -90,15 +93,17 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
         <CardContent className="pt-4">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <Dot tone={running ? "success" : "neutral"} />
+              <Dot tone={running ? (standby ? "warning" : "success") : "neutral"} />
               <div>
                 <p className="text-sm font-semibold leading-tight">
-                  {running ? "Worker 运行中" : "Worker 未运行"}
+                  {running ? (standby ? "Worker 待机中" : "Worker 运行中") : "Worker 未运行"}
                 </p>
                 <p className="mt-0.5 text-xs tabular text-muted-foreground">
-                  {running
-                    ? `PID ${status.pid ?? "—"}${run?.dshVersion ? ` · dsh ${run.dshVersion}` : ""}`
-                    : "启动后手机端才能连上这台电脑"}
+                  {running && standby
+                    ? "已暂停自动重启"
+                    : running
+                      ? `PID ${status.pid ?? "—"}${run?.dshVersion ? ` · dsh ${run.dshVersion}` : ""}`
+                      : "启动后手机端才能连上这台电脑"}
                 </p>
               </div>
             </div>
@@ -111,10 +116,18 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
                 </Button>
               ) : null}
               {running ? (
-                <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => void act("stop")}>
-                  {busy === "stop" ? <Loader2 className="animate-spin" /> : <Square />}
-                  停止
-                </Button>
+                <>
+                  {standby ? (
+                    <Button size="sm" disabled={busy !== null} onClick={() => void act("resume")}>
+                      {busy === "resume" ? <Loader2 className="animate-spin" /> : <Play />}
+                      重试启动
+                    </Button>
+                  ) : null}
+                  <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => void act("stop")}>
+                    {busy === "stop" ? <Loader2 className="animate-spin" /> : <Square />}
+                    停止
+                  </Button>
+                </>
               ) : (
                 <Button size="sm" disabled={busy !== null} onClick={() => void act("start")}>
                   {busy === "start" ? <Loader2 className="animate-spin" /> : <Play />}
@@ -123,6 +136,13 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
               )}
             </div>
           </div>
+
+          {/* 待机原因（giveUp）：不再无限重启，把原因和出口亮出来 */}
+          {running && standby ? (
+            <p className="mt-3 rounded-md bg-warning-soft px-3 py-2 text-xs leading-relaxed text-hue-orange">
+              {giveUpText(run?.giveUp)}
+            </p>
+          ) : null}
 
           {error ? (
             <p className="mt-3 rounded-md bg-destructive-soft px-3 py-2 text-xs leading-relaxed text-hue-red">

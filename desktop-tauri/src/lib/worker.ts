@@ -7,9 +7,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+/** supervisor 待机原因（run.json 的 giveUp；旧 supervisor 不写，读方需容忍缺省） */
+export interface GiveUpInfo {
+  reason: "port_in_use" | "spawn_failed" | "crash_loop";
+  detail?: string;
+  port?: number;
+  /** epoch ms */
+  since: number;
+}
+
 export interface RunInfo {
   dshBin: string;
   dshVersion: string;
+  /** bridge（dshc sidecar）自身版本，便于诊断 sidecar 新旧 */
+  bridgeVersion?: string;
   gatewayUrl: string;
   port: number;
   host: string;
@@ -17,12 +28,19 @@ export interface RunInfo {
   caps: string;
   /** dsh 打印的 Web 控制台地址（0.1.5+ 带 ?token=，随重启刷新） */
   webUrl?: string;
+  /** supervisor 状态；缺省视为 active（旧 run.json 兼容） */
+  supervisor?: "active" | "standby";
+  /** 进入待机的原因；恢复后清除 */
+  giveUp?: GiveUpInfo;
 }
 
 /** 对应 `dshc status --json` 的输出 */
 export interface WorkerStatus {
   running: boolean;
   pid?: number;
+  standby?: boolean;
+  supervisor?: "active" | "standby";
+  giveUp?: GiveUpInfo;
   run?: RunInfo;
   profileDir?: string;
   stateFile?: string;
@@ -31,6 +49,8 @@ export interface WorkerStatus {
   home?: string;
   error?: string;
   parseError?: string;
+  /** Rust 轮询器探测到 sidecar 缺失时置位（不再空转 spawn node） */
+  sidecarMissing?: boolean;
 }
 
 export interface QrInfo {
@@ -120,6 +140,78 @@ export async function workerStart(): Promise<string> {
 export async function workerStop(): Promise<string> {
   if (!isTauri()) return "[mock] 已停止";
   return invoke<string>("dshc_stop");
+}
+
+/** 恢复待机中的 supervisor（crash_loop 等待机的手动重试入口） */
+export async function workerResume(): Promise<string> {
+  if (!isTauri()) return "[mock] 已请求恢复";
+  return invoke<string>("dshc_resume");
+}
+
+/** 待机原因的中文描述（状态页与引导页共用） */
+export function giveUpText(info?: GiveUpInfo): string {
+  if (!info) return "Worker 已暂停自动重启";
+  switch (info.reason) {
+    case "port_in_use":
+      return `端口 ${info.port ?? "?"} 已被其他程序占用（可能是另一个 DSH 实例）。已暂停自动重启，端口释放后会自动恢复。`;
+    case "spawn_failed":
+      return `dsh 无法启动：${info.detail ?? "未知原因"}。请到「版本」页重新安装运行时。`;
+    case "crash_loop":
+      return "dsh 连续异常退出，已暂停自动重启。可点击重试，或到「日志」页查看原因。";
+  }
+}
+
+/* ── 引导页环境预检 ───────────────────────────────────────── */
+
+export type PreflightItemId = "sidecar" | "runtime" | "account" | "port" | "gateway";
+export type PreflightFix = "install_runtime" | "login" | "free_port";
+
+export interface PreflightItem {
+  id: PreflightItemId;
+  state: "pass" | "warn" | "fail";
+  detail: string;
+  fix?: PreflightFix | null;
+}
+
+export interface PreflightReport {
+  overall: "ready" | "action_required";
+  items: PreflightItem[];
+  /** epoch ms */
+  checkedAt: number;
+}
+
+/** 环境预检：sidecar / runtime / account / port / gateway 一次性快照 */
+export async function preflightCheck(): Promise<PreflightReport> {
+  if (!isTauri()) {
+    // ?broken：视觉调试「缺环境 → 引导动作」卡片用
+    const broken =
+      typeof window !== "undefined" && new URLSearchParams(window.location.search).has("broken");
+    return {
+      overall: broken ? "action_required" : "ready",
+      checkedAt: Date.now(),
+      items: broken
+        ? [
+            { id: "sidecar", state: "pass", detail: "内置 Node.js 与 bridge 就绪" },
+            { id: "runtime", state: "fail", detail: "尚未安装 dsh 运行时", fix: "install_runtime" },
+            { id: "account", state: "fail", detail: "尚未登录掌鲸账号", fix: "login" },
+            {
+              id: "port",
+              state: "fail",
+              detail: "端口 3080 被其他程序占用（可能是另一个 DSH 实例）",
+              fix: "free_port",
+            },
+            { id: "gateway", state: "warn", detail: "无法访问网关（离线时仍可使用本机控制台）" },
+          ]
+        : [
+            { id: "sidecar", state: "pass", detail: "内置 Node.js 与 bridge 就绪" },
+            { id: "runtime", state: "pass", detail: "dsh 0.1.5-rc.1 就绪" },
+            { id: "account", state: "pass", detail: "已登录" },
+            { id: "port", state: "pass", detail: "端口可用" },
+            { id: "gateway", state: "pass", detail: "网关可达" },
+          ],
+    };
+  }
+  return invoke<PreflightReport>("preflight_check");
 }
 
 export async function workerQr(): Promise<QrInfo> {
@@ -293,6 +385,14 @@ export async function onWorkerStatus(
 ): Promise<UnlistenFn> {
   if (!isTauri()) return () => {};
   return listen<WorkerStatus>("worker-status", (e) => cb(e.payload));
+}
+
+/** 订阅「开机自动启动失败」事件（boot 线程不再吞错） */
+export async function onWorkerStartError(
+  cb: (message: string) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<string>("worker-start-error", (e) => cb(e.payload));
 }
 
 /** 托盘「控制台 → 某页」的深链 */

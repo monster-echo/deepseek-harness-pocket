@@ -1,22 +1,5 @@
-import { useEffect, useState } from "react";
-import { onWorkerStatus, workerStatus, type WorkerStatus } from "../lib/worker";
-
-/** 订阅 Worker 状态：先取一次，之后跟随 Rust 侧轮询推送。 */
-export function useWorkerStatus(): WorkerStatus | null {
-  const [status, setStatus] = useState<WorkerStatus | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    void workerStatus().then((s) => alive && setStatus(s));
-    const unlisten = onWorkerStatus((s) => alive && setStatus(s));
-    return () => {
-      alive = false;
-      void unlisten.then((fn) => fn());
-    };
-  }, []);
-
-  return status;
-}
+// 状态订阅统一走 src/lib/useWorkerStatus（Rust 侧已在推送，页面自建轮询是双倍空转）
+export { useWorkerStatus } from "../lib/useWorkerStatus";
 
 export function formatBytes(n: number): string {
   if (!n) return "—";

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
   Loader2, LogIn, LogOut, ShieldCheck, ShieldAlert, Globe, RefreshCw, RotateCw,
@@ -8,10 +8,11 @@ import {
   Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Dot, Field,
 } from "../../components/ui";
 import {
-  accountLogin, accountRefresh, accountSignOut, deviceLinkPoll, deviceLinkRevoke,
-  deviceLinkStart, jwtExpiry, readAccountSession, readDeviceLink,
-  type AccountSessionInfo, type DeviceLinkInfo, type DeviceLinkPending,
+  accountLogin, accountRefresh, accountSignOut, deviceLinkRevoke,
+  jwtExpiry, readAccountSession, readDeviceLink,
+  type AccountSessionInfo, type DeviceLinkInfo,
 } from "../../lib/worker";
+import { useDeviceLinkLogin } from "../../lib/useDeviceLinkLogin";
 import { formatTime } from "../useWorker";
 import { Page, PageHeader } from "./PageHeader";
 
@@ -34,14 +35,6 @@ export function AccountPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [autoTried, setAutoTried] = useState(false);
 
-  // 扫码登录态
-  const [qr, setQr] = useState<DeviceLinkPending | null>(null);
-  const [qrBusy, setQrBusy] = useState(false);
-  const [qrError, setQrError] = useState<string | null>(null);
-  const [qrNotice, setQrNotice] = useState<string | null>(null);
-  const [remaining, setRemaining] = useState(0);
-  const pollRef = useRef<{ stop: () => void } | null>(null);
-
   const load = useCallback(async () => {
     try {
       setInfo(await readAccountSession());
@@ -54,6 +47,14 @@ export function AccountPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 扫码登录状态机（出码/轮询/过期换码在 hook 里，引导页共用）
+  const {
+    qr, qrBusy, qrError, qrNotice, remaining, startQr,
+  } = useDeviceLinkLogin({
+    enabled: info !== null && !info.signedIn && link === null,
+    onApproved: (l) => setLink(l),
+  });
 
   const onLogin = async () => {
     setBusy(true);
@@ -109,71 +110,6 @@ export function AccountPage() {
       setBusy(false);
     }
   };
-
-  /** 申请二维码（过期/手动刷新共用）；旧的轮询与倒计时一并作废 */
-  const startQr = useCallback(async () => {
-    pollRef.current?.stop();
-    pollRef.current = null;
-    setQrBusy(true);
-    setQrError(null);
-    try {
-      const pending = await deviceLinkStart();
-      setQr(pending);
-      setRemaining(Math.max(0, Math.round((pending.expiresAt - Date.now()) / 1000)));
-    } catch (e) {
-      setQr(null);
-      setQrError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setQrBusy(false);
-    }
-  }, []);
-
-  /** 未登录时进页面即出码（Telegram 同款：打开就是活的二维码） */
-  useEffect(() => {
-    if (info !== null && !info.signedIn && link === null && qr === null && !qrBusy && qrError === null) {
-      void startQr();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [info, link, qr, qrBusy, qrError, startQr]);
-
-  /** 轮询手机确认 + 每秒倒计时；过期自动换新码（不让人对着一张死码） */
-  useEffect(() => {
-    if (!qr) return;
-    let stopped = false;
-    const stop = () => {
-      stopped = true;
-    };
-    pollRef.current = { stop };
-    const tick = setInterval(() => {
-      setRemaining(Math.max(0, Math.round((qr.expiresAt - Date.now()) / 1000)));
-    }, 1000);
-    const poll = setInterval(() => {
-      if (stopped) return;
-      void (async () => {
-        try {
-          const r = await deviceLinkPoll(qr.code, qr.secret);
-          if (stopped) return;
-          if (r.status === "approved") {
-            pollRef.current?.stop();
-            setLink(r.link);
-            setQr(null);
-            setQrNotice(null);
-          } else if (r.status === "expired") {
-            pollRef.current?.stop();
-            setQrNotice("二维码已过期，已自动刷新，请重新扫描");
-            void startQr();
-          }
-        } catch {
-          // 网络抖动：下一拍继续，不打断等待
-        }
-      })();
-    }, Math.max(800, qr.intervalMs));
-    return () => {
-      stopped = true;
-      clearInterval(tick);
-      clearInterval(poll);
-    };
-  }, [qr, startQr]);
 
   const signedIn = info?.signedIn ?? false;
   const exp = jwtExpiry(info?.token as string | undefined);

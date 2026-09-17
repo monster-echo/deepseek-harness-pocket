@@ -124,15 +124,6 @@ export function SettingsPage() {
 
           <div className="flex items-start justify-between gap-4 py-3">
             <div className="min-w-0">
-              <p className="text-[13px] font-medium">网关地址</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">外网主路径的 WebSocket 网关</p>
-            </div>
-            <Input value={draft.gatewayUrl ?? ""} mono
-                   onChange={(v) => set("gatewayUrl", v)} placeholder="wss://…" />
-          </div>
-
-          <div className="flex items-start justify-between gap-4 py-3">
-            <div className="min-w-0">
               <p className="text-[13px] font-medium">监听地址</p>
               <p className="mt-0.5 text-[11px] text-muted-foreground">0.0.0.0 为全网卡，127.0.0.1 仅本机</p>
             </div>

@@ -57,7 +57,7 @@ else
 fi
 
 if [[ ! -f "$NPM_CLI" ]]; then
-  echo "[sidecar] npm-cli 不存在: $NPM_CLI（发行版损坏？删掉 $SC/node 重试）" >&2
+  echo "[sidecar] npm-cli 不存在: ${NPM_CLI}（发行版损坏？删掉 $SC/node 重试）" >&2
   exit 1
 fi
 

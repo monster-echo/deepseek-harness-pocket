@@ -108,7 +108,7 @@ ok "未确认时 poll = pending"
 WRONG="$(status_of POST /api/v1/devices/link/approve "dev:$USER_ID")"
 # 无 body 时先看 400/422 都算「没有链接码就被拒」
 [[ "$WRONG" == "400" || "$WRONG" == "422" ]] || die "缺链接码应被拒，实得 HTTP $WRONG"
-ok "缺链接码 approve 被拒（HTTP $WRONG）"
+ok "缺链接码 approve 被拒（HTTP ${WRONG}）"
 
 if [[ -n "$SEED" ]]; then
   # 真实场景由 Worker 连上 gateway 注册；冒烟里直接落一行，等价于「这台电脑已在线过」。
@@ -116,7 +116,7 @@ if [[ -n "$SEED" ]]; then
   psql_run "insert into workers (id, host_key, name, fingerprint, dsh_version, pairing_code, last_seen_at)
             values ('$WORKER_ID', '$HOST_KEY', 'CI 冒烟机·已注册', 'fp_smoke', '0', '', now())
             on conflict (host_key) do update set name = excluded.name, last_seen_at = now();" >/dev/null
-  ok "已在 gateway 侧注册电脑（$HOST_KEY）"
+  ok "已在 gateway 侧注册电脑（${HOST_KEY}）"
 
   # preview：确认弹窗的设备信息必须来自服务端（已注册 Worker 名优先）
   PREVIEW="$(post /api/v1/devices/link/preview "{\"code\":\"$CODE\"}" "dev:$USER_ID")"
@@ -151,7 +151,7 @@ if [[ -n "$SEED" ]]; then
   CODE2="$(printf '%s' "$START2" | jget "d['code']")"
   R2="$(curl -s -m 15 -o /tmp/smoke-approve2.json -w '%{http_code}' -X POST "$BASE/api/v1/devices/link/approve" \
     -H 'content-type: application/json' -H "Authorization: Bearer dev:$USER_ID" -d "{\"code\":\"$CODE2\"}")"
-  [[ "$R2" == "422" ]] || die "未注册电脑应 422，实得 $R2：$(cat /tmp/smoke-approve2.json)"
+  [[ "$R2" == "422" ]] || die "未注册电脑应 422，实得 ${R2}：$(cat /tmp/smoke-approve2.json)"
   ok "未注册电脑 approve = 422（$(cat /tmp/smoke-approve2.json)）"
 else
   say "3/4 跳过（未提供 --seed，无法造「已注册电脑」）"

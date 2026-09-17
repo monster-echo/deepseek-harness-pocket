@@ -32,7 +32,7 @@ if [ "$FORCE" != "--force" ] && { [ -x "$NODE_BIN" ] || [ -f "$NODE_BIN" ]; } \
    && [ -f "$SC/bridge/dist/cli/index.js" ]; then
   echo "[sidecar] 已就绪，跳过（--force 可重建）"
 else
-  echo "[sidecar] 拉取 node（target=$TARGET）..."
+  echo "[sidecar] 拉取 node（target=${TARGET}）..."
   "$ROOT/tool/fetch-node.sh" "$TARGET"
   echo "[sidecar] 构建 bridge(dshc) ..."
   "$ROOT/tool/bundle-bridge.sh" "$TARGET"

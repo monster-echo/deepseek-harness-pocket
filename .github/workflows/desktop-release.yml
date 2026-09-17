@@ -156,8 +156,6 @@ jobs:
             dist/*.dmg \
             dist/*.app.tar.gz \
             dist/*.app.tar.gz.sig \
-            dist/*.nsis.zip \
-            dist/*.nsis.zip.sig \
             dist/*-setup.exe \
             dist/*.exe.sig \
             dist/latest.json

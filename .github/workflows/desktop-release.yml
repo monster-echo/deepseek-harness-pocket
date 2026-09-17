@@ -136,20 +136,17 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "版本: $V"
 
-      - name: Generate latest.json
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        run: python3 .github/scripts/make-latest-json.py
-
-      - name: Create release
+      # 顺序很重要：先建 Release 传安装包，再生成 latest.json——
+      # 脚本以 Release 上的真实资产名为准（upload-artifact 会把文件名里的空格消毒成点，
+      # 按本地名拼 URL 会 404，v0.1.9 的真实事故），所以必须先有 Release 才能查资产名。
+      - name: Create release（上传安装包）
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           TAG="${{ github.ref_name }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then TAG="desktop-v$VERSION"; fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
           gh release create "$TAG" \
             --title "DSH Pocket 桌面端 $VERSION（Tauri）" \
             --generate-notes \
@@ -157,5 +154,17 @@ jobs:
             dist/*.app.tar.gz \
             dist/*.app.tar.gz.sig \
             dist/*-setup.exe \
-            dist/*.exe.sig \
-            dist/latest.json
+            dist/*.exe.sig
+
+      - name: Generate latest.json（以 Release 真实资产名为准）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ env.TAG }}
+        run: python3 .github/scripts/make-latest-json.py
+
+      - name: Upload latest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" --clobber dist/latest.json

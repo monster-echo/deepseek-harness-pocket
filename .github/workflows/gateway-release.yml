@@ -280,7 +280,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # --prerelease 必须带：桌面端更新器读 releases/latest/download/latest.json，
+          # 而 GitHub 的 "latest" 指最近一个正式 Release——gateway 正式发布会把 latest
+          # 抢走（里面没有 latest.json），桌面端升级就 404 了（gateway-v0.1.3 的真实事故）
           gh release create "$GITHUB_REF_NAME" \
+            --prerelease \
             --title "Gateway ${{ needs.publish.outputs.version }}" \
             --notes-file notes.md
 

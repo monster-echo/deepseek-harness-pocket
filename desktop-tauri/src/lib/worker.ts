@@ -57,16 +57,6 @@ export interface WorkerStatus {
   sidecarMissing?: boolean;
 }
 
-export interface QrInfo {
-  payload: string;
-  code: string;
-  name: string;
-  host?: string;
-  port: number;
-  gatewayUrl?: string;
-  fingerprint?: string;
-}
-
 export interface RuntimeInfo {
   sidecarReady: boolean;
   sidecarError?: string;
@@ -305,19 +295,6 @@ export async function bridgeInstall(): Promise<string> {
 export async function bootstrapComplete(): Promise<void> {
   if (!isTauri()) return;
   return invoke("bootstrap_complete");
-}
-
-export async function workerQr(): Promise<QrInfo> {
-  if (!isTauri()) {
-    return {
-      payload: "dshpocket://pair?code=MOCK-1234&name=studio-mac-mini&port=3780",
-      code: "MOCK-1234",
-      name: "studio-mac-mini",
-      host: "192.168.1.24",
-      port: 3780,
-    };
-  }
-  return invoke<QrInfo>("dshc_qr");
 }
 
 export async function runtimeInfo(): Promise<RuntimeInfo> {

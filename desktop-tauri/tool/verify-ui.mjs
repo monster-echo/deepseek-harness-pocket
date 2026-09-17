@@ -19,7 +19,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = path.join(ROOT, "dist");
 const SHOT_DIR = path.join(ROOT, "docs/screenshots");
 const WANT_SHOTS = process.argv.includes("--shots");
-const PANELS = ["status", "pairing", "account", "versions", "logs", "settings"];
+const PANELS = ["status", "account", "versions", "logs", "settings"];
 const MIME = {
   ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
   ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2",
@@ -156,18 +156,7 @@ for (const scheme of ["light", "dark"]) {
   const outline = await btn.evaluate((e) => getComputedStyle(e).outlineStyle);
   ok(outline.includes("solid"), `键盘焦点环 outline-style=${outline}`);
 
-  console.log("\n===== 配对二维码 / 日志 =====");
-  await page.goto(url("pairing"), { waitUntil: "networkidle" });
-  await page.waitForTimeout(700);
-  const qr = await page.evaluate(() => {
-    // 二维码 viewBox 是「模块数」（如 0 0 33 33），像素尺寸在 width/height
-    const svg = [...document.querySelectorAll("svg")].find(
-      (s) => parseFloat(s.getAttribute("width") || "0") > 100);
-    return { w: svg?.getAttribute("width") ?? null, mods: svg?.getAttribute("viewBox") ?? null,
-             shapes: svg?.querySelectorAll("path").length ?? 0 };
-  });
-  ok(qr.w && qr.shapes >= 2, `二维码 ${qr.w}px 模块=${qr.mods} 路径=${qr.shapes}`);
-
+  console.log("\n===== 日志 =====");
   await page.goto(url("logs"), { waitUntil: "networkidle" });
   await page.waitForTimeout(500);
   const lg = await page.evaluate(() => {

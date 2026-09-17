@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  Activity, QrCode, UserRound, Layers, ScrollText, Settings, type LucideIcon,
+  Activity, UserRound, Layers, ScrollText, Settings, type LucideIcon,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { Dot } from "../components/ui";
@@ -8,17 +8,15 @@ import { onConsolePanel } from "../lib/worker";
 import { useWorkerStatus } from "./useWorker";
 import { TitleBar } from "./TitleBar";
 import { StatusPage } from "./pages/StatusPage";
-import { PairingPage } from "./pages/PairingPage";
 import { AccountPage } from "./pages/AccountPage";
 import { VersionsPage } from "./pages/VersionsPage";
 import { LogsPage } from "./pages/LogsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
-type PanelId = "status" | "pairing" | "account" | "versions" | "logs" | "settings";
+type PanelId = "status" | "account" | "versions" | "logs" | "settings";
 
 const NAV: { id: PanelId; label: string; icon: LucideIcon }[] = [
   { id: "status", label: "运行状态", icon: Activity },
-  { id: "pairing", label: "配对", icon: QrCode },
   { id: "account", label: "账号", icon: UserRound },
   { id: "versions", label: "版本", icon: Layers },
   { id: "logs", label: "日志", icon: ScrollText },
@@ -91,7 +89,6 @@ export function ConsoleApp({ initialPanel }: { initialPanel: string }) {
 
       <main className="min-w-0 flex-1 overflow-y-auto">
         {panel === "status" && <StatusPage status={status} />}
-        {panel === "pairing" && <PairingPage />}
         {panel === "account" && <AccountPage />}
         {panel === "versions" && <VersionsPage activeVersion={status?.run?.dshVersion} />}
         {panel === "logs" && <LogsPage />}

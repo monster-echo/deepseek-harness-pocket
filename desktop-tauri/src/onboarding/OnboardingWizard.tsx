@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { Button } from "../components/ui";
 import {
@@ -27,6 +27,7 @@ export function OnboardingWizard({ reason, onFinished }: { reason?: string | nul
   const [adoptedSystem, setAdoptedSystem] = useState(false);
   const [busy, setBusy] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const accountWarm = useRef(false);
   const { latest, log } = useBootstrapProgress();
 
   const refreshStatus = useCallback(async () => {
@@ -65,17 +66,20 @@ export function OnboardingWizard({ reason, onFinished }: { reason?: string | nul
   const bridgeDone = Boolean(status?.bridge.installed && status?.bridge.satisfies);
   // 受管或全局 dsh 都算就绪（worker 启动时受管优先、全局兜底）
   const harnessDone = Boolean(status?.dshInstalled || status?.dshGlobal?.found);
+  // 登录是可选步骤：「稍后登录」跳过即可继续，控制台「账号」页可补登
+  const [accountSkipped, setAccountSkipped] = useState(false);
   const accountOk = preflight?.items.find((i) => i.id === "account")?.state === "pass";
+  const accountDone = accountOk || accountSkipped;
   const portOk = preflight?.items.find((i) => i.id === "port")?.state !== "fail";
 
   const firstUnmet = useMemo<StepId>(() => {
     if (!nodeDone) return "node";
     if (!bridgeDone) return "bridge";
     if (!harnessDone) return "harness";
-    if (!accountOk) return "account";
+    if (!accountDone) return "account";
     if (!portOk) return "done";
     return "done";
-  }, [nodeDone, bridgeDone, harnessDone, accountOk, portOk]);
+  }, [nodeDone, bridgeDone, harnessDone, accountDone, portOk]);
 
   const [step, setStep] = useState<StepId | null>(null);
   // 初始步：首次引导 → welcome 讲清楚要做什么；环境缺失重开 → 直达首个未满足项
@@ -98,7 +102,7 @@ export function OnboardingWizard({ reason, onFinished }: { reason?: string | nul
     (step === "node" && nodeDone) ||
     (step === "bridge" && bridgeDone) ||
     (step === "harness" && harnessDone) ||
-    (step === "account" && Boolean(accountOk));
+    (step === "account" && accountDone);
 
   const goNext = () => {
     if (stepIndex < STEP_ORDER.length - 1) setStep(STEP_ORDER[stepIndex + 1]!);
@@ -158,8 +162,22 @@ export function OnboardingWizard({ reason, onFinished }: { reason?: string | nul
         return (
           <HarnessStep status={status} progress={latest["dsh"]} onDone={() => void refreshStatus()} />
         );
-      case "account":
-        return <AccountStep onDone={() => void refreshPreflight()} />;
+      case "account": {
+        // 二维码依赖本机服务标识（Worker 首启生成）：进本步先静默拉起，出码即成功
+        if (!accountWarm.current) {
+          accountWarm.current = true;
+          void workerStart().catch(() => {});
+        }
+        return (
+          <AccountStep
+            onDone={() => void refreshPreflight()}
+            onSkip={() => {
+              setAccountSkipped(true);
+              goNext();
+            }}
+          />
+        );
+      }
       case "done":
         return (
           <DoneStep

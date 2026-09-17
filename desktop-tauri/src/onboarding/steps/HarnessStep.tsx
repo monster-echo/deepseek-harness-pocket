@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, RotateCw } from "lucide-react";
 import { Button } from "../../components/ui";
 import { installVersion, versionsAvailable, type BootstrapProgress, type BootstrapStatus } from "../../lib/worker";
-import { formatElapsed } from "../model";
+import { formatBytes, formatElapsed } from "../model";
 
 /**
  * DeepSeek Harness（dsh 运行时）：
@@ -66,6 +66,11 @@ export function HarnessStep({
       setBusy(false);
     }
   };
+
+  // 真实写入进度：轮询器报过字节才显示（>0），否则一律不画条
+  const received = progress?.received ?? 0;
+  const pct =
+    busy && received > 0 && progress?.total ? Math.min(99, Math.round((received / progress.total) * 100)) : null;
 
   // 已有即可用：受管或全局 dsh 都算（worker 启动时受管优先、全局兜底）
   if (installed || globalDsh) {
@@ -139,6 +144,24 @@ export function HarnessStep({
             <Loader2 className="size-3.5 animate-spin" />
             <span>依赖树较大（约 450 个包），通常 5–15 分钟{elapsed > 0 ? ` · 已进行 ${formatElapsed(elapsed)}` : ""}</span>
           </div>
+          {/* 只在拿到真实写入量时才画进度条（npm 非交互模式没有原生百分比，
+              目录写入体积是唯一可信信号；拿不到就不显示，宁缺毋滥） */}
+          {pct !== null ? (
+            <div className="mt-2">
+              <div className="flex items-center justify-between text-[11px] tabular text-muted-foreground">
+                <span>已写入</span>
+                <span>
+                  {formatBytes(progress?.received)} / 约 {formatBytes(progress?.total)}
+                </span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-border">
+                <div
+                  className="h-full rounded-full bg-primary transition-[width] duration-500"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          ) : null}
           {progress?.line ? (
             <p className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground" title={progress.line}>
               {progress.line}

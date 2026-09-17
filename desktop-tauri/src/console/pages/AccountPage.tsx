@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
-  Loader2, LogIn, LogOut, ShieldCheck, ShieldAlert, Globe, RefreshCw, RotateCw,
+  Loader2, LogOut, ShieldCheck, ShieldAlert, RefreshCw, RotateCw,
   Smartphone, ScanLine,
 } from "lucide-react";
 import {
   Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Dot, Field,
 } from "../../components/ui";
 import {
-  accountLogin, accountRefresh, accountSignOut, deviceLinkRevoke,
+  accountRefresh, accountSignOut, deviceLinkRevoke,
   jwtExpiry, readAccountSession, readDeviceLink,
   type AccountSessionInfo, type DeviceLinkInfo,
 } from "../../lib/worker";
@@ -19,18 +19,14 @@ import { Page, PageHeader } from "./PageHeader";
 /**
  * 账号页：掌鲸账号登录态（与手机 App 同一账号体系）。
  *
- * 两条登录路径：
- * - **手机扫码授权**（主，Telegram 同款）：未登录时显示二维码，手机 DSH Pocket
- *   扫码并确认后，gateway 把这台电脑绑定到手机账号，并给桌面端签发独立设备凭据
- *   （device-link.json）——手机会话不会被复制到电脑。
- * - **浏览器登录**（备选）：loopback OAuth，写 account-session.json；
- *   bridge 插件 uplink 会读它上送，同账号手机端免扫码即互联。
+ * 登录路径只有**手机扫码授权**（Telegram 同款）：未登录时显示二维码，手机
+ * DSH Pocket 扫码并确认后，gateway 把这台电脑绑定到手机账号，并给桌面端
+ * 签发独立设备凭据（device-link.json）——手机会话不会被复制到电脑。
  */
 export function AccountPage() {
   const [info, setInfo] = useState<AccountSessionInfo | null>(null);
   const [link, setLink] = useState<DeviceLinkInfo | null>(null);
   const [busy, setBusy] = useState(false);
-  const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [autoTried, setAutoTried] = useState(false);
@@ -55,21 +51,6 @@ export function AccountPage() {
     enabled: info !== null && !info.signedIn && link === null,
     onApproved: (l) => setLink(l),
   });
-
-  const onLogin = async () => {
-    setBusy(true);
-    setError(null);
-    setWaiting(true);
-    try {
-      const session = await accountLogin();
-      setInfo({ ...session, signedIn: true });
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-      setWaiting(false);
-    }
-  };
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -229,21 +210,6 @@ export function AccountPage() {
               ) : null}
             </div>
 
-            <div className="mt-4 flex items-center justify-center">
-              <Button variant="ghost" size="sm" onClick={() => void onLogin()} disabled={busy}>
-                {busy ? <Loader2 className="animate-spin" /> : <LogIn />}
-                在浏览器中登录
-              </Button>
-            </div>
-
-            {waiting ? (
-              <div className="mt-2 flex items-start gap-2 rounded-md bg-info-soft px-3 py-2">
-                <Globe className="mt-0.5 size-3.5 shrink-0 text-accent-soft-foreground" />
-                <p className="text-xs leading-relaxed text-accent-soft-foreground">
-                  已打开系统浏览器，请在其中完成登录。本机正在等待回调（最长 180 秒）。
-                </p>
-              </div>
-            ) : null}
             {error ? (
               <p className="mt-3 rounded-md bg-destructive-soft px-3 py-2 text-xs leading-relaxed text-hue-red">
                 {error}
@@ -329,15 +295,6 @@ export function AccountPage() {
               </Button>
             </div>
           </div>
-
-          {waiting ? (
-            <div className="mt-3 flex items-start gap-2 rounded-md bg-info-soft px-3 py-2">
-              <Globe className="mt-0.5 size-3.5 shrink-0 text-accent-soft-foreground" />
-              <p className="text-xs leading-relaxed text-accent-soft-foreground">
-                已打开系统浏览器，请在其中完成登录。本机正在等待回调（最长 180 秒）。
-              </p>
-            </div>
-          ) : null}
 
           {error ? (
             <p className="mt-3 rounded-md bg-destructive-soft px-3 py-2 text-xs leading-relaxed text-hue-red">

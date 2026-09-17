@@ -175,13 +175,11 @@ fn tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
     let open_main = MenuItemBuilder::with_id("open-main", "打开主界面").build(app)?;
     let console_status = MenuItemBuilder::with_id("console:status", "运行状态").build(app)?;
     let console_account = MenuItemBuilder::with_id("console:account", "账号").build(app)?;
-    let console_pairing = MenuItemBuilder::with_id("console:pairing", "配对").build(app)?;
     let console_versions = MenuItemBuilder::with_id("console:versions", "版本").build(app)?;
     let console_logs = MenuItemBuilder::with_id("console:logs", "日志").build(app)?;
     let console = SubmenuBuilder::new(app, "控制台")
         .item(&console_status)
         .item(&console_account)
-        .item(&console_pairing)
         .item(&console_versions)
         .item(&console_logs)
         .build()?;
@@ -343,8 +341,8 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R
         .build(app)?;
     let console = SubmenuBuilder::new(app, "控制台")
         .item(&MenuItem::with_id(app, "console:status", "运行状态", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "console:login", "扫码登录", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "console:account", "账号", true, None::<&str>)?)
-        .item(&MenuItem::with_id(app, "console:pairing", "配对", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "console:versions", "版本", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "console:logs", "日志", true, None::<&str>)?)
         .separator()
@@ -388,6 +386,8 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
             let _ = app.emit("open-onboarding", ());
         }
         "menu:settings" => open_console(app, "settings"),
+        // 未登录入口：打开控制台「账号」页（未登录即显示扫码二维码）
+        "console:login" => open_console(app, "account"),
         "menu:about" => {
             use tauri_plugin_dialog::DialogExt;
             let info = app.package_info();
@@ -477,12 +477,6 @@ fn dshc_start<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
 #[tauri::command]
 fn dshc_stop<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     run_dshc(&app, &["stop", "--json"])
-}
-
-#[tauri::command]
-fn dshc_qr<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
-    let text = run_dshc(&app, &["qr", "--json"])?;
-    serde_json::from_str(text.trim()).map_err(|e| format!("解析 qr 输出失败: {e}"))
 }
 
 /// 控制台内打开某个面板（前端主动调用）
@@ -1154,6 +1148,8 @@ const DSH_PACKAGE: &str = "@deepseek-ai/dsh";
 const DEFAULT_REGISTRY: &str = "https://registry.npmmirror.com";
 /// dsh 依赖树约 450 个包，npmmirror 下可能十几分钟
 const NPM_INSTALL_TIMEOUT_SECS: u64 = 30 * 60;
+/// dsh 运行时安装完成后的近似体积（进度条分母；实际值随版本浮动，封顶 99%）
+const DSH_ESTIMATED_BYTES: u64 = 48 * 1024 * 1024;
 
 /// 托管版本里 dsh 可执行文件的位置（npm 的 .bin 约定）
 fn managed_dsh_bin(version_dir: &std::path::Path) -> PathBuf {
@@ -1296,6 +1292,25 @@ async fn dsh_install_version<R: Runtime>(
                 "step": "dsh", "phase": "npm", "line": line,
             }));
         };
+        // npm 非交互模式没有原生百分比：轮询安装目录的实际写入体积做真实进度
+        // （reify 阶段目录持续增长，最终约 48MB；下载阶段计入 ~/.npm 缓存看不到，
+        //  但那只占小头）。UI 端按 received/total 画进度条。
+        let stop_poller = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let poller = {
+            let stop = std::sync::Arc::clone(&stop_poller);
+            let app = app.clone();
+            let dir = dir.clone();
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                    let bytes = dir_size(&dir);
+                    let _ = app.emit("bootstrap-progress", serde_json::json!({
+                        "step": "dsh", "phase": "npm",
+                        "received": bytes, "total": DSH_ESTIMATED_BYTES,
+                    }));
+                }
+            })
+        };
         let mut res = run_npm(&app, &base, Some(&dir), &reg, NPM_INSTALL_TIMEOUT_SECS, Some(&on_line))?;
 
         // npm 可能拿陈旧 registry 元数据报 ETARGET（新版本刚发布时常见），强刷重试一次
@@ -1304,6 +1319,8 @@ async fn dsh_install_version<R: Runtime>(
             retry.push("--prefer-online");
             res = run_npm(&app, &retry, Some(&dir), &reg, NPM_INSTALL_TIMEOUT_SECS, Some(&on_line))?;
         }
+        stop_poller.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = poller.join();
 
         if !res.success {
             let _ = std::fs::remove_dir_all(&dir); // 清半成品，避免被当成可用版本
@@ -1846,7 +1863,6 @@ pub fn run() {
             dshc_start,
             dshc_stop,
             dshc_resume,
-            dshc_qr,
             preflight_check,
             bootstrap_status,
             node_install,

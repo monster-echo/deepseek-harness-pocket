@@ -20,7 +20,9 @@ export function DoneStep({
   onStart: () => void;
   onRefresh: () => void;
 }) {
-  const hasFail = items.some((i) => i.state === "fail");
+  // 登录是可选项：账号未通过不阻塞「启动」（可稍后在控制台补登），其余失败才拦截
+  const blocked = items.some((i) => i.state === "fail" && i.id !== "account");
+  const accountPending = items.some((i) => i.id === "account" && i.state === "fail");
   const label: Record<PreflightItem["id"], string> = {
     node: "Node 运行时",
     bridge: "Worker 核心",
@@ -63,16 +65,23 @@ export function DoneStep({
         <PortStep onRetry={onRefresh} />
       ) : null}
 
-      {hasFail ? (
+      {blocked ? (
         <Button variant="outline" disabled={loading} onClick={onRefresh}>
           <Loader2 className={loading ? "animate-spin" : "hidden"} />
           重新自检
         </Button>
       ) : (
-        <Button disabled={loading || busy} onClick={onStart}>
-          {busy ? <Loader2 className="animate-spin" /> : <Play />}
-          {busy ? "正在启动…" : "启动 Harness"}
-        </Button>
+        <>
+          <Button disabled={loading || busy} onClick={onStart}>
+            {busy ? <Loader2 className="animate-spin" /> : <Play />}
+            {busy ? "正在启动…" : "启动 Harness"}
+          </Button>
+          {accountPending ? (
+            <p className="text-center text-[11px] leading-relaxed text-muted-foreground">
+              已跳过登录——启动后可在控制台「账号」页扫码补登，手机端即可远程使用。
+            </p>
+          ) : null}
+        </>
       )}
     </div>
   );

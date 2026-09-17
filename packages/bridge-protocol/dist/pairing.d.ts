@@ -1,45 +1,39 @@
 /**
- * 配对：Worker 与用户账号的绑定。
+ * Worker 配对二维码（`dshc qr` 打印，手机扫码）。
  *
- * 两种绑定方式（均经 gateway 向 Worker 挑战确认）：
- * 1. 二维码 payload（dshc 在终端打印 ASCII QR）
- * 2. 6 位配对码（扫码失败的手输兜底）
+ * 一个二维码要同时支持两条路径：
+ *   1. **同网直连**：手机与电脑在同一 WiFi 时，扫码后可直接用 `host:port`
+ *      走 `/mobile/ws`（pairingToken 鉴权），不依赖外网网关。
+ *   2. **账号绑定**：扫码后手机用 `code` 调 gateway 的 `pairing/bind`，
+ *      把该 Worker 绑到当前账号（之后 presence 里就能看到它）。
+ *
+ * 负载形态（URI，便于相机/系统分享一并识别）：
+ *   dshp://pair?code=123456&name=mac-mini&host=192.168.1.5&port=3780&token=pt_xxx&gw=wss%3A%2F%2F...
+ *
+ * `token` 可选：带 token 时手机可跳过 6 位码直接直连；`gw` 可选：非默认网关地址。
+ *
+ * 本包是**零 Node/DOM API** 的纯 TS（与全系统共享协议层一致），
+ * 所以这里不依赖 `URL` / `URLSearchParams`，自己解析这一个小 URI。
  */
-/** 二维码内容（JSON）。`v` 为 payload 版本，向前兼容。 */
-export interface PairingQrPayload {
-    readonly v: 1;
-    /** gateway WebSocket 基地址（wss://… 或 ws://…） */
-    readonly gatewayUrl: string;
-    /** 同网段直连地址（可选，app 优先尝试） */
-    readonly lanUrl?: string;
-    /** Worker 注册凭证（gateway 路由用，非用户凭证） */
-    readonly hostKey: string;
-    /** 端到端配对令牌（仅本次绑定有效，可 rotate） */
-    readonly token: string;
-    /** Worker 指纹（首次绑定时 app 展示给用户核对） */
-    readonly fingerprint: string;
-    /** 6 位配对码（与二维码同源，手输兜底） */
+export declare const PAIR_QR_SCHEME = "dshp";
+export declare const PAIR_QR_HOST = "pair";
+export interface PairQrPayload {
+    /** 6 位配对码（gateway pairing/bind 用） */
     readonly code: string;
-}
-export declare function parsePairingQrPayload(text: string): PairingQrPayload | null;
-/** 配对码格式校验（手输路径）。 */
-export declare function isValidPairingCode(code: string): boolean;
-/** app → gateway：发起配对绑定（携带掌鲸 DSH Pocket session，由 HTTP 层附加）。 */
-export interface PairingBindArgs {
-    /** 二选一 */
-    readonly qr?: PairingQrPayload;
-    readonly code?: string;
-    /** 用户为 Worker 命名（可选） */
+    /** Worker 展示名 */
     readonly name?: string;
+    /** 同网直连主机（局域网 IP 或 mDNS 名） */
+    readonly host?: string;
+    /** 直连端口（默认 3780） */
+    readonly port?: number;
+    /** 直连鉴权 token（bridge-state 的 pairingToken） */
+    readonly token?: string;
+    /** 非默认 gateway 地址（wss://...） */
+    readonly gatewayUrl?: string;
 }
-/** gateway → Worker（uplink）：挑战确认（防止 hostKey 泄露后被冒名绑定）。 */
-export interface PairingChallenge {
-    readonly challengeId: string;
-    readonly code: string;
-    readonly requestedBy: string;
-}
-export interface PairingChallengeResponse {
-    readonly challengeId: string;
-    readonly accepted: boolean;
-    readonly fingerprint: string;
-}
+/** 组装二维码负载（Worker 侧使用）。 */
+export declare function encodePairQr(payload: PairQrPayload): string;
+/** 解析扫码结果；不是配对二维码时返回 null（调用方忽略即可）。 */
+export declare function parsePairQr(text: string): PairQrPayload | null;
+/** 直连 WebSocket 地址（同网路径）；host 缺失时为 null。 */
+export declare function pairDirectWsUrl(payload: PairQrPayload): string | null;

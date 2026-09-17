@@ -8,12 +8,13 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { cpus, homedir, hostname, release, totalmem, type as osType } from 'node:os'
 import { resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   parseGatewayToWorkerFrame,
   type GatewayToWorkerFrame,
+  type WorkerHostInfo,
   type WorkerToGatewayFrame,
 } from '@deepseek-harness-pocket/bridge-protocol'
 import { WebSocket } from 'ws'
@@ -33,6 +34,48 @@ export interface UplinkOptions {
   /** 直接注入的账号 token（优先于会话文件；e2e/测试用） */
   readonly accountToken?: string
   readonly onNotify?: (signal: WorkerToGatewayFrame & { kind: 'notify' }) => void
+}
+
+/**
+ * 采集机器静态信息（每次注册调用一次；失败字段留空，不阻塞注册）。
+ *
+ * 手机端「选择 Worker / Worker 详情」用 `macOS 14.6 · 8 核 16GB` 这类文案，
+ * 这些事实只有 Worker 本机知道，必须随 worker-register 上送。
+ */
+export function collectHostInfo(dshVersion: string | null): WorkerHostInfo {
+  const info: {
+    hostname?: string
+    osVersion?: string
+    cpuCores?: number
+    memoryBytes?: number
+    runtimeVersion?: string
+  } = {}
+  try {
+    const name = hostname()
+    if (name.length > 0) info.hostname = name
+  } catch {
+    /* 忽略：某些沙箱里 hostname() 会抛 */
+  }
+  try {
+    const pretty = `${osType()} ${release()}`
+    if (pretty.trim().length > 0) info.osVersion = pretty
+  } catch {
+    /* 同上 */
+  }
+  try {
+    const cores = cpus().length
+    if (cores > 0) info.cpuCores = cores
+  } catch {
+    /* 同上 */
+  }
+  try {
+    const bytes = totalmem()
+    if (bytes > 0) info.memoryBytes = bytes
+  } catch {
+    /* 同上 */
+  }
+  if (dshVersion !== null && dshVersion.length > 0) info.runtimeVersion = dshVersion
+  return info
 }
 
 /** 读取账号 session token（每次连接调用，保持桌面端刷新后取到新值）；不可用返回 null。 */
@@ -83,6 +126,7 @@ export function startUplink(ctx: Context, opts: UplinkOptions): () => void {
         name: opts.workerName,
         hostFingerprint: opts.fingerprint,
         dshVersion: opts.dshVersion,
+        host: collectHostInfo(opts.dshVersion),
         ...(accountToken ? { accountToken } : {}),
       })
       pingTimer = setInterval(() => {

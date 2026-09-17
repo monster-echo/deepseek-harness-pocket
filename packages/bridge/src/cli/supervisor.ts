@@ -326,7 +326,7 @@ export async function supervise(
     rmSync(`${dshcDir()}/${STOP_FLAG}`, { force: true })
     log(`spawning ${dshBin} ${args.join(' ')}`)
     process.stdout.write(`[dshc] starting: ${dshBin} ${args.join(' ')}\n`)
-    child = spawn(dshBin, [...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    child = spawn(dshBin, [...args], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     const startedAt = Date.now()
     // URL 行可能被 chunk 边界截断：跨 chunk 缓冲，只对完整行做匹配
     let lineBuffer = ''
@@ -392,6 +392,7 @@ export function detachSpawn(extraArgs: readonly string[]): number {
   const child = spawn(process.execPath, [selfBin(), 'start', ...extraArgs], {
     detached: true,
     stdio: ['ignore', 'ignore', 'ignore'],
+    windowsHide: true,
   })
   child.unref()
   return child.pid ?? -1

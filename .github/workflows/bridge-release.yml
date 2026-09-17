@@ -1,0 +1,88 @@
+name: bridge-release
+
+# Bridge（dshc）发布：打 tag `bridge-v<版本>` 触发（或手动 dispatch）。
+# 产物：npm 公共包 @deepseek-harness-pocket/bridge——桌面端「去 sidecar 化」后，
+# worker CLI 不再打进安装包，首次引导时由 App 从 npm 安装。
+#
+# 需要：GitHub Secret NPM_TOKEN（有 @deepseek-harness-pocket scope 发布权的
+# automation token；2FA 账号必须用 granular/automation token 才能 CI 发布）。
+# 国内 npmmirror 自动同步 npmjs（通常几分钟）；App 侧安装带 --prefer-online
+# 并做最低版本校验，同步延迟时提示重试。
+
+on:
+  push:
+    tags: ['bridge-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 0.1.1，需与 packages/bridge/package.json 一致）'
+        required: true
+
+concurrency:
+  group: bridge-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  publish:
+    name: 测试 + 构建 + 发 npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#bridge-v}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version consistency
+        run: |
+          PKG="$(node -p "require('./packages/bridge/package.json').version")"
+          if [ "$PKG" != "${{ steps.ver.outputs.version }}" ]; then
+            echo "::error::tag 版本(${{ steps.ver.outputs.version }}) 与 packages/bridge/package.json 版本($PKG) 不一致"
+            exit 1
+          fi
+
+      - name: Test
+        run: |
+          pnpm --filter @deepseek-harness-pocket/bridge-protocol build
+          pnpm --filter @deepseek-harness-pocket/bridge test
+          pnpm --filter @deepseek-harness-pocket/bridge typecheck
+
+      - name: Build
+        run: pnpm --filter @deepseek-harness-pocket/bridge build
+
+      - name: Publish
+        working-directory: packages/bridge
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish --access public --no-git-checks
+
+      - name: 汇总
+        run: |
+          {
+            echo "### @deepseek-harness-pocket/bridge ${{ steps.ver.outputs.version }}"
+            echo ""
+            echo "- npm: https://www.npmjs.com/package/@deepseek-harness-pocket/bridge"
+            echo "- npmmirror 同步: https://npmmirror.com/package/@deepseek-harness-pocket/bridge"
+          } >> "$GITHUB_STEP_SUMMARY"

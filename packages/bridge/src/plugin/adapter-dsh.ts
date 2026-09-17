@@ -227,7 +227,9 @@ export interface DshAdapter {
 
 interface LiveSessionLike {
   readonly id: { toString(): string }
-  readonly seq: number
+  readonly seq?: number
+  readonly events?: readonly unknown[]
+  readonly surface?: { readonly events?: readonly unknown[] }
   readonly header: {
     createdAt: number
     cwd?: string
@@ -236,11 +238,101 @@ interface LiveSessionLike {
     origin?: unknown
     delegationDepth?: unknown
   }
+}
+
+/**
+ * 会话投影服务（与 web `session.list` 同源）：
+ *   - 在线会话：`sessionProjections.snapshot(session)`
+ *   - 冷会话（仅持久化）：`sessionProjectionCache.cachedSnapshot(meta, inheritedEventCount)`
+ * 列表页需要的 `title` / `sessionListMetadata{blank,lastPromptAt}` 都在这里面，
+ * 这样手机端的标题、时间与 DSH Web / DSH Pocket 保持一致（此前只读 header，
+ * 标题恒为空 → 界面回退成工作区名）。
+ */
+/**
+ * 会话观察（`ctx.sessionQuery.observeSession`）：web 读转录用的同一条通道，
+ * 对**在线会话与冷会话都适用**，一次给出 header/events/cursor，且是 Disposable。
+ */
+interface SessionObservationLike {
   readonly events: readonly unknown[]
+  readonly cursor?: number
+}
+
+interface SessionQueryLike {
+  observeSession(
+    sessionId: unknown,
+    options?: { readonly projectionMode?: 'all' | 'none' },
+  ): Promise<SessionObservationLike>
+}
+
+/** 释放观察租约（Symbol.dispose；缺失时静默跳过）。 */
+function disposeObservation(observation: unknown): void {
+  if (observation === null || observation === undefined) return
+  const symbol = (Symbol as unknown as { dispose?: symbol }).dispose
+  if (symbol === undefined) return
+  const disposer = (observation as Record<symbol, unknown>)[symbol]
+  if (typeof disposer === 'function') {
+    try {
+      ;(disposer as () => void).call(observation)
+    } catch {
+      // 释放失败不影响已读取的历史
+    }
+  }
+}
+
+interface ProjectionSnapshotLike {
+  readonly values?: Record<string, unknown>
+}
+
+interface ProjectionCacheLike {
+  cachedSnapshot(
+    meta: unknown,
+    inheritedEventCount: number,
+    keys?: readonly string[],
+  ): ProjectionSnapshotLike | undefined
+}
+
+interface ProjectionRegistryLike {
+  snapshot(session: unknown, keys?: readonly string[]): ProjectionSnapshotLike | undefined
+}
+
+/** 列表页只取这两个投影键，避免整份投影（todos/goal/…) 白读。 */
+const LIST_PROJECTION_KEYS: readonly string[] = ['title', 'sessionListMetadata']
+
+/**
+ * 从投影 values 归一化出列表字段。
+ * `blank` 与 web 一致：还没有跑过回合的空会话不进列表（前端复用为「新会话」）。
+ */
+function listFieldsOf(values: Record<string, unknown> | undefined): {
+  title: string | null
+  blank: boolean
+  lastPromptAt: number | null
+} {
+  const raw = values ?? {}
+  const rawTitle = raw['title']
+  const meta = raw['sessionListMetadata'] as { blank?: unknown; lastPromptAt?: unknown } | undefined
+  return {
+    title: typeof rawTitle === 'string' && rawTitle.length > 0 ? rawTitle : null,
+    blank: meta?.blank === true,
+    lastPromptAt: typeof meta?.lastPromptAt === 'number' ? meta.lastPromptAt : null,
+  }
+}
+
+/** dsh jsonl 持久化的 list() 返回快照（header 内嵌）；旧扁平形态一并兼容。 */
+type PersistenceListRow = {
+  readonly header?: {
+    readonly id: { toString(): string }
+    readonly createdAt: number
+    readonly cwd?: string
+    readonly lastSeq?: number
+  }
+  readonly id?: { toString(): string }
+  readonly createdAt?: number
+  readonly cwd?: string
+  readonly lastSeq?: number
 }
 
 interface PersistenceLike {
-  list(): Promise<readonly { id: { toString(): string }; createdAt: number; cwd?: string; lastSeq?: number }[]>
+  list(): Promise<readonly PersistenceListRow[]>
   readFrom(id: unknown, fromSeq: number, signal?: AbortSignal): Promise<{ meta: unknown; events: readonly unknown[] }>
 }
 
@@ -323,10 +415,30 @@ export function approvalDetailFromEvents(
 }
 
 /** 从 ctx 取会话事件（持久/实时），失败返回空数组。 */
+/**
+ * 读取 live Session 的事件数组。
+ *
+ * dsh 0.1.5 的 `Session` 只公开 `header` / `id` / `seq` / `surface`，
+ * 不再有 `events` 字段（旧版 bridge 直接读 s.events，会 `undefined.length` 崩掉，
+ * 表现为手机端会话列表整个报 internal error）。这里做兼容读取：
+ * 旧字段 → 新 surface 上的 events → 空数组。
+ */
+export function liveEventsOf(session: {
+  readonly events?: readonly unknown[]
+  readonly surface?: { readonly events?: readonly unknown[] }
+}): readonly unknown[] {
+  if (Array.isArray(session.events)) return session.events
+  const viaSurface = session.surface?.events
+  if (Array.isArray(viaSurface)) return viaSurface
+  return []
+}
+
 function sessionEventsOf(ctx: Context, sessionId: string): readonly unknown[] {
   try {
-    const session = ctx.sessions.get(sessionId as never) as { events?: readonly unknown[] } | undefined
-    return session?.events ?? []
+    const session = ctx.sessions.get(sessionId as never) as
+      | { events?: readonly unknown[]; surface?: { events?: readonly unknown[] } }
+      | undefined
+    return session === undefined ? [] : liveEventsOf(session)
   } catch {
     return []
   }
@@ -524,6 +636,9 @@ function toEvent(raw: unknown): DshSessionEvent {
 
 export function createAdapter(ctx: Context): DshAdapter {
   const persistence = () => ctx.get('sessionPersistence') as PersistenceLike | undefined
+  const projectionCache = () => ctx.get('sessionProjectionCache') as ProjectionCacheLike | undefined
+  const sessionQuery = () => ctx.get('sessionQuery') as SessionQueryLike | undefined
+  const projectionRegistry = () => ctx.get('sessionProjections') as ProjectionRegistryLike | undefined
   const agents = () => ctx.get('agents') as AgentRegistryLike | undefined
   const presets = () => ctx.get('agentPresets') as AgentPresetsLike | undefined
 
@@ -553,8 +668,9 @@ export function createAdapter(ctx: Context): DshAdapter {
     const live = ctx.sessions.get(id as SessionId) as LiveSessionLike | undefined
     if (live !== undefined) {
       if (live.header.agentPreset !== undefined) return live.header.agentPreset
-      for (let i = live.events.length - 1; i >= 0; i -= 1) {
-        const e = live.events[i] as { type?: string; data?: { agentPreset?: string } }
+      const liveEvents = liveEventsOf(live)
+      for (let i = liveEvents.length - 1; i >= 0; i -= 1) {
+        const e = liveEvents[i] as { type?: string; data?: { agentPreset?: string } }
         if (e.type === 'agent-preset/selected' && typeof e.data?.agentPreset === 'string') return e.data.agentPreset
       }
       return undefined
@@ -669,16 +785,46 @@ export function createAdapter(ctx: Context): DshAdapter {
       const per = persistence()
       if (per) {
         try {
-          const headers = await per.list()
-          for (const h of headers) {
+          const rows = await per.list()
+          for (const row of rows) {
+            // dsh jsonl list() 返回 { header: { id, createdAt, cwd, lastSeq… } }；
+            // 直接按扁平形态读会 undefined.toString() 崩掉，整表被 catch 吞成只剩 live。
+            const h = row.header ?? {
+              id: row.id,
+              createdAt: row.createdAt,
+              cwd: row.cwd,
+              lastSeq: row.lastSeq,
+            }
+            if (h === undefined || h.id === undefined || typeof h.createdAt !== 'number') continue
             const id = h.id.toString()
+            // 冷会话：从投影缓存读标题与「最后一次人提问」时间（与 web 完全相同的数据源）
+            let title: string | null = null
+            let updatedAt: number | undefined
+            let blank = false
+            const cache = projectionCache()
+            if (cache !== undefined) {
+              try {
+                const inheritedRaw = (h as unknown as { inheritedEventCount?: unknown }).inheritedEventCount
+                const inherited = typeof inheritedRaw === 'number' ? inheritedRaw : 0
+                const snapshot = cache.cachedSnapshot(h, inherited, LIST_PROJECTION_KEYS)
+                const fields = listFieldsOf(snapshot?.values)
+                title = fields.title
+                blank = fields.blank
+                if (fields.lastPromptAt !== null) {
+                  updatedAt = Math.max(h.createdAt, fields.lastPromptAt)
+                }
+              } catch {
+                // 投影缓存缺失/损坏只影响标题与时间，不影响列表本身
+              }
+            }
+            if (blank) continue
             summaries.set(id, toSummary(
               id,
               h.createdAt,
               h.cwd,
               h.lastSeq ?? -1,
-              lastActivityById.get(id),
-              null,
+              updatedAt ?? lastActivityById.get(id),
+              title,
               {
                 parentSession: (h as { parentSession?: unknown }).parentSession,
                 origin: (h as { origin?: unknown }).origin,
@@ -687,23 +833,58 @@ export function createAdapter(ctx: Context): DshAdapter {
               },
             ))
           }
-        } catch {
-          // 持久化后端不可用时仅返回 live
+        } catch (error) {
+          // 持久化后端不可用时仅返回 live；console.error 会经 supervisor 进 dshc.log（dsh| 前缀）
+          console.error(
+            `[bridge] sessionPersistence.list() failed:`,
+            error instanceof Error ? error.stack ?? error.message : String(error),
+          )
         }
       }
+      // live 会话只补「磁盘上还没有的」活动与标题：事件数组在 dsh 0.1.5 的
+      // Session 上不再公开（旧字段 s.events 已移除），所以这里对每个 session
+      // 做防御式读取——取不到就退回 header 信息，绝不让单个条目把整个列表打挂。
       const live = ctx.sessions.list() as readonly LiveSessionLike[]
       for (const s of live) {
-        const id = s.id.toString()
-        const tail = s.events[s.events.length - 1]
-        summaries.set(id, toSummary(
-          id,
-          s.header.createdAt,
-          s.header.cwd,
-          s.seq - 1,
-          lastActivityById.get(id) ?? eventTimeOf(tail),
-          extractTitle(s.events),
-          s.header,
-        ))
+        try {
+          const id = s.id.toString()
+          const events = liveEventsOf(s)
+          const tail = events[events.length - 1]
+          let title: string | null = null
+          let updatedAt: number | undefined
+          let blank = false
+          const registry = projectionRegistry()
+          if (registry !== undefined) {
+            try {
+              const snapshot = registry.snapshot(s, LIST_PROJECTION_KEYS)
+              const fields = listFieldsOf(snapshot?.values)
+              title = fields.title
+              blank = fields.blank
+              if (fields.lastPromptAt !== null) {
+                updatedAt = Math.max(s.header.createdAt, fields.lastPromptAt)
+              }
+            } catch {
+              // 注册表读取失败时退回事件扫描
+            }
+          }
+          if (title === null && events.length > 0) title = extractTitle(events)
+          if (blank) continue
+          summaries.set(id, toSummary(
+            id,
+            s.header.createdAt,
+            s.header.cwd,
+            typeof s.seq === 'number' ? s.seq - 1 : -1,
+            updatedAt ?? lastActivityById.get(id) ?? eventTimeOf(tail),
+            title,
+            s.header,
+          ))
+        } catch (error) {
+          ctx.logger?.warn?.(
+            `deepseek-harness-pocket bridge: 跳过 1 个 live 会话（listSessions）: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+        }
       }
       return [...summaries.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt)
     },
@@ -1244,10 +1425,38 @@ export function createAdapter(ctx: Context): DshAdapter {
     },
 
     async readSlice(id, fromSeq) {
+      const from = Math.max(0, fromSeq)
+      // 权威读法（与 web 转录读取同源）：observeSession 对在线/冷会话都成立。
+      // 旧实现读 Session.events —— 该字段在 dsh 0.1.5 已不公开，会让历史变空。
+      const query = sessionQuery()
+      if (query !== undefined) {
+        let observation: SessionObservationLike | undefined
+        try {
+          observation = await query.observeSession(id as never, { projectionMode: 'none' })
+          const all = observation.events
+          const slice = all.slice(from).map(toEvent)
+          const last = slice[slice.length - 1]
+          const cursor = typeof observation.cursor === 'number'
+            ? observation.cursor
+            : ((all[all.length - 1] as { seq?: number } | undefined)?.seq ?? -1)
+          return {
+            id,
+            fromSeq: from,
+            toSeq: typeof last?.seq === 'number' ? last.seq : cursor,
+            events: slice,
+          }
+        } catch {
+          // 观察失败 → 交给下面的 live / 持久化兜底
+        } finally {
+          disposeObservation(observation)
+        }
+      }
       const live = ctx.sessions.get(id as SessionId) as LiveSessionLike | undefined
       if (live) {
-        const slice = live.events.slice(Math.max(0, fromSeq)).map(toEvent)
-        return { id, fromSeq: Math.max(0, fromSeq), toSeq: live.seq - 1, events: slice }
+        const events = liveEventsOf(live)
+        const slice = events.slice(Math.max(0, fromSeq)).map(toEvent)
+        const lastSeq = typeof live.seq === 'number' ? live.seq - 1 : fromSeq - 1
+        return { id, fromSeq: Math.max(0, fromSeq), toSeq: lastSeq, events: slice }
       }
       const per = persistence()
       if (!per) return null
@@ -1277,19 +1486,37 @@ export function createAdapter(ctx: Context): DshAdapter {
       if (live) cwd = live.header.cwd
       const agentPreset = await presetOfSession(id)
       const composed = await composePreset(agentPreset)
-      // resume/挂 agent 到已有 session（agents.create 的 prepare 会加载已有 session）
-      await (registry as unknown as {
+      const perOptions = {
+        agentOptions: { provider: route.provider, model: route.model },
+        ...(composed.setup !== undefined ? { setup: composed.setup } : {}),
+      }
+      const registryLike = registry as unknown as {
+        resume?(options: {
+          resumeSessionId: string
+          agentOptions: { provider: string; model: string }
+          setup?: (agentCtx: unknown) => Promise<void>
+        }): Promise<unknown>
         create(options: {
           sessionId: string
           meta: { cwd?: string; agentPreset?: string }
           agentOptions: { provider: string; model: string }
           setup?: (agentCtx: unknown) => Promise<void>
         }): Promise<unknown>
-      }).create({
+      }
+      // 已存在的持久化会话必须走 `agents.resume`：`create` 是「新建会话」语义
+      // （会持久化新身份，撞 SessionAlreadyExists 而失败）——手机点开历史会话走的就是这里。
+      if (typeof registryLike.resume === 'function') {
+        try {
+          await registryLike.resume({ resumeSessionId: id, ...perOptions })
+          return
+        } catch {
+          // 不在持久化里（例如刚建尚未落盘）→ 退回 create
+        }
+      }
+      await registryLike.create({
         sessionId: id,
         meta: cwd !== undefined ? { cwd } : {},
-        agentOptions: { provider: route.provider, model: route.model },
-        ...(composed.setup !== undefined ? { setup: composed.setup } : {}),
+        ...perOptions,
       })
     },
 

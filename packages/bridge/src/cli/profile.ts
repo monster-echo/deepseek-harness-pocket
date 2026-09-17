@@ -143,6 +143,7 @@ export function installBridgePackage(dir: string, dshBin: string, packageRootPat
   const spec = process.platform === 'win32' ? packageRootPath : `file:${packageRootPath}`
   const result = spawnSync(dshBin, ['plugin', '--profile', COMPANION_PROFILE, 'add', spec], {
     stdio: 'inherit',
+    windowsHide: true,
   })
   if (result.status !== 0) {
     throw new Error(`dsh plugin add 失败（exit ${result.status}）`)

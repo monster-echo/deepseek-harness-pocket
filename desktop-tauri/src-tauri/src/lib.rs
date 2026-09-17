@@ -88,6 +88,19 @@ fn sidecar<R: Runtime>(app: &AppHandle<R>) -> Result<Sidecar, String> {
 
 // ──────────────────── dshc 进程调用 ─────────────────────
 
+/// Windows 上 GUI 程序 spawn console 子系统程序（node.exe）会闪控制台黑框，
+/// 一律压掉（0x0800_0000 = CREATE_NO_WINDOW）。非 Windows 无操作。
+#[cfg(windows)]
+fn no_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    // 独立常量避免为这一个标志引入 winapi 依赖
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn no_window(_cmd: &mut Command) {}
+
 /// 以内置 node 运行 dshc CLI，返回 stdout。
 /// 与 Flutter 端 `Proc.dshc` 等价：nodeBin 前置到 PATH（dshc 内部依赖解析用）。
 fn run_dshc<R: Runtime>(app: &AppHandle<R>, args: &[&str]) -> Result<String, String> {
@@ -102,7 +115,9 @@ fn run_dshc<R: Runtime>(app: &AppHandle<R>, args: &[&str]) -> Result<String, Str
     )
     .map_err(|e| format!("PATH 组装失败: {e}"))?;
 
-    let out = Command::new(&sc.node)
+    let mut cmd = Command::new(&sc.node);
+    no_window(&mut cmd);
+    let out = cmd
         .arg(&sc.cli)
         .args(args)
         .env("PATH", path_env)
@@ -1140,6 +1155,7 @@ fn run_npm<R: Runtime>(
     .map_err(|e| format!("PATH 组装失败: {e}"))?;
 
     let mut cmd = Command::new(&sc.node);
+    no_window(&mut cmd);
     cmd.arg(&cli).args(args).env("PATH", path_env);
     if !registry.is_empty() {
         cmd.arg("--registry").arg(registry);

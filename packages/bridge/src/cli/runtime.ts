@@ -13,7 +13,7 @@ export function resolveDshBin(explicit?: string): string {
   }
   const fromEnv = process.env['DSH_BIN']
   if (fromEnv !== undefined && fromEnv.length > 0 && existsSync(fromEnv)) return fromEnv
-  const probe = spawnSync('dsh', ['--version'], { stdio: 'ignore' })
+  const probe = spawnSync('dsh', ['--version'], { stdio: 'ignore', windowsHide: true })
   if (probe.error === undefined) return 'dsh'
   throw new Error(
     '找不到 dsh。安装 Node.js 后运行 `npm i -g @deepseek-ai/dsh`，或用 --dsh <路径> / $DSH_BIN 指定。',

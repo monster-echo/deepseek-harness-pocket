@@ -33,6 +33,24 @@ export interface DeviceRow {
   readonly last_seen_at: Date
 }
 
+/** 桌面端「手机扫码授权登录」链接码（002_device_links.sql）。 */
+export interface DeviceLinkRow {
+  readonly code: string
+  readonly secret_hash: string
+  readonly host_key: string
+  readonly name: string
+  readonly platform: string
+  readonly status: string
+  readonly user_id: string | null
+  readonly email: string | null
+  readonly worker_id: string | null
+  /** 申请方（桌面端）的来源 IP：手机确认时展示，便于判断是不是自己的电脑。 */
+  readonly start_ip: string
+  readonly created_at: Date
+  readonly expires_at: Date
+  readonly approved_at: Date | null
+}
+
 export interface Store {
   pool: Pool
   upsertWorker(w: { id: string; hostKey: string; name: string; fingerprint: string; dshVersion: string | null; pairingCode: string }): Promise<void>
@@ -50,6 +68,30 @@ export interface Store {
 
   upsertDevice(d: { userId: string; deviceKey: string; platform: string; expoPushToken: string | null }): Promise<void>
   listPushTokens(userId: string): Promise<string[]>
+
+  /** 建一次性链接码（桌面端申请；同一 hostKey 的旧 pending 行先清掉）。 */
+  createDeviceLink(l: {
+    code: string
+    secretHash: string
+    hostKey: string
+    name: string
+    platform: string
+    startIp: string
+    ttlMs: number
+  }): Promise<void>
+  getDeviceLink(code: string): Promise<DeviceLinkRow | null>
+  getDeviceLinkBySecretHash(secretHash: string): Promise<DeviceLinkRow | null>
+  /** 手机确认：置 approved 并把有效期拉长为设备凭据有效期。 */
+  approveDeviceLink(o: {
+    code: string
+    userId: string
+    email: string | null
+    workerId: string
+    ttlMs: number
+  }): Promise<void>
+  deleteDeviceLink(code: string): Promise<void>
+  /** 清理过期行（start/poll 时顺手调用，避免无限增长）。 */
+  purgeExpiredDeviceLinks(): Promise<number>
 
   recordUsage(e: { userId: string | null; workerId: string | null; kind: string; meta?: Record<string, unknown> }): Promise<void>
   /** 今日（DB 时区）该用户已中转的作品预览字节（kind='preview-bytes' 聚合） */
@@ -157,6 +199,57 @@ export function createStore(databaseUrl: string): Store {
         [userId],
       )
       return rows.map((r) => r.expo_push_token).filter((t): t is string => t !== null)
+    },
+
+    async createDeviceLink(l) {
+      // 同一台电脑只保留最新一个待确认链接：旧码作废，避免桌面端重复点「重新生成」堆积
+      await pool.query(
+        `delete from device_links where host_key = $1 and status = 'pending'`,
+        [l.hostKey],
+      )
+      await pool.query(
+        `insert into device_links (code, secret_hash, host_key, name, platform, start_ip, status, expires_at)
+         values ($1, $2, $3, $4, $5, $6, 'pending', now() + ($7::bigint * interval '1 millisecond'))`,
+        [l.code, l.secretHash, l.hostKey, l.name, l.platform, l.startIp, String(l.ttlMs)],
+      )
+    },
+
+    async getDeviceLink(code) {
+      const { rows } = await pool.query<DeviceLinkRow>(
+        'select * from device_links where code = $1 limit 1',
+        [code],
+      )
+      return rows[0] ?? null
+    },
+
+    async getDeviceLinkBySecretHash(secretHash) {
+      const { rows } = await pool.query<DeviceLinkRow>(
+        `select * from device_links
+         where secret_hash = $1 and status = 'approved' and expires_at > now()
+         limit 1`,
+        [secretHash],
+      )
+      return rows[0] ?? null
+    },
+
+    async approveDeviceLink(o) {
+      await pool.query(
+        `update device_links
+         set status = 'approved', user_id = $2, email = $3, worker_id = $4,
+             approved_at = now(),
+             expires_at = now() + ($5::bigint * interval '1 millisecond')
+         where code = $1`,
+        [o.code, o.userId, o.email, o.workerId, String(o.ttlMs)],
+      )
+    },
+
+    async deleteDeviceLink(code) {
+      await pool.query('delete from device_links where code = $1', [code])
+    },
+
+    async purgeExpiredDeviceLinks() {
+      const { rowCount } = await pool.query('delete from device_links where expires_at < now()')
+      return rowCount ?? 0
     },
 
     async recordUsage(e) {

@@ -1,6 +1,10 @@
 services:
   gateway:
-    image: deepseek-harness-pocket/gateway:0.1.0
+    # 镜像由 CI 发布（.github/workflows/gateway-release.yml，打 tag gateway-v<版本>）。
+    # 升级方式（推荐写进 .env，重启也能保持）：
+    #   echo 'GATEWAY_IMAGE=ghcr.io/monster-echo/deepseek-harness-pocket/gateway:0.1.1' >> .env
+    #   docker compose pull gateway && docker compose up -d gateway
+    image: ${GATEWAY_IMAGE:-deepseek-harness-pocket/gateway:0.1.0}
     container_name: dsh-gateway
     restart: unless-stopped
     env_file: .env

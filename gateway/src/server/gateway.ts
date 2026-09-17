@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   parseGatewayToPhoneFrame,
+  type WorkerHostInfo,
   type WorkerPresence,
 } from '@deepseek-harness-pocket/bridge-protocol'
 import type { GatewayToPhoneFrame, GatewayToWorkerFrame, WorkerToGatewayFrame } from '@deepseek-harness-pocket/bridge-protocol'
@@ -26,6 +27,8 @@ interface WorkerConn {
   name: string
   fingerprint: string
   dshVersion: string | null
+  /** 机器静态信息（注册帧上送；旧版插件为 null）。只活在内存里：离线即无意义 */
+  host: WorkerHostInfo | null
   alive: boolean
 }
 
@@ -99,6 +102,7 @@ export class Gateway {
       name: '',
       fingerprint: '',
       dshVersion: null,
+      host: null,
       alive: true,
     }
     const id = `wk${++this.seq}`
@@ -159,6 +163,7 @@ export class Gateway {
         conn.name = frame.name
         conn.fingerprint = frame.hostFingerprint
         conn.dshVersion = frame.dshVersion
+        conn.host = frame.host ?? null
         this.workerByHostKey.set(frame.hostKey, id)
         // 账号自动绑定：Worker 携带有效 session token 时把 Worker 绑到该账号，
         // 同账号手机端无需扫码配对。用户曾在手机端解绑（revoked 墓碑存在）时不复活。
@@ -474,6 +479,7 @@ export class Gateway {
           conn !== undefined
             ? { dshVersion: conn.dshVersion, protocolVersion: 'mobile/v1' }
             : null,
+        host: conn?.host ?? null,
       })
     }
     return result.sort((a, b) => Number(b.online) - Number(a.online) || b.lastSeenAt - a.lastSeenAt)

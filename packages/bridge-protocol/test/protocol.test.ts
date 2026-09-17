@@ -15,6 +15,13 @@ import { parseSessionSearchHits } from '../src/search.js'
 import { parseSkills } from '../src/skills.js'
 import { parseCredentialRecords, parseSettingsSections, parseSettingsUpdateOutcome } from '../src/settings.js'
 import { parsePresets } from '../src/presets.js'
+import {
+  buildDeviceLinkCredential,
+  buildDeviceLinkQr,
+  isDeviceLinkCode,
+  parseDeviceLinkCredential,
+  parseDeviceLinkQr,
+} from '../src/device-link.js'
 
 describe('version', () => {
   it('解析与比较协议版本', () => {
@@ -465,5 +472,58 @@ describe('agent presets', () => {
 
   it('非数组返回 null', () => {
     expect(parsePresets({})).toBeNull()
+  })
+})
+
+describe('扫码登录负载（device-link）', () => {
+  it('生成与解析往返一致，且与桌面端 Dart 侧 golden 相同', () => {
+    const qr = buildDeviceLinkQr({
+      code: 'ABCD2345',
+      name: 'Mac mini',
+      platform: 'darwin',
+      gateway: 'https://dsh-pocket.zhongbei.tech',
+    })
+    // 桌面端 test/device_link_test.dart 断言同一串（两侧格式必须一致）
+    expect(qr).toBe(
+      'dshp://link?v=1&c=ABCD2345&h=Mac%20mini&p=darwin&gw=https%3A%2F%2Fdsh-pocket.zhongbei.tech',
+    )
+    expect(parseDeviceLinkQr(qr)).toEqual({
+      v: 1,
+      code: 'ABCD2345',
+      name: 'Mac mini',
+      platform: 'darwin',
+      gateway: 'https://dsh-pocket.zhongbei.tech',
+    })
+    expect(buildDeviceLinkQr({ code: 'ABCD2345' })).toBe('dshp://link?v=1&c=ABCD2345')
+  })
+
+  it('不会把配对码误判为授权码，反之亦然', () => {
+    expect(parseDeviceLinkQr('dshp://pair?code=123456')).toBeNull()
+    expect(parseDeviceLinkQr('https://example.com/link?c=ABCD2345')).toBeNull()
+    expect(parseDeviceLinkQr('dshp://link?v=1&c=SHORT')).toBeNull()
+    // 含易混字符（I/O/0/1）的码不是合法码
+    expect(parseDeviceLinkQr('dshp://link?v=1&c=ABCD2301')).toBeNull()
+  })
+
+  it('小写码归一为大写，容忍首尾空白', () => {
+    expect(parseDeviceLinkQr('  dshp://link?v=1&c=abcd2345  ')?.code).toBe('ABCD2345')
+  })
+
+  it('链接码格式校验', () => {
+    expect(isDeviceLinkCode('ABCD2345')).toBe(true)
+    expect(isDeviceLinkCode('ABCD234')).toBe(false)
+    expect(isDeviceLinkCode('ABCD23456')).toBe(false)
+    expect(isDeviceLinkCode('ABCD234O')).toBe(false)
+  })
+
+  it('设备凭据拼装与拆解', () => {
+    expect(buildDeviceLinkCredential('ABCD2345', 'deadbeef')).toBe('dshl_ABCD2345.deadbeef')
+    expect(parseDeviceLinkCredential('dshl_ABCD2345.deadbeef')).toEqual({
+      code: 'ABCD2345',
+      secret: 'deadbeef',
+    })
+    expect(parseDeviceLinkCredential('eyJhbGciOiJSUzI1NiJ9.x.y')).toBeNull()
+    expect(parseDeviceLinkCredential('dshl_nodot')).toBeNull()
+    expect(parseDeviceLinkCredential('dshl_.secret')).toBeNull()
   })
 })

@@ -108,6 +108,19 @@ function makeStore(): Store & { workers: Map<string, WorkerRow>; pairings: Map<s
     async listPushTokens() {
       return []
     },
+    // 扫码登录链接码：本文件不覆盖该流程（见 device-link.test.ts），空实现
+    async createDeviceLink() {},
+    async getDeviceLink() {
+      return null
+    },
+    async getDeviceLinkBySecretHash() {
+      return null
+    },
+    async approveDeviceLink() {},
+    async deleteDeviceLink() {},
+    async purgeExpiredDeviceLinks() {
+      return 0
+    },
     async recordUsage(e) {
       usage.push(e.kind)
     },
@@ -239,6 +252,86 @@ describe('gateway 绑定与转发', () => {
     phoneWs.receive(JSON.stringify({ kind: 'worker-open', workerId: ok.workerId }))
     await new Promise((r) => setTimeout(r))
     expect((phoneWs.lastFrame() as unknown as { ok: boolean }).ok).toBe(true)
+  })
+
+  it('register 带 host → presence 透传机器信息（供手机端 Worker 卡/详情）', async () => {
+    const { gateway } = makeGateway()
+    const workerWs = new FakeWs()
+    gateway.attachWorker(workerWs as never)
+    workerWs.receive(
+      JSON.stringify({
+        kind: 'worker-register',
+        hostKey: 'hk_host',
+        protocolVersion: 'mobile/v1',
+        name: 'mac-mini',
+        hostFingerprint: 'fp_host',
+        dshVersion: '0.1.5-rc.1',
+        host: {
+          hostname: 'mac-mini.local',
+          osVersion: 'Darwin 24.6.0',
+          cpuCores: 8,
+          memoryBytes: 17179869184,
+          runtimeVersion: '0.1.5-rc.1',
+        },
+        accountToken: 'dev:user_host',
+      }),
+    )
+    await new Promise((r) => setTimeout(r))
+    const ok = workerWs.lastFrame() as unknown as { workerId: string }
+
+    const phoneWs = new FakeWs()
+    gateway.attachPhone(phoneWs as never)
+    phoneWs.receive(JSON.stringify({ kind: 'phone-auth', authToken: 'dev:user_host', deviceKey: 'd_host' }))
+    await new Promise((r) => setTimeout(r))
+    const presence = phoneWs.sent
+      .map(
+        (t) =>
+          JSON.parse(t) as {
+            kind: string
+            workers?: {
+              workerId: string
+              host: {
+                hostname?: string
+                osVersion?: string
+                cpuCores?: number
+                memoryBytes?: number
+              } | null
+            }[]
+          },
+      )
+      .find((f) => f.kind === 'presence')
+    const self = presence?.workers?.find((w) => w.workerId === ok.workerId)
+    expect(self?.host?.hostname).toBe('mac-mini.local')
+    expect(self?.host?.cpuCores).toBe(8)
+    expect(self?.host?.memoryBytes).toBe(17179869184)
+  })
+
+  it('register 不带 host → presence.host 为 null（旧版插件兼容）', async () => {
+    const { gateway } = makeGateway()
+    const workerWs = new FakeWs()
+    gateway.attachWorker(workerWs as never)
+    workerWs.receive(
+      JSON.stringify({
+        kind: 'worker-register',
+        hostKey: 'hk_nohost',
+        protocolVersion: 'mobile/v1',
+        name: 'old-pc',
+        hostFingerprint: 'fp_nohost',
+        dshVersion: null,
+        accountToken: 'dev:user_nohost',
+      }),
+    )
+    await new Promise((r) => setTimeout(r))
+    const phoneWs = new FakeWs()
+    gateway.attachPhone(phoneWs as never)
+    phoneWs.receive(
+      JSON.stringify({ kind: 'phone-auth', authToken: 'dev:user_nohost', deviceKey: 'd_nohost' }),
+    )
+    await new Promise((r) => setTimeout(r))
+    const presence = phoneWs.sent
+      .map((t) => JSON.parse(t) as { kind: string; workers?: { host: unknown }[] })
+      .find((f) => f.kind === 'presence')
+    expect(presence?.workers?.[0]?.host).toBeNull()
   })
 
   it('register 不带 / 带无效 accountToken → 不自动绑定', async () => {

@@ -1,0 +1,335 @@
+name: gateway-release
+
+# Gateway 发布：打 tag `gateway-v<版本>` 触发（或手动 dispatch）。
+#
+# 产物：容器镜像（GHCR 必发；配了 Docker Hub 凭据则同时发 Docker Hub）+ GitHub Release
+# （Release 正文里带部署命令，服务器照抄即可）。
+#
+# 为什么 tag 前缀是 gateway-v*：与 desktop-v*（桌面端）、mobile-v* 等各自独立，
+# 同一仓库多组件分别发版，互不触发。
+# v*（手机 App EAS）区分开，一次打标只触发一条流水线。
+#
+# 流水线把关顺序（发布前把该验的都验了，避免"发出去的镜像起不来"）：
+#   verify  单元测试 + 服务端类型检查
+#   publish 构建镜像 → **用镜像本体**跑冒烟（真 Postgres + 真迁移 + 扫码登录全链路）
+#           → 通过后才推 registry
+#   release 建 GitHub Release（带镜像地址与部署命令）
+#   deploy  可选：SSH 到服务器 docker compose 拉新镜像（默认关闭，见下）
+#
+# 需要的 GitHub 配置（都可选，只在用到时才需要）：
+#   Secrets（Docker Hub 二选一，不配就只发 GHCR）：
+#     DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
+#   Variables：
+#     GATEWAY_PLATFORMS       默认 linux/amd64；ARM 服务器填 linux/arm64 或两者逗号分隔
+#     GATEWAY_DEPLOY_ENABLED  设为 true 才启用 deploy 作业
+#     GATEWAY_HEALTH_URL      部署后校验用的公网健康检查地址，如 https://dsh-pocket.zhongbei.tech/api/v1/health
+#   Secrets（启用 deploy 时必填）：
+#     DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY
+#   Variables（启用 deploy 时可选）：
+#     DEPLOY_PATH             服务器上 docker-compose.yml 所在目录，默认 /opt/dsh-gateway
+
+on:
+  push:
+    tags: ['gateway-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 0.1.1）'
+        required: true
+      push_image:
+        description: '推送镜像到 registry（取消勾选只构建+冒烟）'
+        type: boolean
+        default: true
+
+# 同一次打标不并发跑两条；不取消进行中的（发布动作宁可等）
+concurrency:
+  group: gateway-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  NODE_VERSION: '22'
+  REGISTRY_IMAGE: ghcr.io/${{ github.repository }}/gateway
+
+jobs:
+  verify:
+    name: 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile=false
+      # gateway 依赖协议包的 dist（不是 src），先构建
+      - name: Build bridge-protocol
+        run: pnpm --filter @deepseek-harness-pocket/bridge-protocol build
+      - name: Test
+        run: |
+          pnpm --filter @deepseek-harness-pocket/bridge-protocol test
+          pnpm --dir gateway test
+      - name: Typecheck (server)
+        run: pnpm --dir gateway exec tsc -p tsconfig.server.json --noEmit
+
+  publish:
+    name: 构建镜像 + 冒烟 + 推送
+    needs: verify
+    runs-on: ubuntu-latest
+    services:
+      # 冒烟用的真 Postgres：镜像启动时会自动跑 migrations/*.sql
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dsh
+          POSTGRES_PASSWORD: dsh
+          POSTGRES_DB: dsh_gateway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dsh -d dsh_gateway"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # Variables 优先、Secrets 兜底（与 eas-build.yml 同一约定）
+      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ vars.DOCKERHUB_TOKEN || secrets.DOCKERHUB_TOKEN }}
+      PLATFORMS: ${{ vars.GATEWAY_PLATFORMS || 'linux/amd64' }}
+      SHOULD_PUSH: ${{ github.ref_type == 'tag' || inputs.push_image }}
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: ver
+        name: 解析版本号
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/gateway-v* ]]; then
+            VERSION="${GITHUB_REF_NAME#gateway-v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          [[ -n "$VERSION" ]] || { echo "::error::版本号为空"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # package.json 版本只用于提示（镜像 tag 以 git tag 为准）
+          PKG="$(node -p "require('./gateway/package.json').version")"
+          if [[ "$PKG" != "$VERSION" ]]; then
+            echo "::warning::gateway/package.json 版本($PKG) 与发布版本($VERSION) 不一致，建议同步以免混淆"
+          fi
+          {
+            echo "### Gateway $VERSION"
+            echo ""
+            echo "- 提交：\`${GITHUB_SHA::7}\`"
+            echo "- 平台：\`$PLATFORMS\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 构建镜像（本地加载，供冒烟）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: gateway/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: gateway-smoke:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 用镜像起服务
+        # --network host：容器与 job 的 postgres 服务共用 runner 网络栈
+        # NODE_ENV=development：让冒烟能用 dev:<userId> 伪 token 走通「手机 approve」
+        # （生产由 auth JWT 承担，见 gateway/src/server/auth-verify.ts）
+        run: |
+          docker run -d --name gw-smoke --network host \
+            -e DATABASE_URL=postgresql://dsh:dsh@127.0.0.1:5432/dsh_gateway \
+            -e PORT=3781 -e HOSTNAME=0.0.0.0 \
+            -e NODE_ENV=development \
+            gateway-smoke:ci
+
+      - name: 等就绪
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf -m 3 http://127.0.0.1:3781/api/v1/health >/dev/null 2>&1; then
+              echo "gateway 就绪（${i}s）"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::gateway 未在 60s 内通过健康检查"
+          docker logs gw-smoke || true
+          exit 1
+
+      - name: 冒烟（镜像本体：迁移 + 扫码登录全链路）
+        run: |
+          bash .github/scripts/gateway-smoke.sh http://127.0.0.1:3781 \
+            --seed "docker run --rm --network host -e PGPASSWORD=dsh postgres:16 psql"
+
+      - name: 容器日志（失败时）
+        if: failure()
+        run: docker logs gw-smoke || true
+
+      - name: 登录 GHCR
+        if: env.SHOULD_PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 登录 Docker Hub（配了凭据才跑）
+        if: env.SHOULD_PUSH == 'true' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - id: push
+        name: 推送镜像
+        if: env.SHOULD_PUSH == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: gateway/Dockerfile
+          # 单平台时全部命中上面的缓存，几乎不额外耗时；多平台（ARM 服务器）在这里补构建
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY_IMAGE }}:${{ steps.ver.outputs.version }}
+            ${{ env.REGISTRY_IMAGE }}:latest
+            ${{ env.REGISTRY_IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha
+
+      - name: 推送 Docker Hub（配了凭据才跑）
+        if: env.SHOULD_PUSH == 'true' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: gateway/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_USERNAME }}/deepseek-harness-pocket-gateway:${{ steps.ver.outputs.version }}
+            ${{ env.DOCKERHUB_USERNAME }}/deepseek-harness-pocket-gateway:latest
+          cache-from: type=gha
+
+      - name: 汇总
+        run: |
+          {
+            echo ""
+            echo "- 镜像：\`$REGISTRY_IMAGE:${{ steps.ver.outputs.version }}\`"
+            if [[ -n "${{ steps.push.outputs.digest }}" ]]; then
+              echo "- digest：\`${{ steps.push.outputs.digest }}\`"
+            fi
+            if [[ "$SHOULD_PUSH" != "true" ]]; then
+              echo "- ⚠️ 本次未推送镜像（push_image=false 或非 tag 触发）"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: 建 Release
+    needs: publish
+    if: ${{ github.ref_type == 'tag' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 生成 Release 正文
+        run: |
+          VER="${{ needs.publish.outputs.version }}"
+          IMAGE="${{ env.REGISTRY_IMAGE }}:$VER"
+          cat > notes.md <<EOF
+          ## 容器镜像
+
+          \`\`\`
+          $IMAGE
+          ${{ env.REGISTRY_IMAGE }}:latest
+          \`\`\`
+          $(if [[ -n "${{ needs.publish.outputs.digest }}" ]]; then echo "
+          digest：\`${{ needs.publish.outputs.digest }}\`"; fi)
+
+          > 包默认私有：要么在 GitHub 仓库 Packages 里把该镜像设为 public，
+          > 要么让服务器 \`docker login ghcr.io\`（用带 \`read:packages\` 的 PAT）。
+
+          ## 服务器升级（docker compose）
+
+          \`\`\`sh
+          cd <docker-compose.yml 所在目录>
+          # compose 里 image 用 \${GATEWAY_IMAGE:-…} 取值，写进 .env 后重启也能保持
+          sed -i '/^GATEWAY_IMAGE=/d' .env && echo 'GATEWAY_IMAGE=$IMAGE' >> .env
+          docker compose pull gateway && docker compose up -d gateway
+          docker compose ps gateway
+          curl -fsS https://<你的域名>/api/v1/health
+          \`\`\`
+
+          ## 变更
+
+          完整对比：https://github.com/${{ github.repository }}/compare/desktop-v0.1.8...$GITHUB_REF_NAME
+          EOF
+          cat notes.md
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Gateway ${{ needs.publish.outputs.version }}" \
+            --notes-file notes.md
+
+  # 可选：把新镜像直接拉到服务器（默认关闭）。
+  # 开启方式：仓库 Variables 里设 GATEWAY_DEPLOY_ENABLED=true，
+  # 并配置 DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY（可选 DEPLOY_PATH、GATEWAY_HEALTH_URL）。
+  deploy:
+    name: 部署到服务器（可选）
+    needs: [publish, release]
+    if: ${{ vars.GATEWAY_DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH 拉取新镜像并重启
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/dsh-gateway' }}
+          IMAGE: ${{ env.REGISTRY_IMAGE }}:${{ needs.publish.outputs.version }}
+        run: |
+          for v in SSH_KEY DEPLOY_HOST DEPLOY_USER; do
+            [[ -n "${!v}" ]] || { echo "::error::$v 未配置（启用 GATEWAY_DEPLOY_ENABLED 时必须配）"; exit 1; }
+          done
+          mkdir -p ~/.ssh
+          printf '%s' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<EOF
+          set -euo pipefail
+          cd '$DEPLOY_PATH'
+          touch .env
+          sed -i '/^GATEWAY_IMAGE=/d' .env
+          echo 'GATEWAY_IMAGE=$IMAGE' >> .env
+          docker compose pull gateway
+          docker compose up -d gateway
+          docker compose ps gateway
+          EOF
+          rm -f ~/.ssh/id_deploy
+      - name: 公网健康检查（配了 GATEWAY_HEALTH_URL 才跑）
+        if: ${{ vars.GATEWAY_HEALTH_URL != '' }}
+        env:
+          HEALTH_URL: ${{ vars.GATEWAY_HEALTH_URL }}
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS -m 5 "$HEALTH_URL" >/dev/null 2>&1; then
+              echo "部署后健康检查通过（${i}s）：$HEALTH_URL"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::部署后健康检查失败：$HEALTH_URL"
+          exit 1

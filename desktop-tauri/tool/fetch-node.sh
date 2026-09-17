@@ -1,3 +1,4 @@
+# [dev-only] v0.2.0 起安装包不再内置 sidecar，本脚本仅供开发/调试使用
 #!/usr/bin/env bash
 # 下载 Node 发行版（含 npm）+ 安装 pnpm 到 sidecar 的 node 前缀。
 #

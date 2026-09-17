@@ -49,7 +49,11 @@ export interface WorkerStatus {
   home?: string;
   error?: string;
   parseError?: string;
-  /** Rust 轮询器探测到 sidecar 缺失时置位（不再空转 spawn node） */
+  /** 工具链缺失（未完成引导/node 被删）——轮询器置位，前端据此弹向导 */
+  toolchainMissing?: boolean;
+  /** 升级过渡期：工具链缺失但旧 supervisor 还在跑（Web GUI 可继续用） */
+  degraded?: boolean;
+  /** 兼容 0.1.10 的旧字段名 */
   sidecarMissing?: boolean;
 }
 
@@ -163,8 +167,8 @@ export function giveUpText(info?: GiveUpInfo): string {
 
 /* ── 引导页环境预检 ───────────────────────────────────────── */
 
-export type PreflightItemId = "sidecar" | "runtime" | "account" | "port" | "gateway";
-export type PreflightFix = "install_runtime" | "login" | "free_port";
+export type PreflightItemId = "node" | "bridge" | "runtime" | "account" | "port" | "gateway";
+export type PreflightFix = "install_node" | "install_bridge" | "install_runtime" | "login" | "free_port";
 
 export interface PreflightItem {
   id: PreflightItemId;
@@ -180,7 +184,7 @@ export interface PreflightReport {
   checkedAt: number;
 }
 
-/** 环境预检：sidecar / runtime / account / port / gateway 一次性快照 */
+/** 环境预检：node / bridge / runtime / account / port / gateway 一次性快照 */
 export async function preflightCheck(): Promise<PreflightReport> {
   if (!isTauri()) {
     // ?broken：视觉调试「缺环境 → 引导动作」卡片用
@@ -191,7 +195,8 @@ export async function preflightCheck(): Promise<PreflightReport> {
       checkedAt: Date.now(),
       items: broken
         ? [
-            { id: "sidecar", state: "pass", detail: "内置 Node.js 与 bridge 就绪" },
+            { id: "node", state: "pass", detail: "系统 Node v22.18.0（已复用）" },
+            { id: "bridge", state: "fail", detail: "尚未安装 Worker 核心", fix: "install_bridge" },
             { id: "runtime", state: "fail", detail: "尚未安装 dsh 运行时", fix: "install_runtime" },
             { id: "account", state: "fail", detail: "尚未登录掌鲸账号", fix: "login" },
             {
@@ -203,7 +208,8 @@ export async function preflightCheck(): Promise<PreflightReport> {
             { id: "gateway", state: "warn", detail: "无法访问网关（离线时仍可使用本机控制台）" },
           ]
         : [
-            { id: "sidecar", state: "pass", detail: "内置 Node.js 与 bridge 就绪" },
+            { id: "node", state: "pass", detail: "系统 Node v22.18.0（已复用）" },
+            { id: "bridge", state: "pass", detail: "Worker 核心 0.1.1 就绪" },
             { id: "runtime", state: "pass", detail: "dsh 0.1.5-rc.1 就绪" },
             { id: "account", state: "pass", detail: "已登录" },
             { id: "port", state: "pass", detail: "端口可用" },
@@ -212,6 +218,90 @@ export async function preflightCheck(): Promise<PreflightReport> {
     };
   }
   return invoke<PreflightReport>("preflight_check");
+}
+
+/* ── 首次引导（去 sidecar 化：Node / bridge 从网络组装）──────────────── */
+
+export interface SystemNodeInfo {
+  /** 镜像上找到过 node（版本过旧等也会 found=true 且 usable=false 的场景用 reason 区分） */
+  probed?: boolean;
+  found: boolean;
+  usable: boolean;
+  version?: string;
+  reason?: string;
+}
+
+export interface BootstrapStatus {
+  onboardingDone: boolean;
+  systemNode: SystemNodeInfo;
+  node: { installed: boolean; version?: string; pnpm?: boolean };
+  nodeChoices: { major: number; version: string }[];
+  bridge: { installed: boolean; version?: string; min: string; satisfies: boolean };
+  dshInstalled: boolean;
+  dshVersions?: string[];
+}
+
+export async function bootstrapStatus(): Promise<BootstrapStatus> {
+  if (!isTauri()) {
+    return {
+      onboardingDone: false,
+      systemNode: { found: true, usable: true, version: "v22.18.0", probed: true },
+      node: { installed: false },
+      nodeChoices: [
+        { major: 24, version: "v24.21.0" },
+        { major: 22, version: "v22.23.2" },
+      ],
+      bridge: { installed: false, min: "0.1.1", satisfies: false },
+      dshInstalled: false,
+    };
+  }
+  return invoke<BootstrapStatus>("bootstrap_status");
+}
+
+export interface BootstrapProgress {
+  step: "node" | "tools" | "bridge" | "dsh";
+  phase: "download" | "verify" | "extract" | "pnpm" | "npm" | "done" | "error";
+  received?: number;
+  total?: number | null;
+  line?: string;
+}
+
+/** 订阅引导安装进度（下载字节/npm 行/阶段） */
+export async function onBootstrapProgress(
+  cb: (p: BootstrapProgress) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<BootstrapProgress>("bootstrap-progress", (e) => cb(e.payload));
+}
+
+/** 安装受管 Node（major ∈ nodeChoices；系统 Node 可用时向导默认走复用） */
+export async function nodeInstall(major: number): Promise<string> {
+  if (!isTauri()) {
+    await new Promise((r) => setTimeout(r, 400));
+    return `[mock] 已安装 Node（major=${major}）`;
+  }
+  return invoke<string>("node_install", { major });
+}
+
+/** 探测并采用系统 Node（零下载；写入 toolchain.json） */
+export async function systemNodeProbe(): Promise<string> {
+  if (!isTauri()) return "[mock] 已采用系统 Node";
+  return invoke<string>("system_node_probe");
+}
+
+/** 安装 bridge（Worker 核心；内部先确保 pnpm 就位） */
+export async function bridgeInstall(): Promise<string> {
+  if (!isTauri()) {
+    await new Promise((r) => setTimeout(r, 400));
+    return "[mock] 已安装 Worker 核心";
+  }
+  return invoke<string>("bridge_install");
+}
+
+/** 记录引导完成（此后启动不再弹向导） */
+export async function bootstrapComplete(): Promise<void> {
+  if (!isTauri()) return;
+  return invoke("bootstrap_complete");
 }
 
 export async function workerQr(): Promise<QrInfo> {

@@ -63,12 +63,8 @@ jobs:
         working-directory: .
         run: pnpm install --frozen-lockfile
 
-      - name: Build sidecar (node + dshc)
-        # CI 无预置产物，脚本会自行拉 node 并构建 bridge
-        env:
-          NODE_MIRROR: https://nodejs.org/dist
-          NPM_REGISTRY: https://registry.npmjs.org
-        run: ./tool/build-sidecar.sh ${{ matrix.target }}
+      # v0.2.0 起不再打包 node-sidecar：Node/bridge 由首次引导从网络组装
+      # （见 src-tauri/src/toolchain.rs），CI 也无需再跑 build-sidecar.sh。
 
       - name: Verify version consistency
         # tauri.conf.json 的 version 决定更新器比对基准。若 tag 与它不一致，

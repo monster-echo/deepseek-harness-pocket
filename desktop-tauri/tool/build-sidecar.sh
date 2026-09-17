@@ -1,3 +1,4 @@
+# [dev-only] v0.2.0 起安装包不再内置 sidecar，本脚本仅供开发/调试使用
 #!/usr/bin/env bash
 # 构建内置 node sidecar：node 运行时 + bridge(dshc) → node-sidecar/
 #

@@ -53,7 +53,6 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "../node-sidecar/**/*",
       "icons/tray-icon.png",
       "icons/tray-icon-color.png"
     ],
@@ -79,5 +78,5 @@
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUyNTgyODBFMTJBMDlCREIKUldUYm02QVNEaWhZVXEzYk9Ud2tYa2Q0dUxvVjB6bHg0QktnSFFBOENjUU5oaGM1dThrdWNhUTUK"
     }
   },
-  "version": "0.1.10"
+  "version": "0.2.0"
 }

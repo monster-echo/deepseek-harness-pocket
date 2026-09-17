@@ -23,7 +23,8 @@ import { RuntimeStep } from "./RuntimeStep";
  */
 
 const ITEM_LABEL: Record<PreflightItemId, string> = {
-  sidecar: "应用组件",
+  node: "Node 运行时",
+  bridge: "Worker 核心",
   runtime: "dsh 运行时",
   account: "掌鲸账号",
   port: "网络端口",
@@ -43,7 +44,7 @@ function ItemIcon({ state, checking }: { state: PreflightItem["state"]; checking
   }
 }
 
-export function GuidePage() {
+export function GuidePage({ onOpenWizard }: { onOpenWizard?: () => void }) {
   const status: WorkerStatus | null = useWorkerStatus();
   const { report, loading, error: preflightError, refresh } = usePreflight();
   const [busy, setBusy] = useState(false);
@@ -89,6 +90,15 @@ export function GuidePage() {
 
   const fixFor = (item: PreflightItem) => {
     switch (item.fix) {
+      case "install_node":
+      case "install_bridge":
+        // node/bridge 走完整向导（要下载、要进度，一页卡片装不下）
+        return (
+          <Button size="sm" className="mt-2" onClick={() => onOpenWizard?.()}>
+            <Settings2 />
+            打开设置向导
+          </Button>
+        );
       case "install_runtime":
         return <RuntimeStep onDone={fixDone} />;
       case "login":

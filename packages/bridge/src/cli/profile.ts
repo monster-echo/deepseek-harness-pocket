@@ -138,15 +138,22 @@ export function migrateStaleBridgeSpec(dir: string, packageRootPath: string): vo
   }
 }
 
+/** cmd.exe 兜底路径专用：含空格的参数加引号 */
+function quoteForCmd(arg: string): string {
+  return /\s/.test(arg) ? `"${arg}"` : arg
+}
+
 /** 安装/更新本插件包到 profile（dsh plugin = pnpm 转发器）。 */
 export function installBridgePackage(dir: string, dshBin: string, packageRootPath: string): void {
   ensureProfileManifest(dir)
   migrateStaleBridgeSpec(dir, packageRootPath)
   const spec = process.platform === 'win32' ? packageRootPath : `file:${packageRootPath}`
   const launch = resolveDshLaunch(dshBin)
-  const result = spawnSync(launch.cmd, [...launch.args, 'plugin', '--profile', COMPANION_PROFILE, 'add', spec], {
+  const shellArgs = launch.shell === true ? [quoteForCmd(spec)] : ['plugin', '--profile', COMPANION_PROFILE, 'add', spec]
+  const result = spawnSync(launch.cmd, [...launch.args, ...shellArgs], {
     stdio: 'inherit',
     windowsHide: true,
+    shell: launch.shell === true,
   })
   // status 为 null = 进程根本没跑起来（ENOENT/EACCES，Windows .cmd shim 被拒等），必须带上 error 原文
   if (result.error !== undefined) {

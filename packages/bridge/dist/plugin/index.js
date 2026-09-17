@@ -1,5 +1,5 @@
 // src/plugin/index.ts
-import { hostname } from "node:os";
+import { hostname as hostname2 } from "node:os";
 
 // src/plugin/config.ts
 import z from "@deepseek-ai/schemastery";
@@ -24,8 +24,8 @@ var pluginConfig = z.object({
      */
     accountSessionFile: z.string().default("~/.deepseek-harness-pocket/account-session.json")
   }).default({ url: "", hostKey: "", reconnectMinMs: 1e3, reconnectMaxMs: 3e4, accountSessionFile: "~/.deepseek-harness-pocket/account-session.json" }),
-  /** 能力面：按里程碑声明，handshake 下发给 app */
-  caps: z.union(["m1", "m2", "m3"]).default("m2"),
+  /** 能力面：固定全开（m3 起 sessionCreate/artifacts 才可用，手机端主流程） */
+  caps: z.union(["m1", "m2", "m3"]).default("m3"),
   /** 状态文件路径（hostKey/pairingToken） */
   stateFile: z.string().default("~/.deepseek-harness-pocket/bridge-state.json"),
   /** Worker 显示名（默认取 hostname） */
@@ -50,6 +50,30 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
+function disposeObservation(observation) {
+  if (observation === null || observation === void 0) return;
+  const symbol = Symbol.dispose;
+  if (symbol === void 0) return;
+  const disposer = observation[symbol];
+  if (typeof disposer === "function") {
+    try {
+      ;
+      disposer.call(observation);
+    } catch {
+    }
+  }
+}
+var LIST_PROJECTION_KEYS = ["title", "sessionListMetadata"];
+function listFieldsOf(values) {
+  const raw = values ?? {};
+  const rawTitle = raw["title"];
+  const meta = raw["sessionListMetadata"];
+  return {
+    title: typeof rawTitle === "string" && rawTitle.length > 0 ? rawTitle : null,
+    blank: meta?.blank === true,
+    lastPromptAt: typeof meta?.lastPromptAt === "number" ? meta.lastPromptAt : null
+  };
+}
 function toQuestionOptions(value) {
   if (!Array.isArray(value)) return void 0;
   const options = [];
@@ -93,10 +117,16 @@ function approvalDetailFromEvents(events, callId) {
   }
   return null;
 }
+function liveEventsOf(session) {
+  if (Array.isArray(session.events)) return session.events;
+  const viaSurface = session.surface?.events;
+  if (Array.isArray(viaSurface)) return viaSurface;
+  return [];
+}
 function sessionEventsOf(ctx, sessionId) {
   try {
     const session = ctx.sessions.get(sessionId);
-    return session?.events ?? [];
+    return session === void 0 ? [] : liveEventsOf(session);
   } catch {
     return [];
   }
@@ -236,6 +266,9 @@ function toEvent(raw) {
 }
 function createAdapter(ctx) {
   const persistence = () => ctx.get("sessionPersistence");
+  const projectionCache = () => ctx.get("sessionProjectionCache");
+  const sessionQuery = () => ctx.get("sessionQuery");
+  const projectionRegistry = () => ctx.get("sessionProjections");
   const agents = () => ctx.get("agents");
   const presets = () => ctx.get("agentPresets");
   const composePreset = async (requested) => {
@@ -253,8 +286,9 @@ function createAdapter(ctx) {
     const live = ctx.sessions.get(id);
     if (live !== void 0) {
       if (live.header.agentPreset !== void 0) return live.header.agentPreset;
-      for (let i = live.events.length - 1; i >= 0; i -= 1) {
-        const e = live.events[i];
+      const liveEvents = liveEventsOf(live);
+      for (let i = liveEvents.length - 1; i >= 0; i -= 1) {
+        const e = liveEvents[i];
         if (e.type === "agent-preset/selected" && typeof e.data?.agentPreset === "string") return e.data.agentPreset;
       }
       return void 0;
@@ -337,16 +371,42 @@ function createAdapter(ctx) {
       const per = persistence();
       if (per) {
         try {
-          const headers = await per.list();
-          for (const h of headers) {
+          const rows = await per.list();
+          for (const row of rows) {
+            const h = row.header ?? {
+              id: row.id,
+              createdAt: row.createdAt,
+              cwd: row.cwd,
+              lastSeq: row.lastSeq
+            };
+            if (h === void 0 || h.id === void 0 || typeof h.createdAt !== "number") continue;
             const id = h.id.toString();
+            let title = null;
+            let updatedAt;
+            let blank = false;
+            const cache = projectionCache();
+            if (cache !== void 0) {
+              try {
+                const inheritedRaw = h.inheritedEventCount;
+                const inherited = typeof inheritedRaw === "number" ? inheritedRaw : 0;
+                const snapshot = cache.cachedSnapshot(h, inherited, LIST_PROJECTION_KEYS);
+                const fields = listFieldsOf(snapshot?.values);
+                title = fields.title;
+                blank = fields.blank;
+                if (fields.lastPromptAt !== null) {
+                  updatedAt = Math.max(h.createdAt, fields.lastPromptAt);
+                }
+              } catch {
+              }
+            }
+            if (blank) continue;
             summaries.set(id, toSummary(
               id,
               h.createdAt,
               h.cwd,
               h.lastSeq ?? -1,
-              lastActivityById.get(id),
-              null,
+              updatedAt ?? lastActivityById.get(id),
+              title,
               {
                 parentSession: h.parentSession,
                 origin: h.origin,
@@ -355,22 +415,51 @@ function createAdapter(ctx) {
               }
             ));
           }
-        } catch {
+        } catch (error) {
+          console.error(
+            `[bridge] sessionPersistence.list() failed:`,
+            error instanceof Error ? error.stack ?? error.message : String(error)
+          );
         }
       }
       const live = ctx.sessions.list();
       for (const s of live) {
-        const id = s.id.toString();
-        const tail = s.events[s.events.length - 1];
-        summaries.set(id, toSummary(
-          id,
-          s.header.createdAt,
-          s.header.cwd,
-          s.seq - 1,
-          lastActivityById.get(id) ?? eventTimeOf(tail),
-          extractTitle(s.events),
-          s.header
-        ));
+        try {
+          const id = s.id.toString();
+          const events = liveEventsOf(s);
+          const tail = events[events.length - 1];
+          let title = null;
+          let updatedAt;
+          let blank = false;
+          const registry = projectionRegistry();
+          if (registry !== void 0) {
+            try {
+              const snapshot = registry.snapshot(s, LIST_PROJECTION_KEYS);
+              const fields = listFieldsOf(snapshot?.values);
+              title = fields.title;
+              blank = fields.blank;
+              if (fields.lastPromptAt !== null) {
+                updatedAt = Math.max(s.header.createdAt, fields.lastPromptAt);
+              }
+            } catch {
+            }
+          }
+          if (title === null && events.length > 0) title = extractTitle(events);
+          if (blank) continue;
+          summaries.set(id, toSummary(
+            id,
+            s.header.createdAt,
+            s.header.cwd,
+            typeof s.seq === "number" ? s.seq - 1 : -1,
+            updatedAt ?? lastActivityById.get(id) ?? eventTimeOf(tail),
+            title,
+            s.header
+          ));
+        } catch (error) {
+          ctx.logger?.warn?.(
+            `deepseek-harness-pocket bridge: \u8DF3\u8FC7 1 \u4E2A live \u4F1A\u8BDD\uFF08listSessions\uFF09: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
       }
       return [...summaries.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     },
@@ -782,10 +871,33 @@ function createAdapter(ctx) {
       return childId;
     },
     async readSlice(id, fromSeq) {
+      const from = Math.max(0, fromSeq);
+      const query = sessionQuery();
+      if (query !== void 0) {
+        let observation;
+        try {
+          observation = await query.observeSession(id, { projectionMode: "none" });
+          const all = observation.events;
+          const slice = all.slice(from).map(toEvent);
+          const last = slice[slice.length - 1];
+          const cursor = typeof observation.cursor === "number" ? observation.cursor : all[all.length - 1]?.seq ?? -1;
+          return {
+            id,
+            fromSeq: from,
+            toSeq: typeof last?.seq === "number" ? last.seq : cursor,
+            events: slice
+          };
+        } catch {
+        } finally {
+          disposeObservation(observation);
+        }
+      }
       const live = ctx.sessions.get(id);
       if (live) {
-        const slice = live.events.slice(Math.max(0, fromSeq)).map(toEvent);
-        return { id, fromSeq: Math.max(0, fromSeq), toSeq: live.seq - 1, events: slice };
+        const events = liveEventsOf(live);
+        const slice = events.slice(Math.max(0, fromSeq)).map(toEvent);
+        const lastSeq = typeof live.seq === "number" ? live.seq - 1 : fromSeq - 1;
+        return { id, fromSeq: Math.max(0, fromSeq), toSeq: lastSeq, events: slice };
       }
       const per = persistence();
       if (!per) return null;
@@ -812,11 +924,22 @@ function createAdapter(ctx) {
       if (live) cwd = live.header.cwd;
       const agentPreset = await presetOfSession(id);
       const composed = await composePreset(agentPreset);
-      await registry.create({
-        sessionId: id,
-        meta: cwd !== void 0 ? { cwd } : {},
+      const perOptions = {
         agentOptions: { provider: route.provider, model: route.model },
         ...composed.setup !== void 0 ? { setup: composed.setup } : {}
+      };
+      const registryLike = registry;
+      if (typeof registryLike.resume === "function") {
+        try {
+          await registryLike.resume({ resumeSessionId: id, ...perOptions });
+          return;
+        } catch {
+        }
+      }
+      await registryLike.create({
+        sessionId: id,
+        meta: cwd !== void 0 ? { cwd } : {},
+        ...perOptions
       });
     },
     async sendUserMessage(id, text, imageRefs) {
@@ -869,9 +992,9 @@ function createAdapter(ctx) {
         const r = req;
         const sessionId = r.agent.session?.id.toString() ?? r.agent.id.toString();
         const requestId = `ap_${String(r.callId ?? Math.random().toString(36).slice(2, 10))}`;
-        let release = null;
+        let release2 = null;
         const decided = new Promise((resolve3) => {
-          release = resolve3;
+          release2 = resolve3;
         });
         const detail = approvalDetailFromEvents(sessionEventsOf(ctx, sessionId), r.callId);
         ask({
@@ -882,7 +1005,7 @@ function createAdapter(ctx) {
           detail,
           decide: async (decision) => {
             if (decision === "pass") return;
-            release?.(decision);
+            release2?.(decision);
           }
         });
         const outcome = await Promise.race([
@@ -1947,9 +2070,34 @@ function startDirectServer(ctx, opts) {
 
 // src/plugin/uplink.ts
 import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
+import { cpus, homedir as homedir3, hostname, release, totalmem, type as osType } from "node:os";
 import { resolve as resolve2 } from "node:path";
 import { WebSocket as WebSocket2 } from "ws";
+function collectHostInfo(dshVersion) {
+  const info = {};
+  try {
+    const name2 = hostname();
+    if (name2.length > 0) info.hostname = name2;
+  } catch {
+  }
+  try {
+    const pretty = `${osType()} ${release()}`;
+    if (pretty.trim().length > 0) info.osVersion = pretty;
+  } catch {
+  }
+  try {
+    const cores = cpus().length;
+    if (cores > 0) info.cpuCores = cores;
+  } catch {
+  }
+  try {
+    const bytes = totalmem();
+    if (bytes > 0) info.memoryBytes = bytes;
+  } catch {
+  }
+  if (dshVersion !== null && dshVersion.length > 0) info.runtimeVersion = dshVersion;
+  return info;
+}
 function readAccountToken(file) {
   if (file === void 0 || file.length === 0) return null;
   const path = resolve2(file.replace(/^~(?=\/|$)/, homedir3()));
@@ -1990,6 +2138,7 @@ function startUplink(ctx, opts) {
         name: opts.workerName,
         hostFingerprint: opts.fingerprint,
         dshVersion: opts.dshVersion,
+        host: collectHostInfo(opts.dshVersion),
         ...accountToken ? { accountToken } : {}
       });
       pingTimer = setInterval(() => {
@@ -2062,7 +2211,7 @@ function apply(ctx, config) {
     ctx.logger.error("deepseek-harness-pocket bridge: \u65E0\u6CD5\u8BFB\u53D6\u72B6\u6001\u6587\u4EF6\uFF08\u4E14\u7981\u6B62\u521B\u5EFA\uFF09");
     return;
   }
-  const workerName = config.name.length > 0 ? config.name : hostname();
+  const workerName = config.name.length > 0 ? config.name : hostname2();
   const adapter = createAdapter(ctx);
   const hub = new BridgeHub(adapter, {
     workerName,

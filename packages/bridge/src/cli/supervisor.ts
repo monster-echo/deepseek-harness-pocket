@@ -325,9 +325,16 @@ export async function supervise(
     rmSync(`${dshcDir()}/${STOP_FLAG}`, { force: true })
     log(`spawning ${dshBin} ${args.join(' ')}`)
     process.stdout.write(`[dshc] starting: ${dshBin} ${args.join(' ')}\n`)
-    // Windows .cmd shim 不能直接 spawn（EINVAL）：解析出真实 JS 入口用当前 node 跑
+    // Windows .cmd shim 不能直接 spawn（EINVAL）：解析出真实 JS 入口用当前 node 跑，
+    // 解析失败（shell 兜底）时 dsh 参数是简单 token，直接拼即可
     const launch = resolveDshLaunch(dshBin)
-    child = spawn(launch.cmd, [...launch.args, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    const childArgs = [...launch.args, ...args]
+    child = spawn(launch.cmd, childArgs, {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      shell: launch.shell === true,
+    })
     const startedAt = Date.now()
     // URL 行可能被 chunk 边界截断：跨 chunk 缓冲，只对完整行做匹配
     let lineBuffer = ''

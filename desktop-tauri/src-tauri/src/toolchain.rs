@@ -21,7 +21,7 @@ pub const NODE_CHOICES: &[(u8, &str)] = &[(24, "v24.21.0"), (22, "v22.23.2")];
 pub const MIN_SYSTEM_NODE_MAJOR: u64 = 20;
 pub const BRIDGE_PACKAGE: &str = "@deepseek-harness-pocket/bridge";
 /// bridge 低于此版本视为「npm 镜像同步延迟」，要求重试安装
-pub const MIN_BRIDGE_VERSION: &str = "0.1.2";
+pub const MIN_BRIDGE_VERSION: &str = "0.1.3";
 pub const PNPM_SPEC: &str = "pnpm@10";
 pub const NPM_REGISTRY: &str = "https://registry.npmmirror.com";
 

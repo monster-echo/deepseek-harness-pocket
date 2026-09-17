@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { dshEntryFromCmdShim, resolveDshLaunch } from '../src/cli/runtime.js'
+import { dshEntryFromCmdShim, dshEntryFromNodeModules, resolveDshLaunch } from '../src/cli/runtime.js'
 import { installBridgePackage, upsertBridgePatch } from '../src/cli/profile.js'
 
 describe('dshEntryFromCmdShim（Windows .cmd shim → 真实 JS 入口）', () => {
@@ -47,6 +47,24 @@ describe('dshEntryFromCmdShim（Windows .cmd shim → 真实 JS 入口）', () =
   it('非 Windows 平台 resolveDshLaunch 原样透传（不包装 node）', () => {
     if (process.platform === 'win32') return
     expect(resolveDshLaunch('/usr/local/bin/dsh')).toEqual({ cmd: '/usr/local/bin/dsh', args: [] })
+  })
+
+  it('package.json bin 反查：与 shim 模板无关的确定性解析', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dshc-bin-pkg-'))
+    mkdirSync(join(root, 'node_modules', '.bin'), { recursive: true })
+    mkdirSync(join(root, 'node_modules', '@scope', 'dsh'), { recursive: true })
+    const entry = join(root, 'node_modules', '@scope', 'dsh', 'dist', 'cli.js')
+    mkdirSync(join(root, 'node_modules', '@scope', 'dsh', 'dist'), { recursive: true })
+    writeFileSync(entry, 'console.log(1)\n')
+    writeFileSync(
+      join(root, 'node_modules', '@scope', 'dsh', 'package.json'),
+      JSON.stringify({ name: '@scope/dsh', bin: { dsh: 'dist/cli.js' } }),
+    )
+    const binDir = join(root, 'node_modules', '.bin')
+    const resolved = dshEntryFromNodeModules(binDir, 'dsh')
+    expect(resolved?.replace(/\\/g, '/')).toBe(entry.replace(/\\/g, '/'))
+    expect(dshEntryFromNodeModules(binDir, 'nope')).toBeNull()
+    rmSync(root, { recursive: true, force: true })
   })
 })
 

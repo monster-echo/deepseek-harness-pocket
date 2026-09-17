@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-pocket/bridge",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "deepseek-harness-pocket 电脑端：DeepSeek Harness 桥接插件（mobile/v1 协议服务端）+ dshc Worker CLI",
   "type": "module",
   "license": "MIT",

@@ -89,7 +89,9 @@ export function HarnessStep({
     );
   }
 
-  const recommended = versions?.[0];
+  // 推荐版本必须是稳定版（过滤 -alpha/-rc/-beta 等预发布）；高级选项里仍可自选
+  const stable = versions?.filter((v) => !/-/.test(v)) ?? [];
+  const recommended = stable[0] ?? versions?.[0];
 
   return (
     <div className="flex flex-col gap-3">
@@ -108,6 +110,9 @@ export function HarnessStep({
             ? `安装推荐版本 ${recommended}`
             : "获取版本列表…"}
       </Button>
+      {recommended !== undefined && versions !== null && recommended !== versions[0] ? (
+        <p className="text-[11px] text-muted-foreground">最新发布为预发布版（{versions[0]}），推荐安装稳定版。</p>
+      ) : null}
 
       <button
         type="button"

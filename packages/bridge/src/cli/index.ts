@@ -99,7 +99,12 @@ function parseArgs(argv: readonly string[]): { command: string; options: CliOpti
 /** 探测 dsh 版本（run.json 元数据用；失败返回空串）。 */
 function probeDshVersion(dshBin: string): string {
   const launch = resolveDshLaunch(dshBin)
-  const result = spawnSync(launch.cmd, [...launch.args, '--version'], { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8', windowsHide: true })
+  const result = spawnSync(launch.cmd, [...launch.args, '--version'], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    encoding: 'utf8',
+    windowsHide: true,
+    shell: launch.shell === true,
+  })
   if (result.status !== 0 || typeof result.stdout !== 'string') return ''
   return result.stdout.trim().split('\n')[0] ?? ''
 }

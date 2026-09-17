@@ -494,6 +494,12 @@ export async function onConsolePanel(cb: (panel: string) => void): Promise<Unlis
   return listen<string>("console-panel", (e) => cb(e.payload));
 }
 
+/** 菜单「文件 → 引导页」：重新打开引导向导 */
+export async function onOpenOnboarding(cb: () => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen("open-onboarding", () => cb());
+}
+
 /** 在系统浏览器中登录掌鲸账号（Rust 侧起 loopback 回调服务等待，最长 180 秒） */
 export async function accountLogin(authUrl?: string): Promise<AccountSessionInfo> {
   if (!isTauri()) {

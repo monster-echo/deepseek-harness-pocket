@@ -3,7 +3,7 @@ import { GuidePage } from "./guide/GuidePage";
 import { ConsoleApp } from "./console/ConsoleApp";
 import { OnboardingWizard } from "./onboarding/OnboardingWizard";
 import {
-  bootstrapStatus, onWorkerStartError, type WorkerStatus,
+  bootstrapStatus, onOpenOnboarding, onWorkerStartError, type WorkerStatus,
 } from "./lib/worker";
 import { useWorkerStatus } from "./lib/useWorkerStatus";
 
@@ -56,6 +56,14 @@ function MainSurface() {
   // Worker 启动失败：不吞、不盲试，把原因亮在向导里让用户处理
   useEffect(() => {
     const unlisten = onWorkerStartError((msg) => openWizard(msg));
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [openWizard]);
+
+  // 菜单「文件 → 引导页」：重新打开向导（补装环境 / 重看引导）
+  useEffect(() => {
+    const unlisten = onOpenOnboarding(() => openWizard(null));
     return () => {
       void unlisten.then((fn) => fn());
     };

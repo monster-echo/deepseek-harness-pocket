@@ -19,6 +19,8 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-process = "2"
+# About 弹窗等原生对话框
+tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 uuid = { version = "1", features = ["v4"] }
 # 账号续期走 HTTPS（updater 已带此依赖，特征统一后无额外编译量）

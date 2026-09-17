@@ -16,7 +16,7 @@ use std::process::Command;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
-use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
 
@@ -229,65 +229,7 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {
-            let id = event.id().as_ref().to_string();
-            match id.as_str() {
-                "quit" => app.exit(0),
-                "open-main" => {
-                    if let Some(win) = app.get_webview_window("main") {
-                        let _ = win.show();
-                        let _ = win.set_focus();
-                    }
-                }
-                "autostart" => {
-                    use tauri_plugin_autostart::ManagerExt;
-                    let al = app.autolaunch();
-                    let now = al.is_enabled().unwrap_or(false);
-                    let res = if now { al.disable() } else { al.enable() };
-                    if let Err(e) = res {
-                        notify(app, "开机自启设置失败", &e.to_string());
-                    }
-                    refresh_tray_menu(app);
-                }
-                "worker:start" => {
-                    let app = app.clone();
-                    std::thread::spawn(move || {
-                        let _ = start_worker(&app);
-                    });
-                }
-                "menu:update" => {
-                    let app = app.clone();
-                    std::thread::spawn(move || {
-                        use tauri_plugin_updater::UpdaterExt;
-                        let r = app.updater().and_then(|u| {
-                            tauri::async_runtime::block_on(async move {
-                                u.check().await.map(|x| x.map(|y| y.version).unwrap_or_default())
-                            })
-                        });
-                        match r {
-                            Ok(v) if !v.is_empty() => notify(&app, "DSH Pocket", &format!("新版本 {v} 可用，请在「版本」页查看")),
-                            Ok(_) => notify(&app, "DSH Pocket", "已是最新版本"),
-                            Err(e) => notify(&app, "检查更新失败", &e.to_string()),
-                        }
-                    });
-                }
-                "menu:reload" => {
-                    if let Some(win) = app.get_webview_window("main") {
-                        if let Ok(u) = win.url() { let _ = win.navigate(u); }
-                    }
-                }
-                "worker:stop" => {
-                    let app = app.clone();
-                    std::thread::spawn(move || {
-                        let _ = run_dshc(&app, &["stop", "--json"]);
-                    });
-                }
-                other => {
-                    // console:<panel> → 打开控制台窗口并定位到该页
-                    if let Some(panel) = other.strip_prefix("console:") {
-                        open_console(app, panel);
-                    }
-                }
-            }
+            handle_menu_action(app, event.id().as_ref());
         })
         .build(app)?;
     Ok(())
@@ -386,44 +328,118 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
 }
 
 /// 应用原生菜单（Windows：标题栏下的菜单条；macOS：屏幕顶部菜单栏）。
-/// 承载的是「DSH Pocket 自己的功能」，与 dsh Web GUI 内部的 UI 互不干扰。
+/// 结构：文件（主页面/引导页/配置）· 编辑 · 控制台（含启动/停止）· 帮助（检查更新/关于）。
 fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
-    use tauri::menu::{Menu, MenuItem};
+    use tauri::menu::{Menu, MenuItem, SubmenuBuilder};
 
-    let open_main = MenuItem::with_id(app, "menu:open-main", "打开主界面", true, None::<&str>)?;
-    let console_status = MenuItem::with_id(app, "console:status", "运行状态", true, None::<&str>)?;
-    let console_account = MenuItem::with_id(app, "console:account", "账号", true, None::<&str>)?;
-    let console_pairing = MenuItem::with_id(app, "console:pairing", "配对", true, None::<&str>)?;
-    let console_versions = MenuItem::with_id(app, "console:versions", "版本", true, None::<&str>)?;
-    let console_logs = MenuItem::with_id(app, "console:logs", "日志", true, None::<&str>)?;
-    let console = SubmenuBuilder::new(app, "控制台")
-        .item(&console_status).item(&console_account)
-        .item(&console_pairing).item(&console_versions).item(&console_logs)
+    let file = SubmenuBuilder::new(app, "文件")
+        .item(&MenuItem::with_id(app, "menu:open-main", "主页面", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "menu:guide", "引导页", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "menu:settings", "配置", true, None::<&str>)?)
         .build()?;
 
-    let worker_start = MenuItem::with_id(app, "worker:start", "启动 Worker", true, None::<&str>)?;
-    let worker_stop = MenuItem::with_id(app, "worker:stop", "停止 Worker", true, None::<&str>)?;
-    let worker = SubmenuBuilder::new(app, "Worker")
-        .item(&worker_start).item(&worker_stop).build()?;
+    let console = SubmenuBuilder::new(app, "控制台")
+        .item(&MenuItem::with_id(app, "console:status", "运行状态", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "console:account", "账号", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "console:pairing", "配对", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "console:versions", "版本", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "console:logs", "日志", true, None::<&str>)?)
+        .separator()
+        .item(&MenuItem::with_id(app, "worker:start", "启动 Worker", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "worker:stop", "停止 Worker", true, None::<&str>)?)
+        .build()?;
 
-    let check_update = MenuItem::with_id(app, "menu:update", "检查更新…", true, None::<&str>)?;
-    let reload = MenuItem::with_id(app, "menu:reload", "重新加载主界面", true, None::<&str>)?;
+    let help = SubmenuBuilder::new(app, "帮助")
+        .item(&MenuItem::with_id(app, "menu:update", "检查更新…", true, None::<&str>)?)
+        .separator()
+        .item(&MenuItem::with_id(app, "menu:about", "关于 DSH Pocket", true, None::<&str>)?)
+        .build()?;
 
     let edit = SubmenuBuilder::new(app, "编辑")
         .undo().redo().separator()
         .cut().copy().paste().select_all()
         .build()?;
 
-    Menu::with_items(app, &[
-        &open_main,
-        &console,
-        &worker,
-        &check_update,
-        &reload,
-        &PredefinedMenuItem::separator(app)?,
-        &edit,
-        &PredefinedMenuItem::separator(app)?,
-    ])
+    Menu::with_items(app, &[&file, &edit, &console, &help])
+}
+
+/// 菜单动作的唯一处理入口（窗口菜单与托盘菜单共用）。
+fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
+    match id {
+        "quit" => app.exit(0),
+        "open-main" | "menu:open-main" => {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }
+        // 回到引导页：主窗口导航回本应用前端，并让前端进入引导向导
+        "menu:guide" => {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+            navigate_main(app, "");
+            let _ = app.emit("open-onboarding", ());
+        }
+        "menu:settings" => open_console(app, "settings"),
+        "menu:about" => {
+            use tauri_plugin_dialog::DialogExt;
+            let info = app.package_info();
+            app.dialog()
+                .message(format!(
+                    "DSH Pocket v{}\n\n{}\n\n© 2026 掌鲸 DSH Pocket",
+                    info.version, info.name
+                ))
+                .title("关于 DSH Pocket")
+                .kind(tauri_plugin_dialog::MessageDialogKind::Info)
+                .show(|_| {});
+        }
+        "autostart" => {
+            use tauri_plugin_autostart::ManagerExt;
+            let al = app.autolaunch();
+            let now = al.is_enabled().unwrap_or(false);
+            let res = if now { al.disable() } else { al.enable() };
+            if let Err(e) = res {
+                notify(app, "开机自启设置失败", &e.to_string());
+            }
+            refresh_tray_menu(app);
+        }
+        "worker:start" => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = start_worker(&app);
+            });
+        }
+        "worker:stop" => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = run_dshc(&app, &["stop", "--json"]);
+            });
+        }
+        "menu:update" => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                use tauri_plugin_updater::UpdaterExt;
+                let r = app.updater().and_then(|u| {
+                    tauri::async_runtime::block_on(async move {
+                        u.check().await.map(|x| x.map(|y| y.version).unwrap_or_default())
+                    })
+                });
+                match r {
+                    Ok(v) if !v.is_empty() => notify(&app, "DSH Pocket", &format!("新版本 {v} 可用，请到「帮助」菜单或控制台查看")),
+                    Ok(_) => notify(&app, "DSH Pocket", "已是最新版本"),
+                    Err(e) => notify(&app, "检查更新失败", &e.to_string()),
+                }
+            });
+        }
+        other => {
+            // console:<panel> → 打开控制台窗口并定位到该页
+            if let Some(panel) = other.strip_prefix("console:") {
+                open_console(app, panel);
+            }
+        }
+    }
 }
 
 /// 把应用菜单挂到主窗口（Windows：标题栏菜单条；macOS：顶部菜单栏）
@@ -1792,6 +1808,10 @@ fn device_link_revoke<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 窗口菜单点击的唯一事件出口（托盘菜单另有 on_menu_event，共用 handle_menu_action）
+        .on_menu_event(|app, event| {
+            handle_menu_action(app, event.id().as_ref());
+        })
         // 单实例必须最先注册：第二次启动只聚焦已有窗口
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
@@ -1808,6 +1828,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             dshc_status,

@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-pocket/gateway",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "deepseek-harness-pocket Gateway：手机↔Worker 中转（Next.js 管理面 + 自定义 server 承载 WebSocket）",
   "private": true,
   "type": "module",

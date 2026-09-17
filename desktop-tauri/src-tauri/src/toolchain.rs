@@ -199,6 +199,32 @@ fn probe_node_version(node: &Path) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// 探测 PATH 上全局安装的 dsh（用户已有环境优先：向导 Harness 步展示/直接可用）。
+/// 返回探测到的版本字符串。
+pub fn probe_global_dsh() -> Option<String> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let exe = if cfg!(target_os = "windows") { "dsh.cmd" } else { "dsh" };
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(exe);
+        if !candidate.is_file() {
+            continue;
+        }
+        let mut cmd = Command::new(&candidate);
+        super::no_window(&mut cmd);
+        let Ok(out) = cmd.arg("--version").output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !version.is_empty() {
+            return Some(version);
+        }
+    }
+    None
+}
+
 /// 受管 node 候选：toolchain.json 声明的版本优先，否则最高版本
 fn pick_managed(home: &Path) -> Option<NodePart> {
     let root = home.join("runtimes").join("node");
@@ -416,6 +442,8 @@ pub fn bootstrap_status_impl(home: &Path) -> serde_json::Value {
         })
         .unwrap_or_default();
 
+    let dsh_global = probe_global_dsh();
+
     serde_json::json!({
         "onboardingDone": onboarding_done,
         "systemNode": sys,
@@ -429,6 +457,10 @@ pub fn bootstrap_status_impl(home: &Path) -> serde_json::Value {
         },
         "dshInstalled": !dsh_versions.is_empty(),
         "dshVersions": dsh_versions,
+        "dshGlobal": {
+            "found": dsh_global.is_some(),
+            "version": dsh_global,
+        },
     })
 }
 
@@ -717,9 +749,11 @@ pub fn bridge_install_impl<R: Runtime>(app: &AppHandle<R>, home: &Path, node: &N
     Ok(format!("已安装 Worker 核心 {version}"))
 }
 
-/// 用指定 NodePart 跑 npm 的结果（输出已合并 stdout+stderr，npm view --json 解析用）
+/// 用指定 NodePart 跑 npm 的结果。
+/// `stdout` 是干净的 stdout（`npm view --json` 解析用）；`output` 合并了两个流（报错文案用）。
 pub struct NpmOutcome {
     pub success: bool,
+    pub stdout: String,
     pub output: String,
 }
 
@@ -754,22 +788,17 @@ pub fn run_npm_with_node(
     let mut child = cmd.spawn().map_err(|e| format!("启动 npm 失败: {e}"))?;
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
 
-    // 两个管道各自逐行读：归档 + 喂给主循环的回调队列（读到 EOF 结束；超时由主循环杀进程）
-    let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    // 两个管道各自逐行读：stdout/stderr 分开归档（解析用）+ 喂给主循环的回调队列
+    let collected_out = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let collected_err = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let feed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let mut sources: Vec<(Box<dyn std::io::Read + Send>, &'static str)> = Vec::new();
+    let mut readers: Vec<std::thread::JoinHandle<()>> = Vec::new();
     if let Some(s) = child.stdout.take() {
-        sources.push((Box::new(s), "out"));
+        readers.push(spawn_line_reader(s, std::sync::Arc::clone(&collected_out), std::sync::Arc::clone(&feed)));
     }
     if let Some(s) = child.stderr.take() {
-        sources.push((Box::new(s), "err"));
+        readers.push(spawn_line_reader(s, std::sync::Arc::clone(&collected_err), std::sync::Arc::clone(&feed)));
     }
-    let readers: Vec<_> = sources
-        .into_iter()
-        .map(|(stream, tag)| {
-            spawn_line_reader(stream, tag, std::sync::Arc::clone(&collected), std::sync::Arc::clone(&feed))
-        })
-        .collect();
 
     // 主循环：等退出 + 把新行回给调用方回调（回调借用不跨线程）
     let drain_feed = |feed: &std::sync::Mutex<Vec<String>>| {
@@ -799,17 +828,19 @@ pub fn run_npm_with_node(
     }
     drain_feed(&feed);
     let status = child.wait().map_err(|e| format!("读取 npm 状态失败: {e}"))?;
-    let output = collected
-        .lock()
-        .map(|g| g.join("\n"))
-        .unwrap_or_default();
-    Ok(NpmOutcome { success: status.success(), output })
+    // stdout 单独留一份（npm view --json 等机器可读输出混入 stderr 行会炸解析）
+    let stdout = collected_out.lock().map(|g| g.join("\n")).unwrap_or_default();
+    let mut merged = collected_out.lock().map(|g| g.clone()).unwrap_or_default();
+    if let Ok(err_lines) = collected_err.lock() {
+        merged.extend(err_lines.iter().cloned());
+    }
+    let output = merged.join("\n");
+    Ok(NpmOutcome { success: status.success(), stdout, output })
 }
 
-/// 逐行读管道：归档到 collected（带 out/err 前缀）+ 喂 feed（主循环转回调）
+/// 逐行读管道：原始行归档到 collected + 喂 feed（主循环转回调）
 fn spawn_line_reader<R: std::io::Read + Send + 'static>(
     mut stream: R,
-    tag: &'static str,
     collected: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     feed: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 ) -> std::thread::JoinHandle<()> {
@@ -828,7 +859,7 @@ fn spawn_line_reader<R: std::io::Read + Send + 'static>(
                             continue;
                         }
                         if let Ok(mut g) = collected.lock() {
-                            g.push(format!("[{tag}] {line}"));
+                            g.push(line.clone());
                         }
                         if let Ok(mut g) = feed.lock() {
                             g.push(line);
@@ -840,7 +871,7 @@ fn spawn_line_reader<R: std::io::Read + Send + 'static>(
         let tail = pending.trim().to_string();
         if !tail.is_empty() {
             if let Ok(mut g) = collected.lock() {
-                g.push(format!("[{tag}] {tail}"));
+                g.push(tail.clone());
             }
             if let Ok(mut g) = feed.lock() {
                 g.push(tail);

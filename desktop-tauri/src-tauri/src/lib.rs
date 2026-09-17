@@ -1180,7 +1180,7 @@ fn managed_dsh_bin_for<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
 }
 
 /// 以工具链 Node 跑 npm（bridge 未装也能跑：npm 只依赖 node）。
-/// 返回 (是否成功, 合并后的输出)；`on_line` 用于安装进度（逐行 stdout/stderr）。
+/// `on_line` 用于安装进度（逐行 stdout/stderr）。
 fn run_npm<R: Runtime>(
     app: &AppHandle<R>,
     args: &[&str],
@@ -1188,10 +1188,10 @@ fn run_npm<R: Runtime>(
     registry: &str,
     timeout_secs: u64,
     on_line: Option<&dyn Fn(&str)>,
-) -> Result<(bool, String), String> {
+) -> Result<toolchain::NpmOutcome, String> {
     let home = pocket_home(app)?;
     let node = toolchain::resolve_node(&home)?;
-    let out = toolchain::run_npm_with_node(
+    toolchain::run_npm_with_node(
         &node,
         &home,
         args.iter(),
@@ -1199,8 +1199,7 @@ fn run_npm<R: Runtime>(
         Some(registry),
         timeout_secs,
         on_line,
-    )?;
-    Ok((out.success, out.output))
+    )
 }
 
 /// npm registry 上可用的 dsh 版本（新 → 旧）。prefer-online 避免缓存漏掉刚发布的版本。
@@ -1213,20 +1212,21 @@ async fn dsh_versions_available<R: Runtime>(
         let reg = registry
             .filter(|r| !r.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_REGISTRY.to_string());
-        let (ok, out) = run_npm(
+        let out = run_npm(
             &app,
-            &["view", DSH_PACKAGE, "versions", "--json", "--prefer-online"],
+            &["view", DSH_PACKAGE, "versions", "--json", "--prefer-online", "--loglevel=error"],
             None,
             &reg,
             120,
             None,
         )?;
-        if !ok {
-            return Err(format!("获取版本列表失败：{out}"));
+        if !out.success {
+            return Err(format!("获取版本列表失败：{}", out.output));
         }
-        // npm view --json 在只有一个版本时返回字符串而非数组，这里统一成 Vec
-        let v: serde_json::Value =
-            serde_json::from_str(out.trim()).map_err(|e| format!("版本列表解析失败: {e}"))?;
+        // 只解析 stdout：stderr 混进来会炸 JSON。npm view --json 在只有一个版本时
+        // 返回字符串而非数组，这里统一成 Vec
+        let v: serde_json::Value = serde_json::from_str(out.stdout.trim())
+            .map_err(|e| format!("版本列表解析失败: {e}（原始输出前 200 字符：{}）", &out.stdout[..out.stdout.len().min(200)]))?;
         let mut list: Vec<String> = match v {
             serde_json::Value::Array(a) => a
                 .into_iter()
@@ -1272,15 +1272,15 @@ async fn dsh_install_version<R: Runtime>(
         let mut res = run_npm(&app, &base, Some(&dir), &reg, NPM_INSTALL_TIMEOUT_SECS, Some(&on_line))?;
 
         // npm 可能拿陈旧 registry 元数据报 ETARGET（新版本刚发布时常见），强刷重试一次
-        if !res.0 && (res.1.contains("ETARGET") || res.1.contains("notarget")) {
+        if !res.success && (res.output.contains("ETARGET") || res.output.contains("notarget")) {
             let mut retry = base.to_vec();
             retry.push("--prefer-online");
             res = run_npm(&app, &retry, Some(&dir), &reg, NPM_INSTALL_TIMEOUT_SECS, Some(&on_line))?;
         }
 
-        if !res.0 {
+        if !res.success {
             let _ = std::fs::remove_dir_all(&dir); // 清半成品，避免被当成可用版本
-            return Err(format!("安装 {version} 失败：{}", res.1));
+            return Err(format!("安装 {version} 失败：{}", res.output));
         }
         if !managed_dsh_bin(&dir).exists() {
             let _ = std::fs::remove_dir_all(&dir);

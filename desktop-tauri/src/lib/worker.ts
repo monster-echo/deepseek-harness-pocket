@@ -239,6 +239,8 @@ export interface BootstrapStatus {
   bridge: { installed: boolean; version?: string; min: string; satisfies: boolean };
   dshInstalled: boolean;
   dshVersions?: string[];
+  /** 全局安装的 dsh（npm i -g；用户已有环境优先复用） */
+  dshGlobal?: { found: boolean; version?: string };
 }
 
 export async function bootstrapStatus(): Promise<BootstrapStatus> {
@@ -253,6 +255,7 @@ export async function bootstrapStatus(): Promise<BootstrapStatus> {
       ],
       bridge: { installed: false, min: "0.1.1", satisfies: false },
       dshInstalled: false,
+      dshGlobal: { found: false },
     };
   }
   return invoke<BootstrapStatus>("bootstrap_status");

@@ -63,7 +63,8 @@ export function OnboardingWizard({ reason, onFinished }: { reason?: string | nul
 
   const nodeDone = Boolean(adoptedSystem || status?.node.installed);
   const bridgeDone = Boolean(status?.bridge.installed && status?.bridge.satisfies);
-  const harnessDone = Boolean(status?.dshInstalled);
+  // 受管或全局 dsh 都算就绪（worker 启动时受管优先、全局兜底）
+  const harnessDone = Boolean(status?.dshInstalled || status?.dshGlobal?.found);
   const accountOk = preflight?.items.find((i) => i.id === "account")?.state === "pass";
   const portOk = preflight?.items.find((i) => i.id === "port")?.state !== "fail";
 

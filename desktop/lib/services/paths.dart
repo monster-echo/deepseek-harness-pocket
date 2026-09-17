@@ -20,6 +20,11 @@ class AppPaths {
   /// gateway 验签后自动绑定账号）。文件名与 bridge 插件默认值一致。
   static String get accountSessionFile => p.join(pocketHome, 'account-session.json');
 
+  /// 扫码登录（手机授权）产生的设备凭据与账号身份。
+  /// 与 account-session.json 分开存放：那份是 auth 会话（bridge 会读它的 token
+  /// 上送 gateway 自动绑定），这份是 gateway 设备凭据，混用会让 uplink 送出错东西。
+  static String get deviceLinkFile => p.join(pocketHome, 'device-link.json');
+
   /// bridge 状态文件（hostKey / 配对 token / 指纹，dshc 生成）。
   static String get bridgeStateFile => p.join(pocketHome, 'bridge-state.json');
 

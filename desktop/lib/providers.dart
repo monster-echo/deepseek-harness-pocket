@@ -12,6 +12,7 @@ import 'models.dart';
 import 'services/account.dart';
 import 'services/autostart.dart';
 import 'services/console_window.dart';
+import 'services/device_link.dart';
 import 'services/paths.dart';
 import 'services/runtime.dart';
 import 'services/updater.dart';
@@ -57,8 +58,36 @@ final workerServiceProvider = Provider<WorkerService>((ref) => WorkerService());
 final runtimeServiceProvider = Provider<DshRuntimeService>((ref) => DshRuntimeService());
 final autostartServiceProvider = Provider<AutostartService>((ref) => AutostartService());
 final updaterServiceProvider = Provider<UpdaterService>((ref) => UpdaterService());
-final accountServiceProvider =
-    Provider<AccountService>((ref) => AccountService(() => ref.read(settingsProvider)));
+final accountServiceProvider = Provider<AccountService>(
+  (ref) => AccountService(
+    () => ref.read(settingsProvider),
+    // REST 凭据：优先 auth 会话（浏览器登录），否则扫码登录的设备凭据。
+    // 用静态读取器而非本 provider，避免顶层自引用循环。
+    () => readAccountSession()?.token ?? ref.read(deviceLinkServiceProvider).read()?.credential,
+    () => ref.read(deviceLinkServiceProvider).read(),
+  ),
+);
+
+/// 扫码登录（手机授权）服务：申请链接码 / 轮询 / 吊销。
+final deviceLinkServiceProvider =
+    Provider<DeviceLinkService>((ref) => DeviceLinkService(() => ref.read(settingsProvider)));
+
+/// 当前扫码登录态（device-link.json）；登录/登出后 refresh。
+class DeviceLinkNotifier extends Notifier<DeviceLink?> {
+  @override
+  DeviceLink? build() => ref.read(deviceLinkServiceProvider).read();
+
+  void refresh() => state = ref.read(deviceLinkServiceProvider).read();
+
+  /// 退出登录：解绑这台电脑并清本地凭据。
+  Future<void> signOut() async {
+    await ref.read(deviceLinkServiceProvider).revoke();
+    state = null;
+  }
+}
+
+final deviceLinkProvider =
+    NotifierProvider<DeviceLinkNotifier, DeviceLink?>(DeviceLinkNotifier.new);
 final consoleWindowServiceProvider = Provider<ConsoleWindowService>((ref) => ConsoleWindowService());
 
 /// sidecar 就绪状态（缺失时控制台顶部提示；主窗口引导面亦有入口）。
@@ -99,17 +128,37 @@ final workerStatusProvider = StreamProvider<WorkerStatus>((ref) async* {
 // ---------- 账号 ----------
 
 /// 账号快照（登录态 + 本机绑定态）；登录/登出/绑定后 invalidate。
-/// 未登录时 data 为 null。
+/// 两种登录都算：浏览器登录（auth 会话）与手机扫码授权（设备凭据）。
+/// 都没登录时 data 为 null（账号页显示二维码）。
 final accountSnapshotProvider = FutureProvider<AccountSnapshot?>((ref) async {
   final svc = ref.watch(accountServiceProvider);
-  if (svc.readSession() == null) return null;
+  final link = ref.watch(deviceLinkProvider);
+  if (svc.readSession() == null && link == null) return null;
   try {
     return await svc.snapshot();
   } on AccountException {
-    // 已登录但查询失败（网络等）：退回仅本地会话的快照
+    // 已登录但查询失败（网络等）：退回仅本地的快照
     final session = svc.readSession();
-    if (session == null) return null;
-    return AccountSnapshot(session: session, bound: false, workerKnown: false);
+    if (session != null) {
+      return AccountSnapshot(
+        userId: session.userId,
+        email: session.email,
+        bound: false,
+        workerKnown: false,
+        signedInAt: session.updatedAt,
+      );
+    }
+    if (link != null) {
+      return AccountSnapshot(
+        userId: link.userId,
+        email: link.email,
+        bound: false,
+        workerKnown: false,
+        viaDeviceLink: true,
+        signedInAt: link.linkedAt,
+      );
+    }
+    return null;
   }
 });
 
@@ -147,6 +196,10 @@ class AutostartEnabledNotifier extends Notifier<AsyncValue<bool>> {
     }
   }
 
+  /// 重新问系统要一次真实状态（托盘每次弹出菜单前调用：
+  /// 用户可能在「系统设置 → 登录项」里改过，控制台窗口也可能改过）。
+  Future<void> refresh() => _load();
+
   Future<void> set(bool value) async {
     try {
       final svc = ref.read(autostartServiceProvider);
@@ -154,6 +207,9 @@ class AutostartEnabledNotifier extends Notifier<AsyncValue<bool>> {
       await _load();
     } catch (e, st) {
       state = AsyncValue.error(e, st);
+      // 交给调用方提示：托盘发系统通知、控制台弹 toast。
+      // 这里若静默，用户看到的就是「点了没反应、勾也没了」。
+      rethrow;
     }
   }
 }

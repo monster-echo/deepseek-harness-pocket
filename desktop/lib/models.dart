@@ -1,6 +1,7 @@
 /// 数据模型：设置 / worker 状态 / 配对 payload。
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'services/paths.dart';
@@ -21,10 +22,19 @@ class AppSettings {
     required this.authApiUrl,
     required this.authAppId,
     required this.authAppEnvironment,
+    this.consoleSidebarWidth = defaultConsoleSidebarWidth,
+    this.consoleSidebarCollapsed = false,
   });
 
   static const defaultGatewayUrl = 'wss://dsh-pocket.zhongbei.tech/gw/worker';
   static const defaultRegistry = 'https://registry.npmmirror.com';
+
+  /// 控制台侧栏默认宽度（过窄会挤掉「dsh 版本」这类长标签，故给足）。
+  static const defaultConsoleSidebarWidth = 176.0;
+
+  /// 侧栏可拖拽范围；折叠态宽度见 ui/console_app.dart。
+  static const consoleSidebarMinWidth = 148.0;
+  static const consoleSidebarMaxWidth = 380.0;
 
   String gatewayUrl;
   String workerName; // 空 → dshc 用 hostname
@@ -44,6 +54,12 @@ class AppSettings {
   String authAppId;
   /// 认证环境（development / staging / production）
   String authAppEnvironment;
+
+  /// 控制台侧栏宽度（可拖拽；持久化到 desktop-settings.json）
+  double consoleSidebarWidth;
+
+  /// 控制台侧栏是否折叠为图标栏
+  bool consoleSidebarCollapsed;
 
   factory AppSettings.defaults() => AppSettings(
         gatewayUrl: defaultGatewayUrl,
@@ -75,7 +91,18 @@ class AppSettings {
       authApiUrl: (json['authApiUrl'] as String?) ?? d.authApiUrl,
       authAppId: (json['authAppId'] as String?) ?? d.authAppId,
       authAppEnvironment: (json['authAppEnvironment'] as String?) ?? d.authAppEnvironment,
+      consoleSidebarWidth: _sidebarWidth(json['consoleSidebarWidth']),
+      consoleSidebarCollapsed: (json['consoleSidebarCollapsed'] as bool?) ?? false,
     );
+  }
+
+  /// 侧栏宽度容错：缺失/越界一律回到默认值（手改配置文件也不会把界面弄坏）。
+  static double _sidebarWidth(Object? raw) {
+    final value = (raw as num?)?.toDouble();
+    if (value == null || value < consoleSidebarMinWidth || value > consoleSidebarMaxWidth) {
+      return defaultConsoleSidebarWidth;
+    }
+    return value;
   }
 
   Map<String, dynamic> toJson() => {
@@ -92,6 +119,8 @@ class AppSettings {
         'authApiUrl': authApiUrl,
         'authAppId': authAppId,
         'authAppEnvironment': authAppEnvironment,
+        'consoleSidebarWidth': consoleSidebarWidth,
+        'consoleSidebarCollapsed': consoleSidebarCollapsed,
       };
 
   AppSettings copyWith({
@@ -107,6 +136,8 @@ class AppSettings {
     String? authApiUrl,
     String? authAppId,
     String? authAppEnvironment,
+    double? consoleSidebarWidth,
+    bool? consoleSidebarCollapsed,
   }) =>
       AppSettings(
         gatewayUrl: gatewayUrl ?? this.gatewayUrl,
@@ -121,6 +152,8 @@ class AppSettings {
         authApiUrl: authApiUrl ?? this.authApiUrl,
         authAppId: authAppId ?? this.authAppId,
         authAppEnvironment: authAppEnvironment ?? this.authAppEnvironment,
+        consoleSidebarWidth: consoleSidebarWidth ?? this.consoleSidebarWidth,
+        consoleSidebarCollapsed: consoleSidebarCollapsed ?? this.consoleSidebarCollapsed,
       );
 
   /// 解析当前选择的 dsh 可执行路径；null = 交给 dshc 从 PATH 解析。
@@ -281,6 +314,31 @@ class AccountSession {
         'refreshToken': refreshToken,
         'updatedAt': updatedAt,
       };
+
+  /// JWT 是否已过期（只读 exp，不验签；仅用于判断本地会话还有没有用）。
+  bool get isExpired {
+    final exp = _jwtExpiry(token);
+    if (exp == null) return false; // 解析不出来就不武断判死
+    return DateTime.now().millisecondsSinceEpoch >= exp;
+  }
+
+  /// 会话是否可用：token 非空，且（没过期 或 有 refreshToken 可续期）。
+  bool get usable => token.isNotEmpty && (!isExpired || refreshToken.isNotEmpty);
+
+  /// 读取 JWT 的 exp（秒 → epoch ms）；拿不到返回 null。
+  static int? _jwtExpiry(String jwt) {
+    final parts = jwt.split('.');
+    if (parts.length < 2) return null;
+    try {
+      var payload = parts[1].replaceAll('-', '+').replaceAll('_', '/');
+      payload = payload.padRight(payload.length + (4 - payload.length % 4) % 4, '=');
+      final json = jsonDecode(utf8.decode(base64.decode(payload))) as Map<String, dynamic>;
+      final exp = json['exp'];
+      return exp is num ? exp.toInt() * 1000 : null;
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// 本机 Worker 标识（bridge-state.json 的最小投影，账号绑定/登录态判断用）。

@@ -6,14 +6,17 @@
 /// 保证勾选态始终新鲜。退出 = 停止服务再退出；关窗只是收托盘。
 library;
 
+import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../models.dart';
 import '../providers.dart';
+import 'notify.dart';
 import 'worker.dart';
 
 typedef WorkerAction = Future<void> Function(WorkerService svc, AppSettings settings);
@@ -24,6 +27,9 @@ class TrayController with TrayListener {
   final ProviderContainer _container;
   bool _inited = false;
   bool _menuBuilding = false;
+
+  /// 构建期间又有刷新请求：构建结束后补一次，避免「点了勾选态没更新」。
+  bool _menuDirty = false;
 
   Future<void> init() async {
     if (_inited) return;
@@ -70,7 +76,10 @@ class TrayController with TrayListener {
   }
 
   Future<void> _refreshMenu() async {
-    if (_menuBuilding) return;
+    if (_menuBuilding) {
+      _menuDirty = true;
+      return;
+    }
     _menuBuilding = true;
     try {
       final running = _container.read(workerStatusProvider).value?.running ?? false;
@@ -80,6 +89,10 @@ class TrayController with TrayListener {
       // 无会话环境等场景托盘不可用，静默
     } finally {
       _menuBuilding = false;
+      if (_menuDirty) {
+        _menuDirty = false;
+        unawaited(_refreshMenu());
+      }
     }
   }
 
@@ -91,7 +104,11 @@ class TrayController with TrayListener {
 
   @override
   void onTrayIconRightMouseDown() async {
-    // 弹出前强制刷新：checkbox（开机启动）等状态永远反映真实值
+    // 弹出前强制刷新：先向系统重新确认自启状态（用户可能在系统设置里改过），
+    // 再重建菜单，保证 checkbox 反映真实值
+    try {
+      await _container.read(autostartEnabledProvider.notifier).refresh();
+    } catch (_) {}
     await _refreshMenu();
     trayManager.popUpContextMenu();
   }
@@ -113,7 +130,13 @@ class TrayController with TrayListener {
         final current = _container.read(autostartEnabledProvider).value ?? false;
         try {
           await notifier.set(!current);
-        } catch (_) {}
+        } catch (e) {
+          // 托盘没有 context 弹 toast：用系统通知告知失败原因（如系统登录项被关）
+          debugPrint('[tray] autostart toggle failed: $e');
+          try {
+            await DesktopNotify.notify('开机启动设置失败', body: '$e');
+          } catch (_) {}
+        }
         await _refreshMenu();
       case 'quit':
         await quitApp();

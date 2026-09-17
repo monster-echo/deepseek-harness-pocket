@@ -16,6 +16,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../models.dart';
+import 'device_link.dart';
 import 'paths.dart';
 import 'proc.dart';
 
@@ -30,24 +31,73 @@ class AccountException implements Exception {
 /// 账号绑定/登录态快照（账号页展示用）。
 class AccountSnapshot {
   const AccountSnapshot({
-    required this.session,
+    required this.userId,
+    required this.email,
     required this.bound,
     required this.workerKnown,
+    this.viaDeviceLink = false,
+    this.signedInAt = 0,
   });
 
-  final AccountSession session;
+  final String userId;
+  final String email;
 
   /// 本机 Worker 是否已绑定到该账号（presence 中能按指纹匹配到）。
   final bool bound;
 
   /// gateway 侧是否注册过本机（hostKey 未注册时无法绑定）。
   final bool workerKnown;
+
+  /// true = 手机扫码授权登录（gateway 设备凭据）；
+  /// false = 浏览器登录（auth 会话，见 account-session.json）。
+  final bool viaDeviceLink;
+
+  /// 登录/授权时间（epoch ms，展示用）。
+  final int signedInAt;
+
+  /// 展示用账号标识（邮箱缺失时退到 userId 短号）。
+  String get display => email.isNotEmpty
+      ? email
+      : (userId.isEmpty
+          ? '已登录'
+          : '账号 ${userId.substring(0, userId.length >= 8 ? 8 : userId.length)}');
 }
 
+/// 读 auth 会话文件（静态版）：给「凭据解析」这类无需服务实例的场景用，
+/// 避免 provider 自引用（见 providers.dart accountServiceProvider）。
+AccountSession? readAccountSession() {
+  try {
+    final file = File(AppPaths.accountSessionFile);
+    if (!file.existsSync()) return null;
+    final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+    final session = AccountSession.fromJson(json);
+    if (session.token.isEmpty) return null;
+    // 过期且无法续期的会话文件（历史遗留：只有 token、没有 refreshToken）
+    // 视为未登录：否则界面会显示一个没有邮箱、绑定态也查不动的「假登录」，
+    // 用户看到的就是「登录了却不显示」。
+    if (!session.usable) {
+      debugPrint('[account] 本地会话已失效且无法续期，按未登录处理');
+      try {
+        if (file.existsSync()) file.deleteSync();
+      } catch (_) {}
+      return null;
+    }
+    return session;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 账号会话服务：auth 会话（浏览器登录）+ gateway 设备凭据（扫码登录）。
+///
+/// [credential] 给出当前用于 REST 的 Bearer：优先 auth 会话 token，
+/// 没有会话时回落到扫码登录的设备凭据（两者 gateway 侧都认，见 api.ts authUser）。
 class AccountService {
-  AccountService(this._settings);
+  AccountService(this._settings, this._credential, this._deviceLink);
 
   final AppSettings Function() _settings;
+  final String? Function() _credential;
+  final DeviceLink? Function() _deviceLink;
 
   HttpClient? _client;
   HttpClient get _http {
@@ -57,17 +107,7 @@ class AccountService {
 
   // ---------- 会话文件 ----------
 
-  AccountSession? readSession() {
-    try {
-      final file = File(AppPaths.accountSessionFile);
-      if (!file.existsSync()) return null;
-      final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
-      final session = AccountSession.fromJson(json);
-      return session.token.isEmpty ? null : session;
-    } catch (_) {
-      return null;
-    }
-  }
+  AccountSession? readSession() => readAccountSession();
 
   Future<void> _saveSession(AccountSession session) async {
     final file = File(AppPaths.accountSessionFile);
@@ -271,6 +311,7 @@ div{text-align:center}h1{font-size:20px}p{color:#a1a1aa;font-size:14px}</style><
   }
 
   /// 登出：清本地会话（服务器端会话尽力撤销，失败不打断）。
+  /// 扫码登录的设备凭据由 DeviceLinkService.revoke 处理（见控制台账号页）。
   Future<void> signOut() async {
     try {
       await _authRequest('/api/v1/auth/sign-out', body: {}, auth: true, method: 'POST');
@@ -285,8 +326,9 @@ div{text-align:center}h1{font-size:20px}p{color:#a1a1aa;font-size:14px}</style><
   /// 把本机 Worker 绑定到当前登录账号（免扫码）。
   /// 返回 gateway 的绑定结果信息；失败抛 [AccountException]。
   Future<String> bindThisWorker() async {
-    final session = readSession();
-    if (session == null) throw const AccountException('尚未登录');
+    if (_credential() == null || _credential()!.isEmpty) {
+      throw const AccountException('尚未登录');
+    }
     final identity = readWorkerIdentity();
     if (identity == null) {
       throw const AccountException('本机服务标识不可用（请先启动一次服务）');
@@ -303,10 +345,15 @@ div{text-align:center}h1{font-size:20px}p{color:#a1a1aa;font-size:14px}</style><
   }
 
   /// 查询账号下 Worker 列表并按指纹判断本机绑定状态。
+  /// 会话过期但有 refreshToken 时先续期（否则查询必然 401）。
   Future<AccountSnapshot> snapshot() async {
-    final session = readSession();
-    if (session == null) {
+    var session = readSession();
+    final link = _deviceLink();
+    if (session == null && link == null) {
       throw const AccountException('尚未登录');
+    }
+    if (session != null && session.isExpired && session.refreshToken.isNotEmpty) {
+      session = await refresh() ?? session;
     }
     final identity = readWorkerIdentity();
     var bound = false;
@@ -327,7 +374,24 @@ div{text-align:center}h1{font-size:20px}p{color:#a1a1aa;font-size:14px}</style><
       // 连接中断等非预期异常：统一转成可读文案
       throw AccountException('网络异常：$e');
     }
-    return AccountSnapshot(session: session, bound: bound, workerKnown: workerKnown);
+    if (session == null && link != null) {
+      return AccountSnapshot(
+        userId: link.userId,
+        email: link.email,
+        bound: bound,
+        workerKnown: workerKnown,
+        viaDeviceLink: true,
+        signedInAt: link.linkedAt,
+      );
+    }
+    final active = session!;
+    return AccountSnapshot(
+      userId: active.userId,
+      email: active.email,
+      bound: bound,
+      workerKnown: workerKnown,
+      signedInAt: active.updatedAt,
+    );
   }
 
   // ---------- HTTP ----------
@@ -340,8 +404,7 @@ div{text-align:center}h1{font-size:20px}p{color:#a1a1aa;font-size:14px}</style><
       'X-App-Environment': settings.authAppEnvironment,
       'X-Platform': Platform.operatingSystem,
       'Accept-Language': 'zh-CN',
-      if (auth)
-        'Authorization': 'Bearer ${readSession()?.token ?? ''}',
+      if (auth) 'Authorization': 'Bearer ${_credential() ?? ''}',
     };
   }
 

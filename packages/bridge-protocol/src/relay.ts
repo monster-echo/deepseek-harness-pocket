@@ -9,6 +9,23 @@ import type { DshSessionEvent } from './events.js'
 
 // ---------- Worker uplink（插件 → gateway）----------
 
+/**
+ * Worker 机器的静态信息（注册时上送一次）。
+ *
+ * 用途：手机端「选择 Worker / Worker 详情」要显示 `macOS 14.6 · 8 核 16GB`
+ * 这类机器信息，而这些字段不在会话协议里，必须随注册帧带上来。
+ * 运行时指标（CPU / 内存占用）不在这里——那需要单独的采集 RPC。
+ */
+export interface WorkerHostInfo {
+  readonly hostname?: string
+  /** 人类可读的系统版本，如 `macOS 14.6` / `Windows 11` */
+  readonly osVersion?: string
+  readonly cpuCores?: number
+  readonly memoryBytes?: number
+  /** 上报时的 dsh 运行版本（可能比 capabilities.dshVersion 更细） */
+  readonly runtimeVersion?: string
+}
+
 export interface WorkerRegisterFrame {
   readonly kind: 'worker-register'
   readonly hostKey: string
@@ -16,6 +33,8 @@ export interface WorkerRegisterFrame {
   readonly name: string
   readonly hostFingerprint: string
   readonly dshVersion: string | null
+  /** 机器静态信息（旧版插件不带，缺失时手机端只显示名称与在线态） */
+  readonly host?: WorkerHostInfo
   /**
    * Worker 持有的账号 session token（可选；桌面端登录后写入本机会话文件，
    * 插件每次连接时读取）。gateway 验签通过后把该 Worker 自动绑定到对应账号，
@@ -87,6 +106,8 @@ export interface WorkerPresence {
     readonly dshVersion: string | null
     readonly protocolVersion: string
   } | null
+  /** 机器静态信息（注册时上送；离线或旧版插件时为 null） */
+  readonly host: WorkerHostInfo | null
 }
 
 export type GatewayToPhoneFrame =
@@ -104,6 +125,28 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null
+}
+
+function parseHostInfo(value: unknown): WorkerHostInfo | null {
+  const v = asRecord(value)
+  if (!v) return null
+  const info: {
+    hostname?: string
+    osVersion?: string
+    cpuCores?: number
+    memoryBytes?: number
+    runtimeVersion?: string
+  } = {}
+  if (typeof v.hostname === 'string' && v.hostname.length > 0) info.hostname = v.hostname
+  if (typeof v.osVersion === 'string' && v.osVersion.length > 0) info.osVersion = v.osVersion
+  if (typeof v.cpuCores === 'number' && Number.isFinite(v.cpuCores)) info.cpuCores = v.cpuCores
+  if (typeof v.memoryBytes === 'number' && Number.isFinite(v.memoryBytes)) {
+    info.memoryBytes = v.memoryBytes
+  }
+  if (typeof v.runtimeVersion === 'string' && v.runtimeVersion.length > 0) {
+    info.runtimeVersion = v.runtimeVersion
+  }
+  return Object.keys(info).length > 0 ? info : null
 }
 
 function parsePresence(value: unknown): WorkerPresence | null {
@@ -127,6 +170,7 @@ function parsePresence(value: unknown): WorkerPresence | null {
     online: v.online,
     lastSeenAt: v.lastSeenAt,
     capabilities,
+    host: parseHostInfo(v.host),
   }
 }
 

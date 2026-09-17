@@ -10,6 +10,25 @@ function asRecord(value) {
         ? value
         : null;
 }
+function parseHostInfo(value) {
+    const v = asRecord(value);
+    if (!v)
+        return null;
+    const info = {};
+    if (typeof v.hostname === 'string' && v.hostname.length > 0)
+        info.hostname = v.hostname;
+    if (typeof v.osVersion === 'string' && v.osVersion.length > 0)
+        info.osVersion = v.osVersion;
+    if (typeof v.cpuCores === 'number' && Number.isFinite(v.cpuCores))
+        info.cpuCores = v.cpuCores;
+    if (typeof v.memoryBytes === 'number' && Number.isFinite(v.memoryBytes)) {
+        info.memoryBytes = v.memoryBytes;
+    }
+    if (typeof v.runtimeVersion === 'string' && v.runtimeVersion.length > 0) {
+        info.runtimeVersion = v.runtimeVersion;
+    }
+    return Object.keys(info).length > 0 ? info : null;
+}
 function parsePresence(value) {
     const v = asRecord(value);
     if (!v)
@@ -35,6 +54,7 @@ function parsePresence(value) {
         online: v.online,
         lastSeenAt: v.lastSeenAt,
         capabilities,
+        host: parseHostInfo(v.host),
     };
 }
 /** 解析 gateway → phone 帧（app 侧使用）。 */

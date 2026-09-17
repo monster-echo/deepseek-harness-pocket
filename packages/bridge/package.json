@@ -4,6 +4,11 @@
   "description": "deepseek-harness-pocket 电脑端：DeepSeek Harness 桥接插件（mobile/v1 协议服务端）+ dshc Worker CLI",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monster-echo/deepseek-harness-pocket.git",
+    "directory": "packages/bridge"
+  },
   "main": "./dist/plugin/index.js",
   "types": "./dist/plugin/index.d.ts",
   "exports": {

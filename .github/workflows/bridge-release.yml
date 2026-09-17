@@ -1,13 +1,16 @@
 name: bridge-release
 
-# Bridge（dshc）发布：打 tag `bridge-v<版本>` 触发（或手动 dispatch）。
-# 产物：npm 公共包 @deepseek-harness-pocket/bridge——桌面端「去 sidecar 化」后，
-# worker CLI 不再打进安装包，首次引导时由 App 从 npm 安装。
+# Bridge (dshc) release: triggered by tag `bridge-v<version>` or manual dispatch.
+# Artifact: the public npm package @deepseek-harness-pocket/bridge — since v0.2.0 the
+# desktop installer no longer bundles the worker CLI; the app installs it from npm
+# during first-run onboarding.
 #
-# 需要：GitHub Secret NPM_TOKEN（有 @deepseek-harness-pocket scope 发布权的
-# automation token；2FA 账号必须用 granular/automation token 才能 CI 发布）。
-# 国内 npmmirror 自动同步 npmjs（通常几分钟）；App 侧安装带 --prefer-online
-# 并做最低版本校验，同步延迟时提示重试。
+# Auth: npm **trusted publishing** (OIDC) — no NPM_TOKEN secret involved.
+#   Requires: `id-token: write` permission, npm CLI >= 11.5.1 (bundled with Node 24,
+#   we also upgrade npm explicitly), and the package's trusted-publisher config on
+#   npmjs.com pointing at this repo + this workflow filename.
+# The `repository` field in packages/bridge/package.json must match this repo
+# (provenance requirement).
 
 on:
   push:
@@ -15,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（如 0.1.1，需与 packages/bridge/package.json 一致）'
+        description: 'Version (e.g. 0.1.1, must match packages/bridge/package.json)'
         required: true
 
 concurrency:
@@ -23,14 +26,15 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
+  id-token: write # required for OIDC trusted publishing
 
 env:
-  NODE_VERSION: '22'
+  NODE_VERSION: '24'
 
 jobs:
   publish:
-    name: 测试 + 构建 + 发 npm
+    name: Test + build + publish to npm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +45,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: 'https://registry.npmjs.org'
+      # OIDC trusted publishing needs npm >= 11.5.1; upgrade to be safe on any runner image
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@latest
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile=false
@@ -59,7 +66,7 @@ jobs:
         run: |
           PKG="$(node -p "require('./packages/bridge/package.json').version")"
           if [ "$PKG" != "${{ steps.ver.outputs.version }}" ]; then
-            echo "::error::tag 版本(${{ steps.ver.outputs.version }}) 与 packages/bridge/package.json 版本($PKG) 不一致"
+            echo "::error::tag version (${{ steps.ver.outputs.version }}) != packages/bridge/package.json version ($PKG)"
             exit 1
           fi
 
@@ -72,17 +79,25 @@ jobs:
       - name: Build
         run: pnpm --filter @deepseek-harness-pocket/bridge build
 
-      - name: Publish
+      - name: Publish (OIDC, no token)
         working-directory: packages/bridge
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: pnpm publish --access public --no-git-checks
+        # npm cannot resolve pnpm's `workspace:*` devDependencies; they are build/test-only
+        # and the published tarball only ships `files: ["dist"]`, so strip them first.
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            delete pkg.devDependencies;
+            delete pkg.scripts;
+            fs.writeFileSync("package.json", JSON.stringify(pkg, undefined, 2) + "\n");
+          '
+          npm publish --provenance --access public
 
-      - name: 汇总
+      - name: Summary
         run: |
           {
             echo "### @deepseek-harness-pocket/bridge ${{ steps.ver.outputs.version }}"
             echo ""
             echo "- npm: https://www.npmjs.com/package/@deepseek-harness-pocket/bridge"
-            echo "- npmmirror 同步: https://npmmirror.com/package/@deepseek-harness-pocket/bridge"
+            echo "- npmmirror sync: https://npmmirror.com/package/@deepseek-harness-pocket/bridge"
           } >> "$GITHUB_STEP_SUMMARY"

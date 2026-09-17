@@ -25,7 +25,6 @@ export interface RunInfo {
   port: number;
   host: string;
   name: string;
-  caps: string;
   /** dsh 打印的 Web 控制台地址（0.1.5+ 带 ?token=，随重启刷新） */
   webUrl?: string;
   /** supervisor 状态；缺省视为 active（旧 run.json 兼容） */
@@ -111,7 +110,6 @@ const MOCK: WorkerStatus = {
     port: 3780,
     host: "0.0.0.0",
     name: "studio-mac-mini",
-    caps: "m3",
     webUrl: "http://127.0.0.1:3780/?token=mock-token",
   },
   profileDir: "~/.deepseek-harness-pocket/profiles/companion",
@@ -552,6 +550,12 @@ export async function checkUpdate(): Promise<UpdateInfo> {
   return invoke<UpdateInfo>("check_update");
 }
 
+/** 菜单「检查更新…」发现新版本时直推版本号（状态页据此亮出更新卡片） */
+export async function onUpdateAvailable(cb: (version: string) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<string>("update-available", (e) => cb(e.payload));
+}
+
 /** 下载并安装更新，成功后应用会重启 */
 export async function installUpdate(): Promise<void> {
   if (!isTauri()) return;
@@ -569,7 +573,6 @@ export interface AppSettings {
   workerName: string;
   host: string;
   port: number;
-  caps: string;
   registry: string;
   [k: string]: unknown;
 }
@@ -579,7 +582,7 @@ export async function getSettings(): Promise<AppSettings> {
   if (!isTauri()) {
     return { gatewayUrl: "wss://dsh-pocket.zhongbei.tech/gw/worker",
              workerName: "mock-mac", host: "0.0.0.0", port: 3780,
-             caps: "m3", registry: "https://registry.npmmirror.com" };
+             registry: "https://registry.npmmirror.com" };
   }
   return invoke<AppSettings>("get_settings");
 }

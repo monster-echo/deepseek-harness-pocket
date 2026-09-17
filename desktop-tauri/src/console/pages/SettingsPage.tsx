@@ -30,9 +30,10 @@ function Input({
 }
 
 /**
- * 设置页：Worker 启动参数（端口/网关/监听/能力档位/名称/registry）。
+ * 设置页：Worker 启动参数（端口/监听/名称/registry）。
  * 写入 ~/.deepseek-harness-pocket/desktop-settings.json —— 键名与 Flutter 端一致，
  * 老用户的设置可直接沿用。改完需重启 Worker 生效。
+ * 能力档位（caps）是内部参数，不在此展示；默认 m3，必要时可经设置文件覆盖。
  */
 export function SettingsPage() {
   const [draft, setDraft] = useState<AppSettings | null>(null);
@@ -137,14 +138,6 @@ export function SettingsPage() {
             </div>
             <Input value={draft.workerName ?? ""} onChange={(v) => set("workerName", v)}
                    placeholder="（用主机名）" />
-          </div>
-
-          <div className="flex items-start justify-between gap-4 py-3">
-            <div className="min-w-0">
-              <p className="text-[13px] font-medium">能力档位</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">dsh 的能力集（如 m3）</p>
-            </div>
-            <Input value={draft.caps ?? ""} mono onChange={(v) => set("caps", v)} />
           </div>
 
           <div className="flex items-start justify-between gap-4 py-3">

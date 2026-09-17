@@ -438,7 +438,12 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
                     })
                 });
                 match r {
-                    Ok(v) if !v.is_empty() => notify(&app, "DSH Pocket", &format!("新版本 {v} 可用，请到「帮助」菜单或控制台查看")),
+                    Ok(v) if !v.is_empty() => {
+                        notify(&app, "DSH Pocket", &format!("新版本 {v} 可用"));
+                        // 打开控制台「运行状态」页并直推版本号——那里有「立即更新」按钮
+                        let _ = app.emit("update-available", &v);
+                        open_console(&app, "status");
+                    }
                     Ok(_) => notify(&app, "DSH Pocket", "已是最新版本"),
                     Err(e) => notify(&app, "检查更新失败", &e.to_string()),
                 }
@@ -865,7 +870,6 @@ fn read_account_session<R: Runtime>(app: AppHandle<R>) -> serde_json::Value {
 const DEFAULT_GATEWAY_URL: &str = "wss://dsh-pocket.zhongbei.tech/gw/worker";
 const DEFAULT_PORT: i64 = 3780;
 const DEFAULT_HOST: &str = "0.0.0.0";
-const DEFAULT_CAPS: &str = "m3";
 
 fn settings_file<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     Ok(pocket_home(app)?.join("desktop-settings.json"))
@@ -879,7 +883,6 @@ fn read_settings<R: Runtime>(app: &AppHandle<R>) -> serde_json::Value {
         "workerName": hostname(),
         "host": DEFAULT_HOST,
         "port": DEFAULT_PORT,
-        "caps": DEFAULT_CAPS,
         "registry": "https://registry.npmmirror.com",
     });
     if let Ok(f) = settings_file(app) {
@@ -943,7 +946,6 @@ fn worker_start_args<R: Runtime>(app: &AppHandle<R>, dsh: Option<&str>) -> Vec<S
         "--gateway".into(), g("gatewayUrl", DEFAULT_GATEWAY_URL),
         "--port".into(), st.get("port").and_then(|v| v.as_i64()).unwrap_or(DEFAULT_PORT).to_string(),
         "--host".into(),   g("host", DEFAULT_HOST),
-        "--caps".into(),   g("caps", DEFAULT_CAPS),
     ];
     // workerName 留空则不传，让 dshc 自己取主机名
     if let Some(n) = st.get("workerName").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {

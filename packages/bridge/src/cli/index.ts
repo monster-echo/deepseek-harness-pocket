@@ -5,7 +5,7 @@
  *   dshc install [--gateway wss://…]     安装开机自启（launchd / systemd user）
  *   dshc uninstall                       移除自启
  *   dshc start [--gateway wss://…] [--port 3780] [--host 0.0.0.0]
- *        [--caps m1|m2|m3] [--name <名称>] [--dsh <路径>] [--detached]
+ *        [--name <名称>] [--dsh <路径>] [--detached]
  *                                        拉起并守护 dsh（companion profile）
  *   dshc stop                            停止 supervisor 与 dsh
  *   dshc resume                          恢复待机中的 worker（重试启动）
@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 import qrcode from 'qrcode-terminal'
 import { encodePairQr } from '@deepseek-harness-pocket/bridge-protocol'
 import { defaultStateFile, loadBridgeState } from '../plugin/state.js'
-import { compareVersion, packageRoot, resolveDshBin } from './runtime.js'
+import { compareVersion, packageRoot, resolveDshBin, resolveDshLaunch } from './runtime.js'
 import { COMPANION_PROFILE, installBridgePackage, profileDir, upsertBridgePatch } from './profile.js'
 import {
   acquireStartLock,
@@ -56,7 +56,6 @@ interface CliOptions {
   gateway: string
   port: number
   host: string
-  caps: 'm1' | 'm2' | 'm3'
   name: string
   dsh: string | undefined
   detached: boolean
@@ -68,9 +67,6 @@ function parseArgs(argv: readonly string[]): { command: string; options: CliOpti
     gateway: process.env['DSHC_GATEWAY'] ?? '',
     port: 3780,
     host: '0.0.0.0',
-    // m3 起 sessionCreate/artifacts 才可用：手机端「新建会话/选目录/作品」是主流程，
-    // 默认必须给全（与桌面端 GUI 默认一致）；要收敛能力仍可显式 --caps m1|m2
-    caps: 'm3',
     name: '',
     dsh: undefined,
     detached: false,
@@ -89,7 +85,6 @@ function parseArgs(argv: readonly string[]): { command: string; options: CliOpti
       case '--gateway': options.gateway = value(); break
       case '--port': options.port = Number.parseInt(value(), 10); break
       case '--host': options.host = value(); break
-      case '--caps': options.caps = value() as CliOptions['caps']; break
       case '--name': options.name = value(); break
       case '--dsh': options.dsh = value(); break
       case '--detached': options.detached = true; break
@@ -103,7 +98,8 @@ function parseArgs(argv: readonly string[]): { command: string; options: CliOpti
 
 /** 探测 dsh 版本（run.json 元数据用；失败返回空串）。 */
 function probeDshVersion(dshBin: string): string {
-  const result = spawnSync(dshBin, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8', windowsHide: true })
+  const launch = resolveDshLaunch(dshBin)
+  const result = spawnSync(launch.cmd, [...launch.args, '--version'], { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8', windowsHide: true })
   if (result.status !== 0 || typeof result.stdout !== 'string') return ''
   return result.stdout.trim().split('\n')[0] ?? ''
 }
@@ -149,7 +145,6 @@ async function startSupervised(options: CliOptions, stateFile: string): Promise<
     gatewayUrl: options.gateway,
     port: options.port,
     host: options.host,
-    caps: options.caps,
     workerName: name,
     stateFile,
   })
@@ -158,7 +153,6 @@ async function startSupervised(options: CliOptions, stateFile: string): Promise<
       '--gateway', options.gateway,
       '--port', String(options.port),
       '--host', options.host,
-      '--caps', options.caps,
     ]
     if (options.name.length > 0) args.push('--name', options.name)
     if (options.dsh !== undefined) args.push('--dsh', options.dsh)
@@ -179,7 +173,6 @@ async function startSupervised(options: CliOptions, stateFile: string): Promise<
     port: options.port,
     host: options.host,
     name,
-    caps: options.caps,
   })
 }
 
@@ -314,7 +307,7 @@ async function main(): Promise<void> {
           '命令:',
           '  install [--gateway wss://…]   安装开机自启（并启动）',
           '  uninstall                     移除自启',
-          '  start [--gateway …] [--port 3780] [--caps m3] [--detached]',
+          '  start [--gateway …] [--port 3780] [--detached]',
           '                                拉起并守护 dsh（手机端经账号登录绑定）',
           '  stop / status [--json]',
           '  resume                        恢复待机中的 worker（重试启动）',

@@ -35,8 +35,8 @@ export const pluginConfig = z.object({
      */
     accountSessionFile: z.string().default('~/.deepseek-harness-pocket/account-session.json'),
   }).default({ url: '', hostKey: '', reconnectMinMs: 1000, reconnectMaxMs: 30000, accountSessionFile: '~/.deepseek-harness-pocket/account-session.json' }),
-  /** 能力面：按里程碑声明，handshake 下发给 app */
-  caps: z.union(['m1', 'm2', 'm3']).default('m2'),
+  /** 能力面：固定全开（m3 起 sessionCreate/artifacts 才可用，手机端主流程） */
+  caps: z.union(['m1', 'm2', 'm3']).default('m3'),
   /** 状态文件路径（hostKey/pairingToken） */
   stateFile: z.string().default('~/.deepseek-harness-pocket/bridge-state.json'),
   /** Worker 显示名（默认取 hostname） */

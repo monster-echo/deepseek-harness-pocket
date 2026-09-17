@@ -6,7 +6,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { dirname } from 'node:path'
-import { selfBin } from './runtime.js'
+import { resolveDshLaunch, selfBin } from './runtime.js'
 
 const STOP_FLAG = 'dshc.stop-flag'
 const RESUME_FLAG = 'dshc.resume-flag'
@@ -42,7 +42,6 @@ export interface RunInfo {
   readonly port: number
   readonly host: string
   readonly name: string
-  readonly caps: string
   /** 本轮 dsh 进程打印的 Web 控制台地址（0.1.5+ 带 ?token=，随重启刷新；旧版无认证 URL 同样捕获）。 */
   webUrl?: string
   /** supervisor 状态：active 守护中；standby 已停止自动重启（giveUp 说明原因）。缺省视为 active（旧 run.json 兼容）。 */
@@ -326,7 +325,9 @@ export async function supervise(
     rmSync(`${dshcDir()}/${STOP_FLAG}`, { force: true })
     log(`spawning ${dshBin} ${args.join(' ')}`)
     process.stdout.write(`[dshc] starting: ${dshBin} ${args.join(' ')}\n`)
-    child = spawn(dshBin, [...args], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    // Windows .cmd shim 不能直接 spawn（EINVAL）：解析出真实 JS 入口用当前 node 跑
+    const launch = resolveDshLaunch(dshBin)
+    child = spawn(launch.cmd, [...launch.args, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     const startedAt = Date.now()
     // URL 行可能被 chunk 边界截断：跨 chunk 缓冲，只对完整行做匹配
     let lineBuffer = ''

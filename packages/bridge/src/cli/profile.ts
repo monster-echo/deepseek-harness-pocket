@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { resolveDshLaunch } from './runtime.js'
 
 export const COMPANION_PROFILE = 'companion'
 
@@ -17,7 +18,6 @@ export interface BridgePatchConfig {
   readonly gatewayUrl: string
   readonly port: number
   readonly host: string
-  readonly caps: 'm1' | 'm2' | 'm3'
   readonly workerName: string
   readonly stateFile: string
 }
@@ -80,7 +80,9 @@ export function upsertBridgePatch(dir: string, config: BridgePatchConfig): void 
     '      gateway:',
     `        url: ${JSON.stringify(config.gatewayUrl)}`,
     "        hostKey: ''",
-    `      caps: ${JSON.stringify(config.caps)}`,
+    // 能力档位固定全开（m3：手机端 sessionCreate/artifacts 等主流程能力），
+    // 不再作为可配置项——若省略该键，插件默认会回落 m2 反而关功能
+    `      caps: "m3"`,
     `      name: ${JSON.stringify(config.workerName)}`,
     `      stateFile: ${JSON.stringify(config.stateFile)}`,
   ].join('\n')
@@ -141,11 +143,16 @@ export function installBridgePackage(dir: string, dshBin: string, packageRootPat
   ensureProfileManifest(dir)
   migrateStaleBridgeSpec(dir, packageRootPath)
   const spec = process.platform === 'win32' ? packageRootPath : `file:${packageRootPath}`
-  const result = spawnSync(dshBin, ['plugin', '--profile', COMPANION_PROFILE, 'add', spec], {
+  const launch = resolveDshLaunch(dshBin)
+  const result = spawnSync(launch.cmd, [...launch.args, 'plugin', '--profile', COMPANION_PROFILE, 'add', spec], {
     stdio: 'inherit',
     windowsHide: true,
   })
+  // status 为 null = 进程根本没跑起来（ENOENT/EACCES，Windows .cmd shim 被拒等），必须带上 error 原文
+  if (result.error !== undefined) {
+    throw new Error(`dsh plugin add 无法启动：${result.error.message}（dsh bin: ${dshBin}）`)
+  }
   if (result.status !== 0) {
-    throw new Error(`dsh plugin add 失败（exit ${result.status}）`)
+    throw new Error(`dsh plugin add 失败（exit ${result.status}）；dsh bin: ${dshBin}`)
   }
 }

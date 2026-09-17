@@ -7,7 +7,7 @@ import {
   Dot, EmptyState, Field,
 } from "../../components/ui";
 import {
-  checkUpdate, giveUpText, installUpdate, openExternal, workerResume, workerStart, workerStop,
+  checkUpdate, giveUpText, installUpdate, onUpdateAvailable, openExternal, workerResume, workerStart, workerStop,
   type UpdateInfo, type WorkerStatus,
 } from "../../lib/worker";
 import { Page, PageHeader } from "./PageHeader";
@@ -28,6 +28,14 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
       .catch(() => {});
     return () => {
       alive = false;
+    };
+  }, []);
+
+  // 菜单「检查更新…」发现新版本：即使本页早已挂载也立即亮出更新卡片
+  useEffect(() => {
+    const unlisten = onUpdateAvailable((version) => setUpdate({ available: true, version }));
+    return () => {
+      void unlisten.then((fn) => fn());
     };
   }, []);
 
@@ -196,7 +204,6 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
               <span className="tabular">{run ? `${run.host}:${run.port}` : "—"}</span>
             </Field>
             <Field label="电脑名称">{run?.name || "—"}</Field>
-            <Field label="能力档位">{run?.caps || "—"}</Field>
           </CardContent>
         </Card>
 

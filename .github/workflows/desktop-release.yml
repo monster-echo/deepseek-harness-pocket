@@ -104,6 +104,7 @@ jobs:
             desktop-tauri/${{ matrix.bundle_glob }}/macos/*.app.tar.gz
             desktop-tauri/${{ matrix.bundle_glob }}/macos/*.app.tar.gz.sig
             desktop-tauri/${{ matrix.bundle_glob }}/nsis/*-setup.exe
+            desktop-tauri/${{ matrix.bundle_glob }}/nsis/*-setup.exe.sig
             desktop-tauri/${{ matrix.bundle_glob }}/nsis/*.nsis.zip
             desktop-tauri/${{ matrix.bundle_glob }}/nsis/*.nsis.zip.sig
           if-no-files-found: error
@@ -156,4 +157,5 @@ jobs:
             dist/*.nsis.zip \
             dist/*.nsis.zip.sig \
             dist/*-setup.exe \
+            dist/*.exe.sig \
             dist/latest.json

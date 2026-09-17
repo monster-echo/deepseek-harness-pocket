@@ -36,6 +36,9 @@ def updater_assets() -> dict[str, pathlib.Path]:
         if name.endswith(".app.tar.gz"):
             out["darwin-aarch64"] = f
         elif name.endswith(".nsis.zip"):
+            # v1 风格兜底；Tauri 2 的 NSIS 更新产物是安装器本体 + .exe.sig（见下，优先）
+            out.setdefault("windows-x86_64", f)
+        elif name.endswith("-setup.exe"):
             out["windows-x86_64"] = f
     return out
 

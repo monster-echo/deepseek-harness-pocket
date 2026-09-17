@@ -338,6 +338,9 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R
         .item(&MenuItem::with_id(app, "menu:settings", "配置", true, None::<&str>)?)
         .build()?;
 
+    let autostart_item = tauri::menu::CheckMenuItemBuilder::with_id("autostart", "开机自启")
+        .checked(autostart_enabled(app))
+        .build(app)?;
     let console = SubmenuBuilder::new(app, "控制台")
         .item(&MenuItem::with_id(app, "console:status", "运行状态", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "console:account", "账号", true, None::<&str>)?)
@@ -347,6 +350,8 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R
         .separator()
         .item(&MenuItem::with_id(app, "worker:start", "启动 Worker", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "worker:stop", "停止 Worker", true, None::<&str>)?)
+        .separator()
+        .item(&autostart_item)
         .build()?;
 
     let help = SubmenuBuilder::new(app, "帮助")
@@ -403,7 +408,13 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
             if let Err(e) = res {
                 notify(app, "开机自启设置失败", &e.to_string());
             }
+            // 托盘与窗口菜单都带这个勾选项：状态变化后两侧一起重建
             refresh_tray_menu(app);
+            if let Some(win) = app.get_webview_window("main") {
+                if let Ok(menu) = app_menu(app) {
+                    let _ = win.set_menu(menu);
+                }
+            }
         }
         "worker:start" => {
             let app = app.clone();

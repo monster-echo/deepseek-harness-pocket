@@ -1,10 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主窗口与控制台窗口的能力集合。两个窗口都要授权：控制台是独立窗口，缺 core:event 就无法订阅 worker-status / console-panel 事件。",
+  "description": "主窗口与控制台窗口的能力集合。两个窗口都要授权：控制台是独立窗口，缺 core:event 就无法订阅 worker-status / console-panel 事件。window 的 minimize/close 等供控制台自绘标题栏使用。",
   "windows": ["main", "console"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging"
   ]
 }

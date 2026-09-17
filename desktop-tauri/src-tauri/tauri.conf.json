@@ -19,7 +19,9 @@
         "minWidth": 880,
         "minHeight": 600,
         "resizable": true,
-        "center": true
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       },
       {
         "label": "console",
@@ -31,7 +33,8 @@
         "resizable": true,
         "center": true,
         "visible": false,
-        "url": "index.html?window=console"
+        "url": "index.html?window=console",
+        "decorations": false
       }
     ],
     "security": {

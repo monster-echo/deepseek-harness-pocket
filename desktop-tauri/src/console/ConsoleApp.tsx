@@ -6,6 +6,7 @@ import { cn } from "../lib/utils";
 import { Dot } from "../components/ui";
 import { onConsolePanel } from "../lib/worker";
 import { useWorkerStatus } from "./useWorker";
+import { TitleBar } from "./TitleBar";
 import { StatusPage } from "./pages/StatusPage";
 import { PairingPage } from "./pages/PairingPage";
 import { AccountPage } from "./pages/AccountPage";
@@ -45,7 +46,9 @@ export function ConsoleApp({ initialPanel }: { initialPanel: string }) {
   const running = status?.running ?? false;
 
   return (
-    <div className="flex h-full bg-background">
+    <div className="flex h-full flex-col bg-background">
+      <TitleBar title="DSH Pocket · 控制台" />
+      <div className="flex min-h-0 flex-1">
       <aside className="flex w-56 shrink-0 flex-col border-r border-border">
         <div className="flex items-center gap-2 px-4 pt-5 pb-4">
           <img src="/logo.png" alt="DSH Pocket" className="size-7 rounded-md" draggable={false} />
@@ -94,6 +97,7 @@ export function ConsoleApp({ initialPanel }: { initialPanel: string }) {
         {panel === "logs" && <LogsPage />}
         {panel === "settings" && <SettingsPage />}
       </main>
+      </div>
     </div>
   );
 }

@@ -4,9 +4,12 @@
 //!   - 主窗口：内嵌 dsh 自带 Web GUI（loopback only），未就绪时显示引导面
 //!   - 控制台窗口：状态 / 账号 / 配对 / 版本 / 日志（独立窗口，由托盘进入）
 //!   - 托盘：常驻，承载全部管理入口
-//!   - Worker 托管：以内置 node 运行 dshc CLI，轮询状态并驱动 UI
+//!   - Worker 托管：以受管/系统 Node 运行 dshc CLI，轮询状态并驱动 UI
 //!
 //! Worker 逻辑唯一收敛在 dshc（packages/bridge），本进程只是壳。
+//! v0.2.0 起安装包不内置 Node/bridge：首次启动由向导经网络组装（见 toolchain.rs）。
+
+mod toolchain;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -37,55 +40,6 @@ fn pocket_home<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     Ok(home.join(".deepseek-harness-pocket"))
 }
 
-/// 内置 node sidecar 布局（与 Flutter 端 `AppPaths` 一致）：
-///   macOS  : <Resources>/node-sidecar/{node/bin/node, bridge/dist/cli/index.js}
-///   Windows: <exeDir>/node-sidecar/{node/node.exe,  bridge/dist/cli/index.js}
-struct Sidecar {
-    node: PathBuf,
-    node_bin_dir: PathBuf,
-    cli: PathBuf,
-}
-
-impl Sidecar {
-    fn ready(&self) -> bool {
-        self.node.exists() && self.cli.exists()
-    }
-}
-
-fn sidecar<R: Runtime>(app: &AppHandle<R>) -> Result<Sidecar, String> {
-    // 优先级：显式环境变量 → 打包资源目录 → 开发态源码旁
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(dir) = std::env::var("DSH_POCKET_SIDECAR") {
-        if !dir.is_empty() {
-            roots.push(PathBuf::from(dir));
-        }
-    }
-    if let Ok(res) = app.path().resource_dir() {
-        roots.push(res.join("node-sidecar"));
-        // tauri.conf.json 里资源写成 `../node-sidecar/**/*`（相对 src-tauri/），
-        // 打包时 Tauri 会把 `..` 消毒成 `_up_`，实际落在 Resources/_up_/node-sidecar。
-        roots.push(res.join("_up_").join("node-sidecar"));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("node-sidecar"));
-
-    let (node_rel, bin_rel): (&str, &str) = if cfg!(target_os = "windows") {
-        ("node/node.exe", "node")
-    } else {
-        ("node/bin/node", "node/bin")
-    };
-
-    for root in roots {
-        let node = root.join(node_rel);
-        let cli = root.join("bridge/dist/cli/index.js");
-        if node.exists() && cli.exists() {
-            return Ok(Sidecar { node, node_bin_dir: root.join(bin_rel), cli });
-        }
-    }
-    Err(format!(
-        "内置 node sidecar 缺失（已查找 node-sidecar/{node_rel}）。开发态请先构建 sidecar。"
-    ))
-}
-
 // ──────────────────── dshc 进程调用 ─────────────────────
 
 /// Windows 上 GUI 程序 spawn console 子系统程序（node.exe）会闪控制台黑框，
@@ -101,24 +55,17 @@ fn no_window(cmd: &mut Command) {
 #[cfg(not(windows))]
 fn no_window(_cmd: &mut Command) {}
 
-/// 以内置 node 运行 dshc CLI，返回 stdout。
-/// 与 Flutter 端 `Proc.dshc` 等价：nodeBin 前置到 PATH（dshc 内部依赖解析用）。
+/// 以受管/系统 Node 运行 dshc CLI，返回 stdout。
+/// node+bridge 从网络引导（toolchain.rs），本函数不再依赖安装包内置的 sidecar。
 fn run_dshc<R: Runtime>(app: &AppHandle<R>, args: &[&str]) -> Result<String, String> {
-    let sc = sidecar(app)?;
-    if !sc.ready() {
-        return Err(format!("sidecar 未就绪：{}", sc.cli.display()));
-    }
+    let home = pocket_home(app)?;
+    let tc = toolchain::resolve(&home)?;
+    let path_env = toolchain::path_env(&home, &tc.node.node_bin_dir)?;
 
-    let path_env = std::env::join_paths(
-        std::iter::once(sc.node_bin_dir.clone())
-            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
-    )
-    .map_err(|e| format!("PATH 组装失败: {e}"))?;
-
-    let mut cmd = Command::new(&sc.node);
+    let mut cmd = Command::new(&tc.node.node);
     no_window(&mut cmd);
     let out = cmd
-        .arg(&sc.cli)
+        .arg(&tc.cli)
         .args(args)
         .env("PATH", path_env)
         .output()
@@ -132,12 +79,28 @@ fn run_dshc<R: Runtime>(app: &AppHandle<R>, args: &[&str]) -> Result<String, Str
     Ok(stdout)
 }
 
-/// `dshc status --json` → WorkerStatus（失败时降级为 running:false + 错误说明）
+/// `dshc status --json` → WorkerStatus（失败时降级为 running:false + 错误说明）。
+/// 工具链缺失但旧版 detached supervisor 仍在跑（升级过渡期）：按 running 上报，
+/// 让已就绪的 Web GUI 继续用，同时带 toolchainMissing 标记让前端弹补装向导。
 fn read_status<R: Runtime>(app: &AppHandle<R>) -> serde_json::Value {
     match run_dshc(app, &["status", "--json"]) {
         Ok(text) => serde_json::from_str::<serde_json::Value>(text.trim())
             .unwrap_or_else(|e| serde_json::json!({ "running": false, "parseError": e.to_string() })),
-        Err(e) => serde_json::json!({ "running": false, "error": e }),
+        Err(e) => {
+            if let Ok(run) = serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(pocket_home(app).ok().unwrap_or_default().join("run.json"))
+                    .unwrap_or_default(),
+            ) {
+                let web_url = run.get("webUrl").and_then(|u| u.as_str()).unwrap_or_default();
+                if !web_url.is_empty() {
+                    return serde_json::json!({
+                        "running": true, "toolchainMissing": true, "degraded": true,
+                        "error": e, "run": run,
+                    });
+                }
+            }
+            serde_json::json!({ "running": false, "toolchainMissing": true, "error": e })
+        }
     }
 }
 
@@ -366,15 +329,17 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
     let mut prev_running: Option<bool> = None;
     let mut consecutive_failures: u32 = 0;
     loop {
-        // sidecar 缺失（新机器/安装包损坏）时不 spawn node：60s 重探。
+        // 工具链缺失（新机器/未完成引导）时不 spawn node：60s 重探。
         // 否则「环境坏掉」的机器上每 3s 冷启动一个 node，永不停止。
-        let status = match sidecar(&app) {
-            Ok(sc) if sc.ready() => read_status(&app),
-            _ => serde_json::json!({
+        let home = pocket_home(&app);
+        let status = match home.as_ref().map(|h| toolchain::resolve(h)) {
+            Ok(Ok(_)) => read_status(&app),
+            Ok(Err(e)) => serde_json::json!({
                 "running": false,
-                "sidecarMissing": true,
-                "error": "内置 node sidecar 缺失，请重新安装应用",
+                "toolchainMissing": true,
+                "error": e,
             }),
+            Err(e) => serde_json::json!({ "running": false, "toolchainMissing": true, "error": e }),
         };
         let failed = status.get("error").is_some() || status.get("parseError").is_some();
         consecutive_failures = if failed { consecutive_failures.saturating_add(1) } else { 0 };
@@ -506,16 +471,18 @@ fn open_external<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), Strin
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
-/// sidecar / 主目录诊断信息（控制台「日志」页用）
+/// 工具链 / 主目录诊断信息（控制台「日志」页用）
 #[tauri::command]
 fn runtime_info<R: Runtime>(app: AppHandle<R>) -> serde_json::Value {
-    let sc = sidecar(&app);
     let home = pocket_home(&app);
+    let tc = home.as_ref().map(|h| toolchain::resolve(h));
     serde_json::json!({
-        "sidecarReady": sc.as_ref().map(|s| s.ready()).unwrap_or(false),
-        "sidecarError": sc.as_ref().err(),
-        "nodeBin": sc.as_ref().ok().map(|s| s.node.display().to_string()),
-        "dshcCli": sc.as_ref().ok().map(|s| s.cli.display().to_string()),
+        "toolchainReady": tc.as_ref().map(|t| t.is_ok()).unwrap_or(false),
+        "toolchainError": tc.as_ref().map(|t| t.as_ref().err()).unwrap_or(None),
+        "nodeBin": tc.as_ref().ok().and_then(|t| t.as_ref().ok()).map(|t| t.node.node.display().to_string()),
+        "nodeSource": tc.as_ref().ok().and_then(|t| t.as_ref().ok()).map(|t| t.node.source.as_str()),
+        "bridgeVersion": tc.as_ref().ok().and_then(|t| t.as_ref().ok()).map(|t| t.bridge_version.clone()),
+        "dshcCli": tc.as_ref().ok().and_then(|t| t.as_ref().ok()).map(|t| t.cli.display().to_string()),
         "pocketHome": home.as_ref().ok().map(|p| p.display().to_string()),
         "logFile": home.as_ref().ok().map(|p| p.join("dshc.log").display().to_string()),
         "platform": std::env::consts::OS,
@@ -526,6 +493,74 @@ fn runtime_info<R: Runtime>(app: AppHandle<R>) -> serde_json::Value {
 #[tauri::command]
 fn dshc_resume<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     run_dshc(&app, &["resume", "--json"])
+}
+
+// ─────────────── 首次引导（去 sidecar 化：一切从网络组装）───────────────
+
+/// 引导状态快照（文件系统 + 系统 Node 探测；向导每次刷新调用）
+#[tauri::command]
+async fn bootstrap_status<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
+    let home = pocket_home(&app)?;
+    tauri::async_runtime::spawn_blocking(move || Ok(toolchain::bootstrap_status_impl(&home)))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 安装受管 Node（major ∈ 22/24；系统 Node 可用时向导默认走复用，不调这里）
+#[tauri::command]
+async fn node_install<R: Runtime>(app: AppHandle<R>, major: u8) -> Result<String, String> {
+    let home = pocket_home(&app)?;
+    tauri::async_runtime::spawn_blocking(move || toolchain::node_install_impl(&app, &home, major))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 探测并采用系统 Node（可用则写入 toolchain.json，零下载）
+#[tauri::command]
+async fn system_node_probe<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    let home = pocket_home(&app)?;
+    tauri::async_runtime::spawn_blocking(move || toolchain::system_node_probe_impl(&home))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 安装受管 pnpm 到 runtimes/tools（dsh plugin add 依赖；不写用户系统目录）
+#[tauri::command]
+async fn tools_install<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    let home = pocket_home(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let node = toolchain::resolve_node(&home)?;
+        toolchain::tools_install_impl(&app, &home, &node)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 安装 bridge（dshc）到 runtimes/bridge
+#[tauri::command]
+async fn bridge_install<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    let home = pocket_home(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let node = toolchain::resolve_node(&home)?;
+        let out = toolchain::tools_install_impl(&app, &home, &node);
+        out?; // bridge 的 plugin add 依赖 pnpm，先确保 tools 就位
+        toolchain::bridge_install_impl(&app, &home, &node)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 记录引导完成（向导最后一步；此后启动不再弹向导，除非环境再次缺失）
+#[tauri::command]
+fn bootstrap_complete<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let home = pocket_home(&app)?;
+    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    let marker = serde_json::json!({ "version": 1, "completedAt": now_ms() });
+    std::fs::write(
+        home.join("onboarding-done.json"),
+        format!("{}\n", serde_json::to_string_pretty(&marker).map_err(|e| e.to_string())?),
+    )
+    .map_err(|e| format!("写入引导完成标记失败: {e}"))
 }
 
 // ─────────────── 引导页环境预检（preflight）───────────────
@@ -554,16 +589,44 @@ fn gateway_health<R: Runtime>(app: &AppHandle<R>) -> Result<bool, String> {
     Ok(resp.status().is_success())
 }
 
-/// 引导页环境预检实现：sidecar / runtime / account / port / gateway 一次性快照。
+/// 引导页环境预检实现：node / bridge / runtime / account / port / gateway 一次性快照。
 /// 每项独立容错；gateway 只 warn 不 fail（离线也能用本机 GUI）。
 fn preflight_impl<R: Runtime>(app: &AppHandle<R>) -> Result<serde_json::Value, String> {
+    let home = pocket_home(app)?;
     let mut items: Vec<serde_json::Value> = Vec::new();
 
-    // 1) sidecar：内置 node + bridge（安装包问题，应用内无法自修）
-    items.push(match sidecar(app) {
-        Ok(sc) if sc.ready() => preflight_item("sidecar", "pass", "内置 Node.js 与 bridge 就绪", None),
-        Ok(_) => preflight_item("sidecar", "fail", "内置 node sidecar 不完整，请重新安装应用", None),
-        Err(e) => preflight_item("sidecar", "fail", e, None),
+    // 1) node：系统复用或受管安装（向导可修）
+    items.push(match toolchain::resolve_node(&home) {
+        Ok(part) => preflight_item(
+            "node",
+            "pass",
+            match part.source {
+                toolchain::NodeSource::System => format!("系统 Node {}（已复用）", part.version),
+                toolchain::NodeSource::Managed => format!("Node {}（受管）", part.version),
+            },
+            None,
+        ),
+        Err(e) => preflight_item("node", "fail", e, Some("install_node")),
+    });
+
+    // 2) bridge：Worker 核心（向导可修；低于最低版本视为需升级）
+    items.push(match toolchain::resolve_bridge(&home) {
+        Ok((_, _, version)) => {
+            if !version.is_empty()
+                && compare_versions(&version, toolchain::MIN_BRIDGE_VERSION)
+                    != std::cmp::Ordering::Less
+            {
+                preflight_item("bridge", "pass", format!("Worker 核心 {version} 就绪"), None)
+            } else {
+                preflight_item(
+                    "bridge",
+                    "fail",
+                    format!("Worker 核心 {version} 低于应用要求，请更新"),
+                    Some("install_bridge"),
+                )
+            }
+        }
+        Err(e) => preflight_item("bridge", "fail", e, Some("install_bridge")),
     });
 
     // 2) dsh 运行时（托管安装；缺失可在引导页一键安装）
@@ -1116,83 +1179,28 @@ fn managed_dsh_bin_for<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
     best.map(|(_, bin)| bin.to_string_lossy().to_string())
 }
 
-/// sidecar 内 npm-cli.js 的位置
-fn npm_cli<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    let sc = sidecar(app)?;
-    let root = sc
-        .node
-        .parent()
-        .and_then(|p| p.parent())
-        .and_then(|p| p.parent())
-        .ok_or_else(|| "无法从 node 路径反推 sidecar 根目录".to_string())?
-        .to_path_buf();
-    let cli = if cfg!(target_os = "windows") {
-        root.join("node").join("node_modules").join("npm").join("bin").join("npm-cli.js")
-    } else {
-        root.join("node").join("lib").join("node_modules").join("npm").join("bin").join("npm-cli.js")
-    };
-    if !cli.exists() {
-        return Err(format!("内置 npm 缺失：{}", cli.display()));
-    }
-    Ok(cli)
-}
-
-/// 以内置 node 跑 npm。返回 (是否成功, 合并后的输出)
+/// 以工具链 Node 跑 npm（bridge 未装也能跑：npm 只依赖 node）。
+/// 返回 (是否成功, 合并后的输出)；`on_line` 用于安装进度（逐行 stdout/stderr）。
 fn run_npm<R: Runtime>(
     app: &AppHandle<R>,
     args: &[&str],
     cwd: Option<&std::path::Path>,
     registry: &str,
     timeout_secs: u64,
+    on_line: Option<&dyn Fn(&str)>,
 ) -> Result<(bool, String), String> {
-    let sc = sidecar(app)?;
-    let cli = npm_cli(app)?;
-
-    let path_env = std::env::join_paths(
-        std::iter::once(sc.node_bin_dir.clone())
-            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
-    )
-    .map_err(|e| format!("PATH 组装失败: {e}"))?;
-
-    let mut cmd = Command::new(&sc.node);
-    no_window(&mut cmd);
-    cmd.arg(&cli).args(args).env("PATH", path_env);
-    if !registry.is_empty() {
-        cmd.arg("--registry").arg(registry);
-    }
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
-
-    let mut child = cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("启动 npm 失败: {e}"))?;
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if std::time::Instant::now() > deadline {
-                    let _ = child.kill();
-                    return Err(format!("npm 超时（{timeout_secs} 秒）"));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-            Err(e) => return Err(format!("等待 npm 失败: {e}")),
-        }
-    }
-
-    let out = child.wait_with_output().map_err(|e| format!("读取 npm 输出失败: {e}"))?;
-    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-    let err = String::from_utf8_lossy(&out.stderr);
-    if !err.trim().is_empty() {
-        if !text.is_empty() { text.push('\n'); }
-        text.push_str(&err);
-    }
-    Ok((out.status.success(), text))
+    let home = pocket_home(app)?;
+    let node = toolchain::resolve_node(&home)?;
+    let out = toolchain::run_npm_with_node(
+        &node,
+        &home,
+        args.iter(),
+        cwd,
+        Some(registry),
+        timeout_secs,
+        on_line,
+    )?;
+    Ok((out.success, out.output))
 }
 
 /// npm registry 上可用的 dsh 版本（新 → 旧）。prefer-online 避免缓存漏掉刚发布的版本。
@@ -1211,6 +1219,7 @@ async fn dsh_versions_available<R: Runtime>(
             None,
             &reg,
             120,
+            None,
         )?;
         if !ok {
             return Err(format!("获取版本列表失败：{out}"));
@@ -1254,13 +1263,19 @@ async fn dsh_install_version<R: Runtime>(
 
         let spec = format!("{DSH_PACKAGE}@{version}");
         let base = ["install", spec.as_str(), "--no-fund", "--no-audit", "--loglevel=error"];
-        let mut res = run_npm(&app, &base, Some(&dir), &reg, NPM_INSTALL_TIMEOUT_SECS)?;
+        // 安装最长 30 分钟：逐行回传进度（向导/版本页都靠它，别让用户以为死机）
+        let on_line = |line: &str| {
+            let _ = app.emit("bootstrap-progress", serde_json::json!({
+                "step": "dsh", "phase": "npm", "line": line,
+            }));
+        };
+        let mut res = run_npm(&app, &base, Some(&dir), &reg, NPM_INSTALL_TIMEOUT_SECS, Some(&on_line))?;
 
         // npm 可能拿陈旧 registry 元数据报 ETARGET（新版本刚发布时常见），强刷重试一次
         if !res.0 && (res.1.contains("ETARGET") || res.1.contains("notarget")) {
             let mut retry = base.to_vec();
             retry.push("--prefer-online");
-            res = run_npm(&app, &retry, Some(&dir), &reg, NPM_INSTALL_TIMEOUT_SECS)?;
+            res = run_npm(&app, &retry, Some(&dir), &reg, NPM_INSTALL_TIMEOUT_SECS, Some(&on_line))?;
         }
 
         if !res.0 {
@@ -1409,7 +1424,7 @@ const DEFAULT_AUTH_APP_ID: &str = "dshcompanion";
 const DEFAULT_AUTH_APP_ENV: &str = "production";
 
 /// 安装 rustls 的 ring provider（只需一次；重复安装返回 Err，忽略即可）
-fn ensure_tls_provider() {
+pub(crate) fn ensure_tls_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
@@ -1801,6 +1816,12 @@ pub fn run() {
             dshc_resume,
             dshc_qr,
             preflight_check,
+            bootstrap_status,
+            node_install,
+            system_node_probe,
+            tools_install,
+            bridge_install,
+            bootstrap_complete,
             show_console,
             open_external,
             runtime_info,
@@ -1852,9 +1873,12 @@ pub fn run() {
             // 启动自检：sidecar 是否就绪、自启插件是否可用（售后排查用）
             #[cfg(debug_assertions)]
             {
-                let ready = sidecar(app.handle()).map(|s| s.ready()).unwrap_or(false);
+                let ready = pocket_home(app.handle())
+                    .map_err(String::from)
+                    .and_then(|h| toolchain::resolve(&h).map(|_| ()))
+                    .is_ok();
                 eprintln!(
-                    "[startup] sidecar={} autostart={} version={}",
+                    "[startup] toolchain={} autostart={} version={}",
                     ready,
                     autostart_enabled(app.handle()),
                     app.package_info().version

@@ -8,6 +8,7 @@
  *        [--name <名称>] [--dsh <路径>] [--detached]
  *                                        拉起并守护 dsh（companion profile）
  *   dshc stop                            停止 supervisor 与 dsh
+ *   dshc free-port [--port 3780] [--json] 结束占用 Worker 口 / dsh web 口的残留进程
  *   dshc resume                          恢复待机中的 worker（重试启动）
  *   dshc status [--json]                 查看运行状态（--json 机器可读，桌面端用）
  *   dshc qr [--json]                     打印配对二维码（手机扫码配对/绑定）
@@ -27,6 +28,7 @@ import { compareVersion, packageRoot, resolveDshBin, resolveDshLaunch } from './
 import { COMPANION_PROFILE, installBridgePackage, profileDir, upsertBridgePatch } from './profile.js'
 import {
   acquireStartLock,
+  cleanupPorts,
   detachSpawn,
   describeGiveUp,
   dshcDir,
@@ -227,6 +229,23 @@ async function main(): Promise<void> {
       break
     }
 
+    case 'free-port': {
+      // 显式清场：结束占用 Worker 口 / dsh web 口的残留进程（supervisor spawn 前也会自动做一遍）
+      const cleaned = await cleanupPorts(options.port)
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ cleaned }, undefined, 2)}\n`)
+        break
+      }
+      if (cleaned.every((c) => c.killed.length === 0)) {
+        process.stdout.write('[dshc] 端口空闲，无需清理\n')
+        break
+      }
+      for (const { port, killed } of cleaned) {
+        if (killed.length > 0) process.stdout.write(`[dshc] 端口 ${port}: 已结束占用进程 pid [${killed.join(', ')}]\n`)
+      }
+      break
+    }
+
     case 'status': {
       const pid = isRunning()
       const run = readRunInfo()
@@ -315,6 +334,7 @@ async function main(): Promise<void> {
           '  start [--gateway …] [--port 3780] [--detached]',
           '                                拉起并守护 dsh（手机端经账号登录绑定）',
           '  stop / status [--json]',
+          '  free-port [--port 3780] [--json]  结束占用端口的残留进程（清场）',
           '  resume                        恢复待机中的 worker（重试启动）',
           '  qr [--json]                   打印配对二维码（手机扫码绑定）',
         ].join('\n'),

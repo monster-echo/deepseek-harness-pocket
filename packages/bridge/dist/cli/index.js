@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/cli/index.ts
-import { spawnSync as spawnSync4 } from "node:child_process";
+import { spawnSync as spawnSync5 } from "node:child_process";
 import { readFileSync as readFileSync5 } from "node:fs";
 import { hostname, networkInterfaces } from "node:os";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -83,8 +83,8 @@ function saveBridgeState(path, state) {
 
 // src/cli/runtime.ts
 import { spawnSync } from "node:child_process";
-import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
-import { dirname as dirname2, resolve as resolve2 } from "node:path";
+import { existsSync as existsSync2, readdirSync, readFileSync as readFileSync2 } from "node:fs";
+import { basename, dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
 function resolveDshBin(explicit) {
   if (explicit !== void 0 && explicit.length > 0) {
@@ -106,23 +106,72 @@ function resolveDshLaunch(dshBin) {
   if (process.platform !== "win32" || !/\.cmd$/i.test(dshBin)) {
     return { cmd: dshBin, args: [] };
   }
-  let text;
+  const binDir = dirname2(dshBin);
+  const stem = basename(dshBin).replace(/\.cmd$/i, "");
+  const viaPkg = dshEntryFromNodeModules(binDir, stem);
+  if (viaPkg !== null) {
+    return { cmd: process.execPath, args: [viaPkg] };
+  }
+  let text = "";
   try {
     text = readFileSync2(dshBin, "utf8");
   } catch {
-    return { cmd: dshBin, args: [] };
   }
-  const entry = dshEntryFromCmdShim(text, dirname2(dshBin));
-  if (entry !== null) {
-    return { cmd: process.execPath, args: [entry] };
+  const viaShim = dshEntryFromCmdShim(text, binDir);
+  if (viaShim !== null) {
+    return { cmd: process.execPath, args: [viaShim] };
   }
-  return { cmd: dshBin, args: [] };
+  const cmd = /\s/.test(dshBin) ? `"${dshBin}"` : dshBin;
+  return { cmd, args: [], shell: true };
 }
 function dshEntryFromCmdShim(text, binDir) {
   const match = /"%~dp0\\([^"]+\.js)"/i.exec(text);
   if (match?.[1] === void 0) return null;
   const entry = resolve2(binDir, match[1].replaceAll("\\", "/"));
   return existsSync2(entry) ? entry : null;
+}
+function dshEntryFromNodeModules(binDir, stem) {
+  const nm = dirname2(binDir);
+  const packages = [];
+  let entries;
+  try {
+    entries = readdirSync(nm, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    if (e.name.startsWith("@")) {
+      let subs;
+      try {
+        subs = readdirSync(join2(nm, e.name), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const s of subs) {
+        if (s.isDirectory()) packages.push(join2(nm, e.name, s.name));
+      }
+    } else {
+      packages.push(join2(nm, e.name));
+    }
+  }
+  for (const pkgDir of packages) {
+    const hit = binEntryFromPackageJson(pkgDir, stem);
+    if (hit !== null) return hit;
+  }
+  return null;
+}
+function binEntryFromPackageJson(pkgDir, stem) {
+  try {
+    const pkg = JSON.parse(readFileSync2(join2(pkgDir, "package.json"), "utf8"));
+    const bin = typeof pkg.bin === "string" ? { [stem]: pkg.bin } : pkg.bin ?? {};
+    const rel = bin[stem];
+    if (typeof rel !== "string" || rel.length === 0) return null;
+    const entry = resolve2(pkgDir, rel);
+    return existsSync2(entry) ? entry : null;
+  } catch {
+    return null;
+  }
 }
 function compareVersion(a, b) {
   const pa = a.trim().replace(/^v/, "").split(/[.-]/).map(Number);
@@ -142,19 +191,19 @@ function packageRoot() {
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync3, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { join as join2, resolve as resolve3 } from "node:path";
+import { join as join3, resolve as resolve3 } from "node:path";
 var COMPANION_PROFILE = "companion";
 var BRIDGE_DEP_NAME = "@deepseek-harness-pocket/bridge";
 function resolveDshHomeDir() {
   const fromEnv = process.env["DSH_HOME"];
-  return resolve3((fromEnv !== void 0 && fromEnv.trim().length > 0 ? fromEnv : join2(homedir2(), ".dsh")).replace(/^~(?=\/|$)/, homedir2()));
+  return resolve3((fromEnv !== void 0 && fromEnv.trim().length > 0 ? fromEnv : join3(homedir2(), ".dsh")).replace(/^~(?=\/|$)/, homedir2()));
 }
 function profileDir(profile = COMPANION_PROFILE) {
-  return join2(resolveDshHomeDir(), "profiles", profile);
+  return join3(resolveDshHomeDir(), "profiles", profile);
 }
 function ensureProfileManifest(dir) {
   mkdirSync2(dir, { recursive: true });
-  const manifestPath = join2(dir, "package.json");
+  const manifestPath = join3(dir, "package.json");
   if (existsSync3(manifestPath)) {
     try {
       const existing = JSON.parse(readFileSync3(manifestPath, "utf8"));
@@ -184,7 +233,7 @@ function ensureProfileManifest(dir) {
   );
 }
 function upsertBridgePatch(dir, config) {
-  const patchPath = join2(dir, "cordis.patch.yml");
+  const patchPath = join3(dir, "cordis.patch.yml");
   const entry = [
     "- insert:",
     `  - id: deepseek-harness-pocket-bridge`,
@@ -227,7 +276,7 @@ function fileSpecPath(spec) {
   return resolve3(raw);
 }
 function migrateStaleBridgeSpec(dir, packageRootPath) {
-  const manifestPath = join2(dir, "package.json");
+  const manifestPath = join3(dir, "package.json");
   if (!existsSync3(manifestPath)) return;
   try {
     const manifest = JSON.parse(readFileSync3(manifestPath, "utf8"));
@@ -240,19 +289,24 @@ function migrateStaleBridgeSpec(dir, packageRootPath) {
     manifest.dependencies = { ...manifest.dependencies, [BRIDGE_DEP_NAME]: nextSpec };
     writeFileSync2(manifestPath, `${JSON.stringify(manifest, void 0, 2)}
 `);
-    rmSync(join2(dir, "pnpm-lock.yaml"), { force: true });
-    rmSync(join2(dir, "node_modules", BRIDGE_DEP_NAME), { recursive: true, force: true });
+    rmSync(join3(dir, "pnpm-lock.yaml"), { force: true });
+    rmSync(join3(dir, "node_modules", BRIDGE_DEP_NAME), { recursive: true, force: true });
   } catch {
   }
+}
+function quoteForCmd(arg) {
+  return /\s/.test(arg) ? `"${arg}"` : arg;
 }
 function installBridgePackage(dir, dshBin, packageRootPath) {
   ensureProfileManifest(dir);
   migrateStaleBridgeSpec(dir, packageRootPath);
   const spec = process.platform === "win32" ? packageRootPath : `file:${packageRootPath}`;
   const launch = resolveDshLaunch(dshBin);
-  const result = spawnSync2(launch.cmd, [...launch.args, "plugin", "--profile", COMPANION_PROFILE, "add", spec], {
+  const shellArgs = launch.shell === true ? [quoteForCmd(spec)] : ["plugin", "--profile", COMPANION_PROFILE, "add", spec];
+  const result = spawnSync2(launch.cmd, [...launch.args, ...shellArgs], {
     stdio: "inherit",
-    windowsHide: true
+    windowsHide: true,
+    shell: launch.shell === true
   });
   if (result.error !== void 0) {
     throw new Error(`dsh plugin add \u65E0\u6CD5\u542F\u52A8\uFF1A${result.error.message}\uFF08dsh bin: ${dshBin}\uFF09`);
@@ -263,9 +317,10 @@ function installBridgePackage(dir, dshBin, packageRootPath) {
 }
 
 // src/cli/supervisor.ts
-import { spawn } from "node:child_process";
+import { spawn, spawnSync as spawnSync3 } from "node:child_process";
 import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { createServer } from "node:net";
+import { homedir as homedir3 } from "node:os";
 import { dirname as dirname3 } from "node:path";
 var STOP_FLAG = "dshc.stop-flag";
 var RESUME_FLAG = "dshc.resume-flag";
@@ -273,6 +328,7 @@ var RUN_INFO = "run.json";
 var START_LOCK = "dshc.start.lock";
 var QUICK_FAIL_WINDOW_MS = 15e3;
 var QUICK_FAIL_LIMIT = 3;
+var DSH_WEB_PORT = 3080;
 var STANDBY_POLL_MS = 2e3;
 var STANDBY_PROBE_EVERY = 30;
 var DSH_WEB_URL_LINE = /^dsh web: (https?:\/\/127\.0\.0\.1:\d+\/?(?:\?token=\S+)?)\b/u;
@@ -301,7 +357,7 @@ function extractWebUrl(text) {
   return void 0;
 }
 function dshcDir() {
-  const dir = `${process.env["HOME"] ?? "."}/.deepseek-harness-pocket`;
+  const dir = `${process.env["DSHC_HOME"] ?? process.env["HOME"] ?? homedir3()}/.deepseek-harness-pocket`;
   mkdirSync3(dir, { recursive: true });
   return dir;
 }
@@ -390,6 +446,51 @@ function portFree(port) {
     server.once("listening", () => server.close(() => resolve4(true)));
     server.listen(port, "127.0.0.1");
   });
+}
+function parseNetstatListenPids(text, port) {
+  const pids = /* @__PURE__ */ new Set();
+  for (const line of text.split("\n")) {
+    const cols = line.trim().split(/\s+/);
+    if (cols.length < 5 || cols[3] !== "LISTENING") continue;
+    if (!cols[1].endsWith(`:${port}`)) continue;
+    const pid = Number.parseInt(cols[4], 10);
+    if (Number.isInteger(pid) && pid > 4 && pid !== process.pid) pids.add(pid);
+  }
+  return [...pids];
+}
+function listeningPids(port) {
+  if (process.platform === "win32") {
+    const out2 = spawnSync3("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8", windowsHide: true });
+    if (out2.status !== 0 || typeof out2.stdout !== "string") return [];
+    return parseNetstatListenPids(out2.stdout, port);
+  }
+  const out = spawnSync3("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" });
+  if (out.status !== 0 || typeof out.stdout !== "string") return [];
+  return [...new Set(
+    out.stdout.split("\n").map((s) => Number.parseInt(s.trim(), 10)).filter((pid) => Number.isInteger(pid) && pid > 4 && pid !== process.pid)
+  )];
+}
+function killPortHolders(port) {
+  const pids = listeningPids(port);
+  for (const pid of pids) {
+    if (process.platform === "win32") {
+      spawnSync3("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore", windowsHide: true });
+    } else {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+      }
+    }
+  }
+  return pids;
+}
+async function cleanupPorts(port) {
+  const result = [];
+  for (const p of /* @__PURE__ */ new Set([port, DSH_WEB_PORT])) {
+    if (await portFree(p)) continue;
+    result.push({ port: p, killed: killPortHolders(p) });
+  }
+  return result;
 }
 function classifyGiveUp(stderrTail) {
   const lastLine = stderrTail.trim().split("\n").pop();
@@ -483,11 +584,32 @@ async function supervise(dshBin, args, env, info) {
       quickFails = 0;
     }
     rmSync2(`${dshcDir()}/${STOP_FLAG}`, { force: true });
+    const other2 = isRunning();
+    if (other2 !== null && other2 !== process.pid) {
+      log(`supervise: \u68C0\u6D4B\u5230\u53E6\u4E00\u5B9E\u4F8B (pid ${other2})\uFF0C\u672C\u8FDB\u7A0B\u8BA9\u4F4D\u9000\u51FA`);
+      process.stdout.write(`[dshc] \u5DF2\u6709 supervisor \u5728\u8FD0\u884C (pid ${other2})\uFF0C\u672C\u5B9E\u4F8B\u9000\u51FA
+`);
+      process.exit(0);
+    }
+    const cleaned = await cleanupPorts(info.port);
+    for (const { port, killed } of cleaned) {
+      if (killed.length === 0) continue;
+      log(`\u7AEF\u53E3 ${port} \u88AB pid [${killed.join(", ")}] \u5360\u7528\uFF0C\u5DF2\u5F3A\u5236\u7ED3\u675F\uFF08\u542F\u52A8\u524D\u6E05\u573A\uFF09`);
+      process.stdout.write(`[dshc] \u7AEF\u53E3 ${port} \u88AB\u6B8B\u7559\u8FDB\u7A0B\u5360\u7528\uFF0C\u5DF2\u7ED3\u675F pid [${killed.join(", ")}]
+`);
+    }
+    if (cleaned.some((c) => c.killed.length > 0)) await sleep(500);
     log(`spawning ${dshBin} ${args.join(" ")}`);
     process.stdout.write(`[dshc] starting: ${dshBin} ${args.join(" ")}
 `);
     const launch = resolveDshLaunch(dshBin);
-    child = spawn(launch.cmd, [...launch.args, ...args], { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const childArgs = [...launch.args, ...args];
+    child = spawn(launch.cmd, childArgs, {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: launch.shell === true
+    });
     const startedAt = Date.now();
     let lineBuffer = "";
     let stderrTail = "";
@@ -528,7 +650,7 @@ async function supervise(dshBin, args, env, info) {
 `);
     if (Date.now() - startedAt >= QUICK_FAIL_WINDOW_MS || outcome.code === 0) quickFails = 0;
     else quickFails += 1;
-    if (quickFails >= QUICK_FAIL_LIMIT) {
+    if (quickFails >= QUICK_FAIL_LIMIT || stderrTail.includes("EADDRINUSE")) {
       giveUp = classifyGiveUp(stderrTail);
       quickFails = 0;
       backoffMs = 1e3;
@@ -563,8 +685,8 @@ function requestResume() {
 
 // src/cli/autostart.ts
 import { chmodSync, existsSync as existsSync5, mkdirSync as mkdirSync4, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { spawnSync as spawnSync3 } from "node:child_process";
+import { homedir as homedir4 } from "node:os";
+import { spawnSync as spawnSync4 } from "node:child_process";
 var LABEL = "top.rwecho.deepseek-harness-pocket.worker";
 function autostartInstall(gatewayUrl) {
   if (process.platform === "darwin") return installLaunchd(gatewayUrl);
@@ -573,16 +695,16 @@ function autostartInstall(gatewayUrl) {
 }
 function autostartUninstall() {
   if (process.platform === "darwin") {
-    const target = `${homedir3()}/Library/LaunchAgents/${LABEL}.plist`;
-    spawnSync3("launchctl", ["unload", target], { stdio: "ignore" });
+    const target = `${homedir4()}/Library/LaunchAgents/${LABEL}.plist`;
+    spawnSync4("launchctl", ["unload", target], { stdio: "ignore" });
     rmSync3(target, { force: true });
     return `\u5DF2\u79FB\u9664 launchd LaunchAgent (${target})`;
   }
   if (process.platform === "linux") {
-    const target = `${homedir3()}/.config/systemd/user/deepseek-harness-pocket.service`;
-    spawnSync3("systemctl", ["--user", "disable", "--now", "deepseek-harness-pocket.service"], { stdio: "ignore" });
+    const target = `${homedir4()}/.config/systemd/user/deepseek-harness-pocket.service`;
+    spawnSync4("systemctl", ["--user", "disable", "--now", "deepseek-harness-pocket.service"], { stdio: "ignore" });
     rmSync3(target, { force: true });
-    spawnSync3("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+    spawnSync4("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
     return `\u5DF2\u79FB\u9664 systemd user \u670D\u52A1 (${target})`;
   }
   return "Windows\uFF1A\u8BF7\u624B\u52A8\u79FB\u9664\u542F\u52A8\u9879";
@@ -593,10 +715,10 @@ function commandArgs(gatewayUrl) {
   return args;
 }
 function installLaunchd(gatewayUrl) {
-  const dir = `${homedir3()}/Library/LaunchAgents`;
+  const dir = `${homedir4()}/Library/LaunchAgents`;
   mkdirSync4(dir, { recursive: true });
   const target = `${dir}/${LABEL}.plist`;
-  const log2 = `${homedir3()}/.deepseek-harness-pocket/launchd.log`;
+  const log2 = `${homedir4()}/.deepseek-harness-pocket/launchd.log`;
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -614,13 +736,13 @@ ${commandArgs(gatewayUrl).map((a) => `    <string>${a.replaceAll("&", "&amp;").r
 </plist>
 `;
   writeFileSync4(target, plist);
-  spawnSync3("launchctl", ["unload", target], { stdio: "ignore" });
-  const loaded = spawnSync3("launchctl", ["load", target]);
+  spawnSync4("launchctl", ["unload", target], { stdio: "ignore" });
+  const loaded = spawnSync4("launchctl", ["load", target]);
   if (loaded.status !== 0) return `\u5DF2\u5199\u5165 ${target}\uFF0C\u4F46 launchctl load \u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u52A0\u8F7D`;
   return `\u5DF2\u5B89\u88C5 launchd LaunchAgent \u5E76\u52A0\u8F7D\uFF08${target}\uFF09\uFF0C\u767B\u5F55\u5373\u81EA\u52A8\u542F\u52A8 dshc`;
 }
 function installSystemd(gatewayUrl) {
-  const dir = `${homedir3()}/.config/systemd/user`;
+  const dir = `${homedir4()}/.config/systemd/user`;
   mkdirSync4(dir, { recursive: true });
   const target = `${dir}/deepseek-harness-pocket.service`;
   const unit = `[Unit]
@@ -636,8 +758,8 @@ RestartSec=5
 WantedBy=default.target
 `;
   writeFileSync4(target, unit);
-  spawnSync3("systemctl", ["--user", "daemon-reload"]);
-  const enabled = spawnSync3("systemctl", ["--user", "enable", "--now", "deepseek-harness-pocket.service"]);
+  spawnSync4("systemctl", ["--user", "daemon-reload"]);
+  const enabled = spawnSync4("systemctl", ["--user", "enable", "--now", "deepseek-harness-pocket.service"]);
   if (enabled.status !== 0) return `\u5DF2\u5199\u5165 ${target}\uFF0C\u4F46 enable \u5931\u8D25\uFF0C\u8BF7\u624B\u52A8 systemctl --user enable --now deepseek-harness-pocket`;
   return `\u5DF2\u5B89\u88C5\u5E76\u542F\u52A8 systemd user \u670D\u52A1\uFF08deepseek-harness-pocket.service\uFF09`;
 }
@@ -701,7 +823,12 @@ function parseArgs(argv) {
 }
 function probeDshVersion(dshBin) {
   const launch = resolveDshLaunch(dshBin);
-  const result = spawnSync4(launch.cmd, [...launch.args, "--version"], { stdio: ["ignore", "pipe", "ignore"], encoding: "utf8", windowsHide: true });
+  const result = spawnSync5(launch.cmd, [...launch.args, "--version"], {
+    stdio: ["ignore", "pipe", "ignore"],
+    encoding: "utf8",
+    windowsHide: true,
+    shell: launch.shell === true
+  });
   if (result.status !== 0 || typeof result.stdout !== "string") return "";
   return result.stdout.trim().split("\n")[0] ?? "";
 }
@@ -819,6 +946,23 @@ async function main() {
 `);
       break;
     }
+    case "free-port": {
+      const cleaned = await cleanupPorts(options.port);
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ cleaned }, void 0, 2)}
+`);
+        break;
+      }
+      if (cleaned.every((c) => c.killed.length === 0)) {
+        process.stdout.write("[dshc] \u7AEF\u53E3\u7A7A\u95F2\uFF0C\u65E0\u9700\u6E05\u7406\n");
+        break;
+      }
+      for (const { port, killed } of cleaned) {
+        if (killed.length > 0) process.stdout.write(`[dshc] \u7AEF\u53E3 ${port}: \u5DF2\u7ED3\u675F\u5360\u7528\u8FDB\u7A0B pid [${killed.join(", ")}]
+`);
+      }
+      break;
+    }
     case "status": {
       const pid = isRunning();
       const run = readRunInfo();
@@ -912,6 +1056,7 @@ home: ${dshcDir()}
           "  start [--gateway \u2026] [--port 3780] [--detached]",
           "                                \u62C9\u8D77\u5E76\u5B88\u62A4 dsh\uFF08\u624B\u673A\u7AEF\u7ECF\u8D26\u53F7\u767B\u5F55\u7ED1\u5B9A\uFF09",
           "  stop / status [--json]",
+          "  free-port [--port 3780] [--json]  \u7ED3\u675F\u5360\u7528\u7AEF\u53E3\u7684\u6B8B\u7559\u8FDB\u7A0B\uFF08\u6E05\u573A\uFF09",
           "  resume                        \u6062\u590D\u5F85\u673A\u4E2D\u7684 worker\uFF08\u91CD\u8BD5\u542F\u52A8\uFF09",
           "  qr [--json]                   \u6253\u5370\u914D\u5BF9\u4E8C\u7EF4\u7801\uFF08\u624B\u673A\u626B\u7801\u7ED1\u5B9A\uFF09"
         ].join("\n")

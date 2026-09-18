@@ -1,10 +1,12 @@
 /**
  * dsh 子进程守护：spawn + 崩溃退避重启 + 快速失败待机（give-up）+ 优雅停止 + 日志落盘。
+ * spawn 前端口清场：supervisor 已死的孤儿 dsh 占着 Worker 口 / web 口时强制结束，保证本轮能起来。
  */
 
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
+import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { resolveDshLaunch, selfBin } from './runtime.js'
 
@@ -17,6 +19,8 @@ const START_LOCK = 'dshc.start.lock'
 const QUICK_FAIL_WINDOW_MS = 15_000
 /** 连续快速失败多少次后进入待机（不再无限退避重启烧 CPU）。 */
 const QUICK_FAIL_LIMIT = 3
+/** dsh Web 控制台固定端口（@deepseek-ai/dsh-host-webserver 默认监听；与桌面端端口预检一致）。 */
+export const DSH_WEB_PORT = 3080
 /** 待机期基础探测间隔（resume flag 检查）。 */
 const STANDBY_POLL_MS = 2_000
 /** 待机期重条件（端口/文件）探测间隔（按 STANDBY_POLL_MS × STANDBY_PROBE_EVERY 计算）。 */
@@ -92,7 +96,7 @@ interface StoredRunInfo extends RunInfo {
 }
 
 export function dshcDir(): string {
-  const dir = `${process.env['HOME'] ?? '.'}/.deepseek-harness-pocket`
+  const dir = `${process.env['DSHC_HOME'] ?? process.env['HOME'] ?? homedir()}/.deepseek-harness-pocket`
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -202,6 +206,71 @@ function portFree(port: number): Promise<boolean> {
     server.once('listening', () => server.close(() => resolve(true)))
     server.listen(port, '127.0.0.1')
   })
+}
+
+/**
+ * 从 `netstat -ano -p tcp` 输出里解析正在 LISTEN <port> 的 pid 集合。
+ * 行形如 `  TCP    127.0.0.1:3080    0.0.0.0:0    LISTENING    9876`
+ * （本地地址可能是 0.0.0.0/[::]/127.0.0.1，只按 `:<port>` 后缀匹配）。
+ */
+export function parseNetstatListenPids(text: string, port: number): number[] {
+  const pids = new Set<number>()
+  for (const line of text.split('\n')) {
+    const cols = line.trim().split(/\s+/)
+    if (cols.length < 5 || cols[3] !== 'LISTENING') continue
+    if (!cols[1]!.endsWith(`:${port}`)) continue
+    const pid = Number.parseInt(cols[4]!, 10)
+    // 0/4 是 System Idle/System，永不碰；自己不会 LISTEN 这个端口
+    if (Number.isInteger(pid) && pid > 4 && pid !== process.pid) pids.add(pid)
+  }
+  return [...pids]
+}
+
+/** 列出正在 LISTEN <port> 的进程 pid（Windows netstat / macOS·Linux lsof；探测失败返回空）。 */
+function listeningPids(port: number): number[] {
+  if (process.platform === 'win32') {
+    const out = spawnSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8', windowsHide: true })
+    if (out.status !== 0 || typeof out.stdout !== 'string') return []
+    return parseNetstatListenPids(out.stdout, port)
+  }
+  const out = spawnSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
+  if (out.status !== 0 || typeof out.stdout !== 'string') return []
+  return [...new Set(
+    out.stdout
+      .split('\n')
+      .map((s) => Number.parseInt(s.trim(), 10))
+      .filter((pid) => Number.isInteger(pid) && pid > 4 && pid !== process.pid),
+  )]
+}
+
+/** 强制结束（Windows 含子树 /T）占用 <port> 的进程，返回实际结束的 pid。 */
+function killPortHolders(port: number): number[] {
+  const pids = listeningPids(port)
+  for (const pid of pids) {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true })
+    } else {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // 已退出 / 无权限：交给后续 portFree 探测兜底
+      }
+    }
+  }
+  return pids
+}
+
+/**
+ * 启动清场：依次接管 Worker 口与 dsh web 口，返回每个端口结束的占用者 pid（killed 为空 = 本来就空闲）。
+ * 两个消费方：supervise 循环 spawn 前自动清场；`dshc free-port` 显式清场命令。
+ */
+export async function cleanupPorts(port: number): Promise<Array<{ port: number; killed: number[] }>> {
+  const result: Array<{ port: number; killed: number[] }> = []
+  for (const p of new Set([port, DSH_WEB_PORT])) {
+    if (await portFree(p)) continue
+    result.push({ port: p, killed: killPortHolders(p) })
+  }
+  return result
 }
 
 /** 依据最后一次失败的 stderr 尾部给待机原因分类。 */
@@ -323,6 +392,23 @@ export async function supervise(
       quickFails = 0
     }
     rmSync(`${dshcDir()}/${STOP_FLAG}`, { force: true })
+    // 双实例护栏：pid 文件指向别的活进程 = 另一 supervisor 在守护（含它 spawn 的 dsh），
+    // 让位退出而不是互杀对方的 dsh 打乒乓。start 时查过一次，长运行后再兜底。
+    const other = isRunning()
+    if (other !== null && other !== process.pid) {
+      log(`supervise: 检测到另一实例 (pid ${other})，本进程让位退出`)
+      process.stdout.write(`[dshc] 已有 supervisor 在运行 (pid ${other})，本实例退出\n`)
+      process.exit(0)
+    }
+    // 启动前清场：孤儿 dsh（supervisor 已死、子进程还占着口）会让本轮 spawn 必然
+    // EADDRINUSE。清不掉（如权限不足）时由下方 EADDRINUSE 待机兜底，不会无限重启。
+    const cleaned = await cleanupPorts(info.port)
+    for (const { port, killed } of cleaned) {
+      if (killed.length === 0) continue
+      log(`端口 ${port} 被 pid [${killed.join(', ')}] 占用，已强制结束（启动前清场）`)
+      process.stdout.write(`[dshc] 端口 ${port} 被残留进程占用，已结束 pid [${killed.join(', ')}]\n`)
+    }
+    if (cleaned.some((c) => c.killed.length > 0)) await sleep(500)
     log(`spawning ${dshBin} ${args.join(' ')}`)
     process.stdout.write(`[dshc] starting: ${dshBin} ${args.join(' ')}\n`)
     // Windows .cmd shim 不能直接 spawn（EINVAL）：解析出真实 JS 入口用当前 node 跑，
@@ -376,7 +462,9 @@ export async function supervise(
     process.stdout.write(`[dshc] dsh exited (code ${outcome.code}); restart in ${backoffMs}ms\n`)
     if (Date.now() - startedAt >= QUICK_FAIL_WINDOW_MS || outcome.code === 0) quickFails = 0
     else quickFails += 1
-    if (quickFails >= QUICK_FAIL_LIMIT) {
+    // EADDRINUSE 不凑快速失败次数：dsh 要 boot 到 webserver 插件才撞端口（实测 ~50s+，
+    // 远超 15s 窗口），按窗口累计永远凑不满、会无限退避重启烧 CPU——清场失败时直接待机
+    if (quickFails >= QUICK_FAIL_LIMIT || stderrTail.includes('EADDRINUSE')) {
       giveUp = classifyGiveUp(stderrTail)
       quickFails = 0
       backoffMs = 1000

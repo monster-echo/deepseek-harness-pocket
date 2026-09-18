@@ -226,9 +226,9 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::
         .tooltip("DSH Pocket")
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| {
-            handle_menu_action(app, event.id().as_ref());
-        })
+        // 不在这里挂 on_menu_event：托盘菜单事件已经由 Builder::on_menu_event 全局出口
+        // 处理，再挂一份会收到两次事件，「开机自启」一点就 enable→disable 各跑一次，
+        // 勾选永远打不上。菜单动作统一走 handle_menu_action 一处。
         .build(app)?;
     Ok(())
 }
@@ -268,6 +268,7 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || {
     let mut prev_running: Option<bool> = None;
     let mut consecutive_failures: u32 = 0;
+    let mut prev_autostart: Option<bool> = None;
     loop {
         // 工具链缺失（新机器/未完成引导）时不 spawn node：60s 重探。
         // 否则「环境坏掉」的机器上每 3s 冷启动一个 node，永不停止。
@@ -302,6 +303,19 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
             }
         }
         prev_running = Some(running);
+
+        // 自启状态被外部改动（系统设置/其他入口）时，菜单勾选也要跟上：
+        // 状态翻转才重建，避免每 tick 重建菜单导致打开中的菜单闪烁
+        let autostart = autostart_enabled(&app);
+        if prev_autostart != Some(autostart) {
+            refresh_tray_menu(&app);
+            if let Some(win) = app.get_webview_window("main") {
+                if let Ok(menu) = app_menu(&app) {
+                    let _ = win.set_menu(menu);
+                }
+            }
+            prev_autostart = Some(autostart);
+        }
 
         #[cfg(debug_assertions)]
         {
@@ -341,7 +355,7 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R
         .build(app)?;
     let console = SubmenuBuilder::new(app, "控制台")
         .item(&MenuItem::with_id(app, "console:status", "运行状态", true, None::<&str>)?)
-        .item(&MenuItem::with_id(app, "console:login", "扫码登录", true, None::<&str>)?)
+        // 「扫码登录」并入「账号」：账号页未登录时本就显示扫码二维码，无需两个入口
         .item(&MenuItem::with_id(app, "console:account", "账号", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "console:versions", "版本", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "console:logs", "日志", true, None::<&str>)?)
@@ -386,8 +400,6 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
             let _ = app.emit("open-onboarding", ());
         }
         "menu:settings" => open_console(app, "settings"),
-        // 未登录入口：打开控制台「账号」页（未登录即显示扫码二维码）
-        "console:login" => open_console(app, "account"),
         "menu:about" => {
             use tauri_plugin_dialog::DialogExt;
             let info = app.package_info();
@@ -1838,7 +1850,8 @@ fn device_link_revoke<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // 窗口菜单点击的唯一事件出口（托盘菜单另有 on_menu_event，共用 handle_menu_action）
+        // 所有菜单（窗口菜单 + 托盘菜单）点击的唯一事件出口，统一进 handle_menu_action；
+        // 托盘侧不要再挂监听，否则同一事件会被处理两次（自启开关会 toggle 两次）
         .on_menu_event(|app, event| {
             handle_menu_action(app, event.id().as_ref());
         })

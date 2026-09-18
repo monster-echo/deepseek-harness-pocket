@@ -2,21 +2,26 @@ import { AlertTriangle, CheckCircle2, Loader2, Play, XCircle } from "lucide-reac
 import { Badge, Button } from "../../components/ui";
 import type { PreflightItem } from "../../lib/worker";
 import { PortStep } from "../../guide/PortStep";
+import { DshcUpdateCard } from "./DshcUpdateCard";
 
 /**
  * 完成：环境自检总结（全部绿了才给「启动」）。
  * 这一步是硬门槛的具象化——用户亲眼看到每一项都通过，才进入程序。
+ * dialog（菜单重开）形态下额外展示 dshc 更新卡片——这里是更新入口。
  */
 export function DoneStep({
   items,
   loading,
   busy,
+  showUpdate = false,
   onStart,
   onRefresh,
 }: {
   items: PreflightItem[];
   loading: boolean;
   busy: boolean;
+  /** 菜单重开（dialog）形态：展示 dshc 版本与更新入口 */
+  showUpdate?: boolean;
   onStart: () => void;
   onRefresh: () => void;
 }) {
@@ -59,6 +64,9 @@ export function DoneStep({
           ))
         )}
       </div>
+
+      {/* dshc 版本与更新入口（菜单重开时） */}
+      {showUpdate ? <DshcUpdateCard /> : null}
 
       {/* 端口冲突是唯一会卡住「启动」的项：内联给出口 */}
       {!loading && items.some((i) => i.fix === "free_port") ? (

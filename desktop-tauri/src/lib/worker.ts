@@ -134,6 +134,19 @@ export async function workerStop(): Promise<string> {
   return invoke<string>("dshc_stop");
 }
 
+/** 每个端口被清场的结果（killed 为空 = 本来就空闲） */
+export interface CleanedPort {
+  port: number;
+  killed: number[];
+}
+
+/** 端口清场：结束占用 Worker 口 / dsh web 口的残留进程（引导页端口冲突修复卡用） */
+export async function portCleanup(): Promise<CleanedPort[]> {
+  if (!isTauri()) return [];
+  const raw = await invoke<string>("port_cleanup");
+  return (JSON.parse(raw) as { cleaned: CleanedPort[] }).cleaned;
+}
+
 /** 恢复待机中的 supervisor（crash_loop 等待机的手动重试入口） */
 export async function workerResume(): Promise<string> {
   if (!isTauri()) return "[mock] 已请求恢复";
@@ -222,7 +235,7 @@ export interface SystemNodeInfo {
 export interface BootstrapStatus {
   onboardingDone: boolean;
   systemNode: SystemNodeInfo;
-  node: { installed: boolean; version?: string; pnpm?: boolean };
+  node: { installed: boolean; version?: string; pnpm?: boolean; source?: "system" | "managed" };
   nodeChoices: { major: number; version: string }[];
   bridge: { installed: boolean; version?: string; min: string; satisfies: boolean };
   dshInstalled: boolean;
@@ -293,6 +306,41 @@ export async function bridgeInstall(): Promise<string> {
 export async function bootstrapComplete(): Promise<void> {
   if (!isTauri()) return;
   return invoke("bootstrap_complete");
+}
+
+/**
+ * 取走「菜单 → 引导页」的待处理请求（一次性标志）。
+ * 主窗口从 Web GUI 导航回来时整页重载，open-onboarding 事件会丢；
+ * 前端加载完成后消费这个标志作为兜底。调用即清除，返回 true 表示刚请求过。
+ */
+export async function takeOnboardingRequest(): Promise<boolean> {
+  if (!isTauri()) return false;
+  return invoke<boolean>("take_onboarding_request");
+}
+
+export interface BridgeUpdateInfo {
+  /** 本地已装版本（未安装为空串） */
+  current: string;
+  /** npm 镜像上的 latest */
+  latest: string;
+  updateAvailable: boolean;
+}
+
+/** 检查 dshc 更新：本地版本 vs npm latest（引导页「检查更新」） */
+export async function bridgeCheckUpdate(registry?: string): Promise<BridgeUpdateInfo> {
+  if (!isTauri()) {
+    return { current: "0.1.3", latest: "0.1.3", updateAvailable: false };
+  }
+  return invoke<BridgeUpdateInfo>("bridge_check_update", { registry: registry ?? null });
+}
+
+/** 强制更新 dshc 到 npm latest（无视最低版本短路；完成后需重启 Worker 生效） */
+export async function bridgeUpdate(): Promise<string> {
+  if (!isTauri()) {
+    await new Promise((r) => setTimeout(r, 600));
+    return "[mock] 已更新 Worker 核心";
+  }
+  return invoke<string>("bridge_update");
 }
 
 export async function runtimeInfo(): Promise<RuntimeInfo> {

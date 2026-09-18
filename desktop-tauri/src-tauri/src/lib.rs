@@ -32,6 +32,20 @@ static LAST_WEB_URL: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::n
 /// 不能硬编码 `tauri://localhost`：Windows 上是 `http://tauri.localhost`，双端不同。
 static APP_URL: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 
+/// 菜单「引导页」的待处理请求。主窗口从 dsh Web GUI 导航回本前端时整页重载，
+/// emit 的 open-onboarding 事件会随旧页面一起丢掉——前端加载完成后用
+/// `take_onboarding_request` 消费这个标志，作为事件丢失的兜底。
+static ONBOARDING_REQUESTED: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
+
+/// 取走（并清除）待处理的引导页请求；返回 true 表示菜单刚请求过打开引导页。
+#[tauri::command]
+fn take_onboarding_request() -> bool {
+    match ONBOARDING_REQUESTED.lock() {
+        Ok(mut g) => std::mem::take(&mut *g),
+        Err(_) => false,
+    }
+}
+
 // ───────────────────────── 路径 ─────────────────────────
 
 /// 与 dshc CLI 共享的主目录（supervisor.ts `dshcDir()` 同源）
@@ -390,11 +404,16 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 let _ = win.set_focus();
             }
         }
-        // 回到引导页：主窗口导航回本应用前端，并让前端进入引导向导
+        // 回到引导页：主窗口导航回本应用前端，并让前端进入引导向导。
+        // 事件与标志双通道：窗口已在本前端时导航是 no-op，事件直达监听器；
+        // 从 Web GUI 导航回来会整页重载、事件必丢，由标志兜底（前端加载后消费）。
         "menu:guide" => {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
                 let _ = win.set_focus();
+            }
+            if let Ok(mut g) = ONBOARDING_REQUESTED.lock() {
+                *g = true;
             }
             navigate_main(app, "");
             let _ = app.emit("open-onboarding", ());
@@ -496,6 +515,17 @@ fn dshc_stop<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     run_dshc(&app, &["stop", "--json"])
 }
 
+/// 端口清场：结束占用 Worker 口 / dsh web 口的残留进程（引导页「清理端口」按钮用）。
+/// 实现在 bridge CLI `dshc free-port`——与 supervisor spawn 前的自动清场同一份逻辑。
+#[tauri::command]
+fn port_cleanup<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    let port = read_settings(&app)
+        .get("port")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(DEFAULT_PORT);
+    run_dshc(&app, &["free-port", "--port", &port.to_string(), "--json"])
+}
+
 /// 控制台内打开某个面板（前端主动调用）
 #[tauri::command]
 fn show_console<R: Runtime>(app: AppHandle<R>, panel: String) {
@@ -574,7 +604,7 @@ async fn tools_install<R: Runtime>(app: AppHandle<R>) -> Result<String, String> 
     .map_err(|e| format!("任务失败: {e}"))?
 }
 
-/// 安装 bridge（dshc）到 runtimes/bridge
+/// 安装 bridge（dshc）到 runtimes/bridge（幂等；已满足 MIN 版本则跳过）
 #[tauri::command]
 async fn bridge_install<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     let home = pocket_home(&app)?;
@@ -582,7 +612,61 @@ async fn bridge_install<R: Runtime>(app: AppHandle<R>) -> Result<String, String>
         let node = toolchain::resolve_node(&home)?;
         let out = toolchain::tools_install_impl(&app, &home, &node);
         out?; // bridge 的 plugin add 依赖 pnpm，先确保 tools 就位
-        toolchain::bridge_install_impl(&app, &home, &node)
+        toolchain::bridge_install_impl(&app, &home, &node, false)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 检查 dshc 更新：本地已装版本 vs npm latest（引导页「检查更新」按钮）。
+#[tauri::command]
+async fn bridge_check_update<R: Runtime>(
+    app: AppHandle<R>,
+    registry: Option<String>,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = pocket_home(&app)?;
+        let current = toolchain::resolve_bridge(&home)
+            .ok()
+            .map(|(_, _, v)| v)
+            .unwrap_or_default();
+        let reg = registry
+            .filter(|r| !r.trim().is_empty())
+            .unwrap_or_else(|| toolchain::NPM_REGISTRY.to_string());
+        let out = run_npm(
+            &app,
+            &["view", toolchain::BRIDGE_PACKAGE, "version", "--prefer-online", "--loglevel=error"],
+            None,
+            &reg,
+            60,
+            None,
+        )?;
+        if !out.success {
+            return Err(format!("获取最新版本失败：{}", out.output));
+        }
+        let latest = out.stdout.trim().trim_matches('"').to_string();
+        let update_available = !current.is_empty()
+            && !latest.is_empty()
+            && compare_versions(&latest, &current) == std::cmp::Ordering::Greater;
+        Ok(serde_json::json!({
+            "current": current,
+            "latest": latest,
+            "updateAvailable": update_available,
+        }))
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 强制更新 dshc 到 npm latest（无视 MIN 版本短路）；完成后需重启 Worker 生效。
+#[tauri::command]
+async fn bridge_update<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    let home = pocket_home(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let node = toolchain::resolve_node(&home)?;
+        let out = toolchain::tools_install_impl(&app, &home, &node);
+        out?; // 与 bridge_install 同源：pnpm 先就位
+        toolchain::bridge_install_impl(&app, &home, &node, true)
     })
     .await
     .map_err(|e| format!("任务失败: {e}"))?
@@ -1877,6 +1961,7 @@ pub fn run() {
             dshc_status,
             dshc_start,
             dshc_stop,
+            port_cleanup,
             dshc_resume,
             preflight_check,
             bootstrap_status,
@@ -1884,7 +1969,10 @@ pub fn run() {
             system_node_probe,
             tools_install,
             bridge_install,
+            bridge_check_update,
+            bridge_update,
             bootstrap_complete,
+            take_onboarding_request,
             show_console,
             open_external,
             runtime_info,

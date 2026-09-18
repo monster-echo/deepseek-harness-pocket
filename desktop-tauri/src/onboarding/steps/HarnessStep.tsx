@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, RotateCw } from "lucide-react";
 import { Button } from "../../components/ui";
 import { installVersion, versionsAvailable, type BootstrapProgress, type BootstrapStatus } from "../../lib/worker";
-import { formatBytes, formatElapsed } from "../model";
+import { compareSemver, formatBytes, formatElapsed } from "../model";
 
 /**
  * DeepSeek Harness（dsh 运行时）：
@@ -41,7 +41,8 @@ export function HarnessStep({
   };
 
   useEffect(() => {
-    if (versions === null && !picker && !installed && error === null) {
+    // 未安装：预取列表供推荐按钮；已就绪：仅在展开「换装」时才拉取
+    if (versions === null && error === null && (picker || !installed)) {
       fetchVersions();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -72,6 +73,64 @@ export function HarnessStep({
   const pct =
     busy && received > 0 && progress?.total ? Math.min(99, Math.round((received / progress.total) * 100)) : null;
 
+  // 已就绪态的「换装」：低于已装最高版本不做降级（启动时永远用最高版本，降级请去控制台「版本」页）
+  const highestInstalled = managedVersions.reduce<string | null>(
+    (acc, v) => (acc === null || compareSemver(v, acc) > 0 ? v : acc),
+    null,
+  );
+  const selectedOlder =
+    selected !== null && highestInstalled !== null && compareSemver(selected, highestInstalled) < 0;
+
+  // 安装进度 / 错误反馈：就绪与待安装两条路径共用
+  const installFeedback = (
+    <>
+      {busy ? (
+        <div className="rounded-md bg-muted/60 px-3 py-2.5">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" />
+            <span>依赖树较大（约 450 个包），通常 5–15 分钟{elapsed > 0 ? ` · 已进行 ${formatElapsed(elapsed)}` : ""}</span>
+          </div>
+          {/* 只在拿到真实写入量时才画进度条（npm 非交互模式没有原生百分比，
+              目录写入体积是唯一可信信号；拿不到就不显示，宁缺毋滥） */}
+          {pct !== null ? (
+            <div className="mt-2">
+              <div className="flex items-center justify-between text-[11px] tabular text-muted-foreground">
+                <span>已写入</span>
+                <span>
+                  {formatBytes(progress?.received)} / 约 {formatBytes(progress?.total)}
+                </span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-border">
+                <div
+                  className="h-full rounded-full bg-primary transition-[width] duration-500"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          ) : null}
+          {progress?.line ? (
+            <p className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground" title={progress.line}>
+              {progress.line}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {error ? (
+        <>
+          <p className="rounded-md bg-destructive-soft px-3 py-2 text-xs leading-relaxed text-hue-red">
+            {busy ? `安装 ${selected ?? ""} 失败：${error}` : `版本列表获取失败：${error}`}
+          </p>
+          {!busy ? (
+            <Button variant="outline" onClick={fetchVersions}>
+              <RotateCw />
+              重试
+            </Button>
+          ) : null}
+        </>
+      ) : null}
+    </>
+  );
+
   // 已有即可用：受管或全局 dsh 都算（worker 启动时受管优先、全局兜底）
   if (installed || globalDsh) {
     return (
@@ -85,6 +144,58 @@ export function HarnessStep({
             ? "之后可在控制台「版本」页随时安装或切换其他版本。"
             : "检测到本机已有全局安装的 dsh，直接复用；控制台「版本」页可另装受管版本。"}
         </p>
+
+        <button
+          type="button"
+          className="mt-1 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => setPicker((v) => !v)}
+        >
+          {picker ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+          高级选项：换装其他版本
+        </button>
+        {picker ? (
+          <div className="w-full rounded-md bg-muted/60 px-3 py-2.5 text-left">
+            <div className="flex flex-wrap gap-1.5">
+              {versions === null ? (
+                <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+              ) : (
+                versions.slice(0, 8).map((v) => {
+                  const haveIt = managedVersions.includes(v) || v === globalDsh;
+                  return (
+                    <Button
+                      key={v}
+                      variant={v === selected ? "default" : "outline"}
+                      size="sm"
+                      className="font-mono text-xs"
+                      disabled={busy}
+                      onClick={() => setSelected(v)}
+                    >
+                      {v}
+                      {haveIt ? <CheckCircle2 className="ml-1 size-3" /> : null}
+                    </Button>
+                  );
+                })
+              )}
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+              换装的版本在下次启动 Worker 时生效。
+            </p>
+            {selected !== null && !managedVersions.includes(selected) ? (
+              selectedOlder ? (
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                  {selected} 低于已装版本（{highestInstalled}）。启动时始终使用最高版本，降级请完成后在控制台「版本」页切换。
+                </p>
+              ) : (
+                <Button size="sm" className="mt-1.5 w-full" disabled={busy} onClick={() => void install(selected)}>
+                  {busy ? <Loader2 className="animate-spin" /> : null}
+                  安装 {selected}
+                </Button>
+              )
+            ) : null}
+          </div>
+        ) : null}
+
+        {installFeedback}
       </div>
     );
   }
@@ -143,50 +254,7 @@ export function HarnessStep({
         </div>
       ) : null}
 
-      {busy ? (
-        <div className="rounded-md bg-muted/60 px-3 py-2.5">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" />
-            <span>依赖树较大（约 450 个包），通常 5–15 分钟{elapsed > 0 ? ` · 已进行 ${formatElapsed(elapsed)}` : ""}</span>
-          </div>
-          {/* 只在拿到真实写入量时才画进度条（npm 非交互模式没有原生百分比，
-              目录写入体积是唯一可信信号；拿不到就不显示，宁缺毋滥） */}
-          {pct !== null ? (
-            <div className="mt-2">
-              <div className="flex items-center justify-between text-[11px] tabular text-muted-foreground">
-                <span>已写入</span>
-                <span>
-                  {formatBytes(progress?.received)} / 约 {formatBytes(progress?.total)}
-                </span>
-              </div>
-              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-border">
-                <div
-                  className="h-full rounded-full bg-primary transition-[width] duration-500"
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-            </div>
-          ) : null}
-          {progress?.line ? (
-            <p className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground" title={progress.line}>
-              {progress.line}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-      {error ? (
-        <>
-          <p className="rounded-md bg-destructive-soft px-3 py-2 text-xs leading-relaxed text-hue-red">
-            {busy ? `安装 ${selected ?? ""} 失败：${error}` : `版本列表获取失败：${error}`}
-          </p>
-          {!busy ? (
-            <Button variant="outline" onClick={fetchVersions}>
-              <RotateCw />
-              重试
-            </Button>
-          ) : null}
-        </>
-      ) : null}
+      {installFeedback}
     </div>
   );
 }

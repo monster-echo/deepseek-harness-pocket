@@ -21,7 +21,7 @@ pub const NODE_CHOICES: &[(u8, &str)] = &[(24, "v24.21.0"), (22, "v22.23.2")];
 pub const MIN_SYSTEM_NODE_MAJOR: u64 = 20;
 pub const BRIDGE_PACKAGE: &str = "@deepseek-harness-pocket/bridge";
 /// bridge 低于此版本视为「npm 镜像同步延迟」，要求重试安装
-pub const MIN_BRIDGE_VERSION: &str = "0.1.3";
+pub const MIN_BRIDGE_VERSION: &str = "0.1.4";
 pub const PNPM_SPEC: &str = "pnpm@10";
 pub const NPM_REGISTRY: &str = "https://registry.npmmirror.com";
 
@@ -410,10 +410,29 @@ pub fn bootstrap_status_impl(home: &Path) -> serde_json::Value {
         obj.insert("probed".into(), serde_json::json!(sys_found));
     }
 
-    let node_installed = pick_managed(home).map(|p| {
-        let pnpm = tools_bin_dir(home).join(if cfg!(target_os = "windows") { "pnpm.cmd" } else { "pnpm" });
-        serde_json::json!({ "installed": true, "version": p.version, "pnpm": pnpm.exists() })
-    });
+    // node 就绪判定必须与 resolve_node 同源：toolchain.json 声明 system 且现在可用 = 已就绪，
+    // 否则采用系统 Node 的用户重启后 installed 仍为 false，会被重复弹回向导。
+    // source 字段供向导「改选」UI 显示当前来源（system / managed）。
+    let system_declared = matches!(read_toolchain_json(home), Some((ref source, _)) if source == "system");
+    let system_usable = sys.get("usable").and_then(|v| v.as_bool()).unwrap_or(false);
+    let node_installed = if system_declared {
+        if system_usable {
+            Some(serde_json::json!({
+                "installed": true,
+                "version": sys.get("version").cloned().unwrap_or(serde_json::Value::Null),
+                "source": "system",
+            }))
+        } else {
+            None
+        }
+    } else {
+        pick_managed(home).map(|p| {
+            let pnpm = tools_bin_dir(home).join(if cfg!(target_os = "windows") { "pnpm.cmd" } else { "pnpm" });
+            serde_json::json!({
+                "installed": true, "version": p.version, "pnpm": pnpm.exists(), "source": "managed",
+            })
+        })
+    };
 
     let node_choices: Vec<serde_json::Value> = NODE_CHOICES
         .iter()
@@ -700,14 +719,22 @@ pub fn tools_install_impl<R: Runtime>(app: &AppHandle<R>, home: &Path, node: &No
     Ok("已安装 pnpm".to_string())
 }
 
-/// 安装 bridge（dshc）到 runtimes/bridge（幂等；已满足 MIN 版本则跳过）。
-pub fn bridge_install_impl<R: Runtime>(app: &AppHandle<R>, home: &Path, node: &NodePart) -> Result<String, String> {
+/// 安装 bridge（dshc）到 runtimes/bridge（幂等；已满足 MIN 版本则跳过，
+/// `force=true` 时无视版本短路强制重装 @latest —— 引导页「更新 dshc」用）。
+pub fn bridge_install_impl<R: Runtime>(
+    app: &AppHandle<R>,
+    home: &Path,
+    node: &NodePart,
+    force: bool,
+) -> Result<String, String> {
     // 已装且满足最低版本：跳过（引导重入时不重复下载）
-    if let Ok((_, _, version)) = resolve_bridge(home) {
-        if !version.is_empty()
-            && super::compare_versions(&version, MIN_BRIDGE_VERSION) != std::cmp::Ordering::Less
-        {
-            return Ok(format!("Worker 核心 {version} 已就绪"));
+    if !force {
+        if let Ok((_, _, version)) = resolve_bridge(home) {
+            if !version.is_empty()
+                && super::compare_versions(&version, MIN_BRIDGE_VERSION) != std::cmp::Ordering::Less
+            {
+                return Ok(format!("Worker 核心 {version} 已就绪"));
+            }
         }
     }
     let dir = home.join("runtimes").join("bridge");

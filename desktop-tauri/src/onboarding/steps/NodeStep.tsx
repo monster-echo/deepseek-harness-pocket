@@ -27,19 +27,41 @@ export function NodeStep({
 }) {
   const system = status?.systemNode;
   const systemUsable = Boolean(system?.usable);
-  // 默认选中：系统可用 → 系统；否则选 Node 24
   const [choice, setChoice] = useState<"system" | 24 | 22 | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 默认选中：已在用的来源优先（回到本步改选时不打扰），全新机器系统可用 → 系统，否则选最新 LTS
   useEffect(() => {
     if (choice === null && status !== null) {
-      setChoice(systemUsable ? "system" : (status.nodeChoices[0]?.major as 24 | 22 | undefined ?? 24));
+      if (adoptedSystem || status.node.source === "system") {
+        setChoice("system");
+      } else if (status.node.installed && status.node.version) {
+        const major = Number.parseInt(status.node.version.replace(/^v/, ""), 10);
+        const known = (status.nodeChoices ?? []).find((c) => c.major === major);
+        setChoice(known ? (major as 24 | 22) : (status.nodeChoices[0]?.major as 24 | 22 | undefined ?? 24));
+      } else {
+        setChoice(systemUsable ? "system" : (status.nodeChoices[0]?.major as 24 | 22 | undefined ?? 24));
+      }
     }
-  }, [status, systemUsable, choice]);
+  }, [status, systemUsable, choice, adoptedSystem]);
 
   const managedDone = Boolean(status?.node.installed);
   const satisfied = adoptedSystem || managedDone;
+
+  // 改选：当前生效来源的展示名；勾选了另一个来源时给出「改用」按钮
+  const currentSource: "system" | "managed" | undefined =
+    status?.node.source ?? (adoptedSystem ? "system" : undefined);
+  const currentLabel =
+    currentSource === "system"
+      ? `系统 Node ${status?.node.version ?? system?.version ?? ""}`.trim()
+      : currentSource === "managed"
+        ? `受管 Node ${status?.node.version ?? ""}`.trim()
+        : null;
+  const pickedDiffers =
+    satisfied &&
+    ((choice === "system" && currentSource === "managed") ||
+      (typeof choice === "number" && currentSource === "system"));
 
   const run = async () => {
     setBusy(true);
@@ -141,10 +163,18 @@ export function NodeStep({
       ) : null}
 
       {satisfied ? (
-        <p className="flex items-center gap-1.5 text-xs text-hue-green">
-          <CheckCircle2 className="size-3.5" />
-          Node 运行时已就绪
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="flex items-center gap-1.5 text-xs text-hue-green">
+            <CheckCircle2 className="size-3.5" />
+            Node 运行时已就绪{currentLabel ? ` · ${currentLabel}` : null}
+          </p>
+          {pickedDiffers ? (
+            <Button variant="outline" size="sm" disabled={busy} onClick={() => void run()}>
+              {busy ? <Loader2 className="animate-spin" /> : null}
+              {choice === "system" ? "改用系统 Node" : `改用 Node ${choice}`}
+            </Button>
+          ) : null}
+        </div>
       ) : (
         <Button
           disabled={choice === null || busy || (choice === "system" && !systemUsable)}

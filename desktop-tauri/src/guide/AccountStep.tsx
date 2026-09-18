@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { Loader2, RotateCw, ScanLine } from "lucide-react";
 import { Button } from "../components/ui";
-import { workerStart } from "../lib/worker";
+import { showConsole, workerStart } from "../lib/worker";
 import { useDeviceLinkLogin } from "../lib/useDeviceLinkLogin";
 
 /**
@@ -21,7 +21,8 @@ export function AccountStep({ onDone, onSkip }: { onDone: () => void; onSkip?: (
   const [serviceStarting, setServiceStarting] = useState(false);
   const startedWorker = useRef(false);
 
-  // 服务未启动导致的出码失败：自动拉起 Worker 并重试（最多 ~36 秒）
+  // 服务未启动导致的出码失败：自动拉起 Worker 并重试。
+  // 窗口给足 ~2 分钟——dsh 首次启动要下载/初始化，50 秒以上很常见，36 秒会提前放弃。
   useEffect(() => {
     if (!qrError || serviceStarting) return;
     const needService = qrError.includes("服务标识") || qrError.includes("bridge-state");
@@ -32,7 +33,7 @@ export function AccountStep({ onDone, onSkip }: { onDone: () => void; onSkip?: (
         startedWorker.current = true;
         void workerStart().catch(() => {});
       }
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 40; i++) {
         await new Promise((r) => setTimeout(r, 3000));
         try {
           await startQr();
@@ -77,7 +78,7 @@ export function AccountStep({ onDone, onSkip }: { onDone: () => void; onSkip?: (
         ) : serviceStarting ? (
           <div className="flex h-[132px] flex-col items-center justify-center gap-2">
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
-            <p className="text-xs text-muted-foreground">正在启动核心服务，随后自动出码…</p>
+            <p className="text-xs text-muted-foreground">正在启动核心服务（首次约需 1 分钟），随后自动出码…</p>
           </div>
         ) : null}
 
@@ -94,6 +95,9 @@ export function AccountStep({ onDone, onSkip }: { onDone: () => void; onSkip?: (
             <Button variant="outline" size="sm" className="mt-2 w-full" onClick={() => void startQr()}>
               <RotateCw />
               重新生成二维码
+            </Button>
+            <Button variant="ghost" size="sm" className="mt-1 w-full" onClick={() => void showConsole("logs")}>
+              打开控制台·日志
             </Button>
           </div>
         ) : null}

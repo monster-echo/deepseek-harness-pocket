@@ -11,6 +11,7 @@ import {
   type UpdateInfo, type WorkerStatus,
 } from "../../lib/worker";
 import { Page, PageHeader } from "./PageHeader";
+import { DshcUpdateCard } from "../../onboarding/steps/DshcUpdateCard";
 
 /** 状态页：一眼看清 Worker 死活，并在原地把它拉起来 / 停下来。 */
 export function StatusPage({ status }: { status: WorkerStatus | null }) {
@@ -189,6 +190,11 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
         </Card>
       ) : null}
 
+      {/* dshc（bridge）有新版本时出现：不随应用发版，独立升级入口 */}
+      <div className="mt-4">
+        <DshcUpdateCard />
+      </div>
+
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
@@ -197,7 +203,39 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
           </CardHeader>
           <CardContent className="divide-y divide-border pt-0">
             <Field label="版本">
-              {run?.dshVersion ? <Badge tone="neutral">dsh {run.dshVersion}</Badge> : "—"}
+              {run?.dshVersion || run?.bridgeVersion ? (
+                <span className="flex items-center gap-1.5">
+                  {run?.dshVersion ? <Badge tone="neutral">dsh {run.dshVersion}</Badge> : null}
+                  {run?.bridgeVersion ? <Badge tone="neutral">dshc {run.bridgeVersion}</Badge> : null}
+                </span>
+              ) : (
+                "—"
+              )}
+            </Field>
+            <Field label="Web 控制台">
+              {webUrl ? (
+                <span className="flex min-w-0 items-center justify-end gap-1">
+                  <span className="truncate font-mono text-xs" title={webUrl}>
+                    {webUrl}
+                  </span>
+                  <button
+                    onClick={() => void copy(webUrl, "webUrl")}
+                    className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    aria-label="复制 Web 控制台地址"
+                  >
+                    {copied === "webUrl" ? <Check className="size-3.5 text-hue-green" /> : <Copy className="size-3.5" />}
+                  </button>
+                  <button
+                    onClick={() => void openExternal(webUrl)}
+                    className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    aria-label="在浏览器打开 Web 控制台"
+                  >
+                    <ExternalLink className="size-3.5" />
+                  </button>
+                </span>
+              ) : (
+                "—"
+              )}
             </Field>
             <Field label="网关" mono>{run?.gatewayUrl || "—"}</Field>
             <Field label="监听">

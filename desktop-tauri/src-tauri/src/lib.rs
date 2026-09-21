@@ -13,6 +13,7 @@ mod toolchain;
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,6 +28,23 @@ const POLL_MAX_INTERVAL: Duration = Duration::from_secs(60);
 
 /// 上一次已加载的 dsh Web URL —— 变了才导航（dsh 重启后 token 必变）
 static LAST_WEB_URL: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
+
+/// 主窗口最近一次成功导航（含整页刷新）的时间（epoch ms；0 = 尚未导航过）。
+static LAST_NAVIGATED_AT: AtomicU64 = AtomicU64::new(0);
+
+/// 界面自愈阈值：主窗口持续处于后台超过该时长后，重新聚焦时整页重载一次。
+/// 背景：webview 长时间挂起（托盘常驻、macOS 挂起后台页面定时器与流式连接）后，
+/// dsh web 的事件流可能不再恢复——模型胶囊等实时界面停在过去，用户以为操作没生效。
+const WEBVIEW_STALE_RELOAD_MS: u64 = 30 * 60 * 1000;
+
+/// 记录「刚完成一次导航/刷新」的时间戳。
+fn mark_navigated_now() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    LAST_NAVIGATED_AT.store(now, Ordering::Relaxed);
+}
 
 /// 本应用前端自身的 URL（启动时从主窗口捕获）。
 /// 不能硬编码 `tauri://localhost`：Windows 上是 `http://tauri.localhost`，双端不同。
@@ -142,6 +160,7 @@ fn navigate_main<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
             if let Ok(parsed) = tauri::Url::parse(url) {
                 if win.navigate(parsed).is_ok() {
                     *last = target;
+                    mark_navigated_now();
                 }
             }
         }
@@ -151,11 +170,54 @@ fn navigate_main<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
                 if let Ok(parsed) = tauri::Url::parse(&url) {
                     if win.navigate(parsed).is_ok() {
                         *last = target;
+                        mark_navigated_now();
                     }
                 }
             }
         }
     }
+}
+
+/// 「刷新界面」：整页重载主窗口当前页。dsh web 是长驻页面，事件流在 webview
+/// 长时间后台后可能不再恢复（模型胶囊等停在过去，用户以为切换没生效），
+/// 手动刷新是最直接的自愈入口。只刷新 dsh web 页：引导面向导状态在前端内存里。
+fn reload_main_webview<R: Runtime>(app: &AppHandle<R>) {
+    let Some(win) = app.get_webview_window("main") else { return };
+    let on_web = match LAST_WEB_URL.lock() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    };
+    let Some(web_url) = on_web else { return };
+    let Ok(cur) = win.url() else { return };
+    if url_origin(cur.as_str()).as_deref() != url_origin(&web_url).as_deref() {
+        return;
+    }
+    mark_navigated_now();
+    let _ = win.eval("location.reload()");
+}
+
+/// 聚焦自愈：主窗口重新聚焦时，若页面在 dsh web 上且距上次导航/刷新超过
+/// [`WEBVIEW_STALE_RELOAD_MS`]，整页重载一次——后台挂起后事件流不恢复的兜底。
+fn selfheal_stale_webview<R: Runtime>(_app: &AppHandle<R>, win: &tauri::WebviewWindow<R>) {
+    let on_web = match LAST_WEB_URL.lock() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    };
+    let Some(web_url) = on_web else { return };
+    let Ok(cur) = win.url() else { return };
+    if url_origin(cur.as_str()).as_deref() != url_origin(&web_url).as_deref() {
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let last = LAST_NAVIGATED_AT.load(Ordering::Relaxed);
+    if last == 0 || now.saturating_sub(last) < WEBVIEW_STALE_RELOAD_MS {
+        return;
+    }
+    mark_navigated_now();
+    let _ = win.eval("location.reload()");
 }
 
 /// URL 的 origin（scheme://host:port）；解析失败为 None。自愈探测的「同源」判定用。
@@ -468,6 +530,7 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R
         .item(&MenuItem::with_id(app, "menu:update", "检查更新…", true, None::<&str>)?)
         .separator()
         .item(&MenuItem::with_id(app, "menu:settings", "设置…", true, Some("CmdOrCtrl+,"))?)
+        .item(&MenuItem::with_id(app, "menu:reload", "刷新界面", true, Some("CmdOrCtrl+R"))?)
         .item(&PredefinedMenuItem::hide(app, Some("隐藏 DSH Pocket"))?)
         .separator()
         .item(&MenuItem::with_id(app, "quit", "退出 DSH Pocket", true, Some("CmdOrCtrl+Q"))?)
@@ -491,6 +554,7 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R
         .item(&MenuItem::with_id(app, "menu:open-main", "主页面", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "menu:guide", "引导页", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "menu:settings", "配置", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "menu:reload", "刷新界面", true, Some("CmdOrCtrl+R"))?)
         .build()?;
 
     let console = console_submenu(app)?;
@@ -513,6 +577,7 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R
 fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
         "quit" => app.exit(0),
+        "menu:reload" => reload_main_webview(app),
         "open-main" | "menu:open-main" => {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
@@ -2407,6 +2472,14 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                return;
+            }
+            // 回焦自愈：webview 长时间后台后事件流可能不恢复，超时则整页刷新
+            if let tauri::WindowEvent::Focused(true) = event {
+                let app = window.app_handle();
+                if let Some(win) = app.get_webview_window(window.label()) {
+                    selfheal_stale_webview(app, &win);
+                }
             }
         })
         .run(tauri::generate_context!())

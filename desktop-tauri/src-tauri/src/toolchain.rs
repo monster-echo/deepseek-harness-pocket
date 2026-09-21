@@ -550,10 +550,13 @@ fn sha256_hex(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-/// 从镜像同路径的 SHASUMS256.txt 校验产物（fail-closed）
+/// 从镜像同路径的 SHASUMS256.txt 校验产物（fail-closed）。
+/// 清单按官方产物名（如 node-vX-darwin-arm64.tar.gz）记录；下载落盘是 `<官方名>.part`，
+/// 查名前必须剥掉后缀，否则永远 miss。
 fn verify_shasums(archive: &Path, shasums_text: &str) -> Result<(), String> {
     let want = sha256_hex(archive)?;
-    let name = archive.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let raw = archive.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let name = raw.strip_suffix(".part").unwrap_or(&raw);
     for line in shasums_text.lines() {
         let mut parts = line.split_whitespace();
         let (Some(sum), Some(file)) = (parts.next(), parts.next()) else {
@@ -905,4 +908,69 @@ fn spawn_line_reader<R: std::io::Read + Send + 'static>(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_file(name: &str, content: &[u8]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("dsh-pocket-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    fn shasums_entry(name: &str, digest: &str) -> String {
+        format!("{digest}  {name}\n")
+    }
+
+    #[test]
+    fn verify_accepts_part_suffixed_file_via_base_record() {
+        let archive = temp_file("node-v24.0.0-darwin-arm64.tar.gz.part", b"payload");
+        let digest = sha256_hex(&archive).unwrap();
+        // 清单里只有官方产物名（无 .part），落盘文件带 .part 也必须能对上
+        let text = shasums_entry("node-v24.0.0-darwin-arm64.tar.gz", &digest);
+        verify_shasums(&archive, &text).unwrap();
+    }
+
+    #[test]
+    fn verify_accepts_plain_name() {
+        let archive = temp_file("node-v24.0.0-linux-x64.tar.gz", b"payload");
+        let digest = sha256_hex(&archive).unwrap();
+        let text = shasums_entry("node-v24.0.0-linux-x64.tar.gz", &digest);
+        verify_shasums(&archive, &text).unwrap();
+    }
+
+    #[test]
+    fn verify_is_case_insensitive_on_digest() {
+        let archive = temp_file("node-v24.0.0-win-x64.zip", b"payload");
+        let digest = sha256_hex(&archive).unwrap().to_uppercase();
+        let text = shasums_entry("node-v24.0.0-win-x64.zip", &digest);
+        verify_shasums(&archive, &text).unwrap();
+    }
+
+    #[test]
+    fn verify_fails_on_digest_mismatch() {
+        let archive = temp_file("node-v24.0.0-darwin-x64.tar.gz", b"tampered");
+        let text = shasums_entry("node-v24.0.0-darwin-x64.tar.gz", "deadbeef");
+        let err = verify_shasums(&archive, &text).unwrap_err();
+        assert!(err.contains("不符"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn verify_fails_when_record_missing() {
+        let archive = temp_file("unknown-artifact.tar.gz", b"payload");
+        let err = verify_shasums(&archive, "").unwrap_err();
+        assert!(err.contains("没有"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn verify_skips_malformed_lines() {
+        let archive = temp_file("node-v24.0.0-linux-arm64.tar.gz", b"payload");
+        let digest = sha256_hex(&archive).unwrap();
+        let text = format!("not-a-valid-line\n\n{digest}  node-v24.0.0-linux-arm64.tar.gz\n");
+        verify_shasums(&archive, &text).unwrap();
+    }
 }

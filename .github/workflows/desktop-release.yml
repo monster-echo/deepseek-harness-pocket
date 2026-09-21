@@ -8,6 +8,10 @@ name: desktop-tauri-release
 # 需要的 GitHub Secrets（一次性配置）：
 #   TAURI_SIGNING_PRIVATE_KEY           ~/.tauri/dsh-pocket.key 的内容
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  该私钥的密码（本项目生成时为空，可留空）
+#   APPLE_CERTIFICATE                   Developer ID Application 证书的 .p12（base64）
+#   APPLE_CERTIFICATE_PASSWORD          该 .p12 的导出密码
+#   APPLE_ID / APPLE_PASSWORD           公证用 Apple ID + App 专用密码（未配则跳过公证，仅签名）
+#   APPLE_TEAM_ID 无需 secret，已在下方固定为 2VA9TC6SG4
 
 on:
   push:
@@ -82,6 +86,30 @@ jobs:
           echo "tag=$WANT conf=$HAVE cargo=$CARGO"
           [ "$WANT" = "$HAVE" ] || { echo "::error::tag 版本 $WANT 与 tauri.conf.json 的 $HAVE 不一致"; exit 1; }
           [ "$HAVE" = "$CARGO" ] || { echo "::error::tauri.conf.json 的 $HAVE 与 Cargo.toml 的 $CARGO 不一致"; exit 1; }
+
+      # Apple 签名/公证凭据只在 macOS 腿上通过 GITHUB_ENV 注入。
+      # 证书 secrets 缺失则产物保持未签名（老行为）；公证 secrets 缺失则只签名不公证，
+      # 不能给 Tauri 留半套空变量——bundler 检测到部分设置会直接报错。
+      - name: Setup Apple signing env (macOS)
+        if: matrix.os == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+        run: |
+          {
+            echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+            echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=Developer ID Application: Zhenwei Ruan (2VA9TC6SG4)"
+            echo "APPLE_TEAM_ID=2VA9TC6SG4"
+            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ]; then
+              echo "APPLE_ID=$APPLE_ID"
+              echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+            else
+              echo "::warning::APPLE_ID / APPLE_PASSWORD secrets 未配置，本次产物签名但跳过公证"
+            fi
+          } >> "$GITHUB_ENV"
 
       - name: Build app (tauri)
         env:

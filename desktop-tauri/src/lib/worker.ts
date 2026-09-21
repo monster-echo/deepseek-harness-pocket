@@ -129,6 +129,30 @@ export async function workerStart(): Promise<string> {
   return invoke<string>("dshc_start");
 }
 
+/** 一键修复的单步结果 */
+export interface RepairStep {
+  step: "free-port" | "toolchain" | "restart" | string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface RepairReport {
+  steps: RepairStep[];
+  webUrl?: string;
+}
+
+/** 一键修复：端口清场 → 工具链校验/修复 → 重启 Worker → 重新打开控制台 */
+export async function repair(): Promise<RepairReport> {
+  if (!isTauri()) return { steps: [] };
+  return invoke<RepairReport>("repair");
+}
+
+/** 导出脱敏诊断包，返回文件路径（已同时在文件管理器中定位） */
+export async function exportDiagnostics(): Promise<string> {
+  if (!isTauri()) return "[mock] /tmp/dsh-pocket-diagnostics.json";
+  return invoke<string>("export_diagnostics");
+}
+
 export async function workerStop(): Promise<string> {
   if (!isTauri()) return "[mock] 已停止";
   return invoke<string>("dshc_stop");

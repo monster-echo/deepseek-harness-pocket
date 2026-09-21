@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import {
-  ExternalLink, Play, Square, Copy, Check, CircleSlash, Loader2, Sparkles, Download,
+  ExternalLink, Play, Square, Copy, Check, CircleSlash, Loader2, Sparkles, Download, FileDown, Wrench,
 } from "lucide-react";
 import {
   Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle,
   Dot, EmptyState, Field,
 } from "../../components/ui";
 import {
-  checkUpdate, giveUpText, installUpdate, onUpdateAvailable, openExternal, workerResume, workerStart, workerStop,
-  type UpdateInfo, type WorkerStatus,
+  checkUpdate, exportDiagnostics, giveUpText, installUpdate, onUpdateAvailable, openExternal, repair,
+  workerResume, workerStart, workerStop,
+  type RepairReport, type UpdateInfo, type WorkerStatus,
 } from "../../lib/worker";
 import { Page, PageHeader } from "./PageHeader";
 import { DshcUpdateCard } from "../../onboarding/steps/DshcUpdateCard";
@@ -20,6 +21,10 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
   const [copied, setCopied] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const [repairReport, setRepairReport] = useState<RepairReport | null>(null);
+  const [diagExporting, setDiagExporting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // 挂载后静默查一次更新；失败不打扰（离线/被墙都属正常）
   useEffect(() => {
@@ -48,6 +53,32 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
     } catch (e) {
       setError(String(e));
       setUpdating(false);
+    }
+  };
+
+  const onRepair = async () => {
+    setRepairing(true);
+    setError(null);
+    setRepairReport(null);
+    try {
+      setRepairReport(await repair());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRepairing(false);
+    }
+  };
+
+  const onExportDiagnostics = async () => {
+    setDiagExporting(true);
+    setError(null);
+    try {
+      const path = await exportDiagnostics();
+      setNotice(`诊断已导出（已脱敏，可在文件管理器查看）：${path}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDiagExporting(false);
     }
   };
 
@@ -278,6 +309,45 @@ export function StatusPage({ status }: { status: WorkerStatus | null }) {
           </CardContent>
         </Card>
       </div>
+
+      {/* 故障恢复：一键修复（会重启 Worker）与诊断导出；修不好的时候把证据带去支持 */}
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>故障恢复</CardTitle>
+          <CardDescription>Worker 反复掉线、控制台打不开时使用</CardDescription>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" disabled={repairing || diagExporting} onClick={() => void onRepair()}>
+              {repairing ? <Loader2 className="animate-spin" /> : <Wrench />}
+              {repairing ? "正在修复…" : "尝试修复"}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={repairing || diagExporting} onClick={() => void onExportDiagnostics()}>
+              {diagExporting ? <Loader2 className="animate-spin" /> : <FileDown />}
+              导出诊断
+            </Button>
+            <span className="text-xs text-muted-foreground">修复会清理端口占用、校验工具链并重启 Worker</span>
+          </div>
+          {notice ? (
+            <p className="mt-3 rounded-md bg-muted px-3 py-2 text-xs leading-relaxed break-all">{notice}</p>
+          ) : null}
+          {repairReport ? (
+            <div className="mt-3 space-y-1.5">
+              {repairReport.steps.map((s) => (
+                <div key={s.step} className="flex items-start gap-2 text-xs">
+                  {s.ok ? (
+                    <Check className="mt-0.5 size-3.5 shrink-0 text-hue-green" />
+                  ) : (
+                    <CircleSlash className="mt-0.5 size-3.5 shrink-0 text-hue-red" />
+                  )}
+                  <span className="shrink-0 font-mono">{s.step}</span>
+                  <span className="text-muted-foreground">{s.detail}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       {status.error || status.parseError ? (
         <Card className="mt-4">

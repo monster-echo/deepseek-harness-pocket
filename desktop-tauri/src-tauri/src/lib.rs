@@ -14,7 +14,7 @@ mod toolchain;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::TrayIconBuilder;
@@ -158,6 +158,61 @@ fn navigate_main<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
     }
 }
 
+/// URL 的 origin（scheme://host:port）；解析失败为 None。自愈探测的「同源」判定用。
+fn url_origin(url: &str) -> Option<String> {
+    tauri::Url::parse(url).ok().map(|u| u.origin().ascii_serialization())
+}
+
+/// 强制导航：清掉去重水位，无视「未变化」判断（自愈路径专用）。
+fn navigate_main_force<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
+    if let Ok(mut last) = LAST_WEB_URL.lock() {
+        *last = None;
+    }
+    navigate_main(app, web_url);
+}
+
+/// 401 页面打标标题（webview eval 注入，无需远程 IPC 白名单）
+const REAUTH_FLAG_TITLE: &str = "DSH_POCKET_REAUTH";
+
+/// 自愈：主窗口若停在旧 token 的 dsh web 401 页（worker 重启换 token / 手动刷新 / 会话过期），
+/// 自动用最新 webUrl 重新导航。dsh web 认证后会把 token 从 URL 剥离，无法靠 URL 对比，
+/// 因此向页面注入一行 JS 检测认证失效文案，命中则改标题，Rust 侧读标题发现后强制重导航。
+fn selfheal_auth_probe<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
+    if web_url.is_empty() {
+        return;
+    }
+    let Some(win) = app.get_webview_window("main") else { return };
+    let cur = match win.url() {
+        Ok(u) => u,
+        Err(_) => return,
+    };
+    // 只探测 dsh web 页（与最新 webUrl 同源），绝不碰我们自己的引导面
+    if url_origin(cur.as_str()).as_deref() != url_origin(web_url).as_deref() {
+        return;
+    }
+    let _ = win.eval(&format!(
+        "if (/authentication required/i.test(document.body ? document.body.innerText : '')) document.title = '{REAUTH_FLAG_TITLE}';"
+    ));
+    if let Ok(title) = win.title() {
+        if title == REAUTH_FLAG_TITLE {
+            let _ = win.eval("document.title = document.title.replace('DSH_POCKET_REAUTH', '');");
+            navigate_main_force(app, web_url);
+            notify(app, "DSH Pocket", "控制台已自动重新认证");
+        }
+    }
+}
+
+/// 自愈判定：worker 掉线 + 引导已完成 + 非用户主动停止（无 stop-flag）→ 允许自动重启。
+/// 用户经 dshc stop 停机会留下 dshc.stop-flag，start 时自清，天然区分「崩溃」与「人为停止」。
+fn should_auto_restart(running: bool, onboarding_done: bool, stop_flag: bool) -> bool {
+    !running && onboarding_done && !stop_flag
+}
+
+/// 自动重启退避间隔：连续失败越多越慢，封顶 10 分钟
+fn restart_interval(failures: u32) -> Duration {
+    (POLL_INTERVAL * (1u32 << failures.min(6))).min(Duration::from_secs(600))
+}
+
 // ───────────────────── 托盘与控制台窗口 ─────────────────────
 
 /// 托盘图标：打包资源目录优先，开发态回退源码目录。
@@ -283,6 +338,8 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
     let mut prev_running: Option<bool> = None;
     let mut consecutive_failures: u32 = 0;
     let mut prev_autostart: Option<bool> = None;
+    let mut restart_backoff: u32 = 0;
+    let mut last_restart: Option<Instant> = None;
     loop {
         // 工具链缺失（新机器/未完成引导）时不 spawn node：60s 重探。
         // 否则「环境坏掉」的机器上每 3s 冷启动一个 node，永不停止。
@@ -316,6 +373,28 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
                 }
             }
         }
+        // 自愈：worker 掉线自动重启（引导完成后；用户主动 stop 留有 flag 则不打扰；
+        // 工具链缺失时交给向导，不空转拉起）
+        let onboarded = home.as_ref().map(|h| h.join("onboarding-done.json").exists()).unwrap_or(false);
+        let stop_flag = home.as_ref().map(|h| h.join("dshc.stop-flag").exists()).unwrap_or(false);
+        let toolchain_missing = status.get("toolchainMissing").and_then(|v| v.as_bool()).unwrap_or(false);
+        if should_auto_restart(running, onboarded, stop_flag) && !toolchain_missing {
+            let due = last_restart
+                .map(|t| t.elapsed() >= restart_interval(restart_backoff))
+                .unwrap_or(true);
+            if due {
+                last_restart = Some(Instant::now());
+                match start_worker(&app) {
+                    Ok(_) => {
+                        restart_backoff = 0;
+                        notify(&app, "DSH Pocket", "Worker 掉线，已自动重启");
+                    }
+                    Err(_) => restart_backoff = restart_backoff.saturating_add(1).min(6),
+                }
+            }
+        } else if running {
+            restart_backoff = 0;
+        }
         prev_running = Some(running);
 
         // 自启状态被外部改动（系统设置/其他入口）时，菜单勾选也要跟上：
@@ -341,6 +420,7 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
             );
         }
         navigate_main(&app, &web_url);
+        selfheal_auth_probe(&app, &web_url);
         let _ = app.emit("worker-status", &status);
         // 失败时指数退避（1<<1 … 1<<5），成功即回 3s
         let interval = if consecutive_failures == 0 {
@@ -561,6 +641,219 @@ fn runtime_info<R: Runtime>(app: AppHandle<R>) -> serde_json::Value {
 #[tauri::command]
 fn dshc_resume<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     run_dshc(&app, &["resume", "--json"])
+}
+
+// ───────────────────── 故障恢复（一键修复 / 诊断导出）─────────────────────
+
+/// 一键修复：端口清场 → 工具链校验/修复 → 重启 Worker → 重新打开控制台。
+/// 每步独立上报，失败不阻断后续；构建块（free-port / node_install / bridge_install）全部幂等。
+fn repair_impl<R: Runtime>(app: &AppHandle<R>) -> serde_json::Value {
+    let home = pocket_home(app).unwrap_or_default();
+    let mut steps: Vec<serde_json::Value> = Vec::new();
+
+    // 1. 端口清场（残留进程占口是「起不来」的头号原因）
+    let port = read_settings(app)
+        .get("port")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(DEFAULT_PORT);
+    match run_dshc(app, &["free-port", "--port", &port.to_string(), "--json"]) {
+        Ok(_) => steps.push(serde_json::json!({ "step": "free-port", "ok": true, "detail": format!("端口 {port} 已清场") })),
+        Err(e) => steps.push(serde_json::json!({ "step": "free-port", "ok": false, "detail": e })),
+    }
+
+    // 2. 工具链：node 坏了清掉重装，bridge 坏了重装
+    let mut tool_ok = toolchain::resolve(&home).is_ok();
+    let mut tool_detail = if tool_ok { "工具链就绪".to_string() } else { String::new() };
+    if !tool_ok {
+        // 清损坏的受管 node 目录（缺 npm-cli / node 起不来）
+        let node_root = home.join("runtimes").join("node");
+        if let Ok(entries) = std::fs::read_dir(&node_root) {
+            for e in entries.flatten() {
+                let p = e.path();
+                let healthy = toolchain::managed_node_part(p.clone())
+                    .map(|part| toolchain::node_runs(&part.node))
+                    .unwrap_or(false);
+                if p.is_dir() && !healthy {
+                    let _ = std::fs::remove_dir_all(&p);
+                }
+            }
+        }
+        // node：解析不到就按版本表重装（首个成功即止）
+        if toolchain::resolve_node(&home).is_err() {
+            for (major, _) in toolchain::NODE_CHOICES {
+                if toolchain::node_install_impl(app, &home, *major).is_ok() {
+                    break;
+                }
+            }
+        }
+        // bridge：缺失则装（依赖 pnpm，先补 tools）
+        if let Ok(node) = toolchain::resolve_node(&home) {
+            if toolchain::resolve_bridge(&home).is_err() {
+                if toolchain::tools_install_impl(app, &home, &node).is_ok() {
+                    let _ = toolchain::bridge_install_impl(app, &home, &node, false);
+                }
+            }
+        }
+        tool_ok = toolchain::resolve(&home).is_ok();
+        tool_detail = if tool_ok {
+            "已修复".to_string()
+        } else {
+            "无法自动修复，请导出诊断并联系支持".to_string()
+        };
+    }
+    steps.push(serde_json::json!({ "step": "toolchain", "ok": tool_ok, "detail": tool_detail }));
+
+    // 3. 重启 Worker（stop 写 stop-flag → start 自清并拉起，与 dsh_switch_version 同一模式）
+    let _ = run_dshc(app, &["stop", "--json"]);
+    let (start_ok, start_detail) = match start_worker(app) {
+        Ok(m) => (true, m),
+        Err(e) => (false, e),
+    };
+    steps.push(serde_json::json!({ "step": "restart", "ok": start_ok, "detail": start_detail }));
+
+    // 4. 重新打开控制台（新 token 的 webUrl；同时清掉可能停留的 401 页）
+    let status = read_status(app);
+    let web_url = status
+        .get("run")
+        .and_then(|r| r.get("webUrl"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("")
+        .to_string();
+    if !web_url.is_empty() {
+        navigate_main_force(app, &web_url);
+    }
+    serde_json::json!({ "steps": steps, "webUrl": web_url })
+}
+
+/// 一键修复（状态页「尝试修复」按钮）
+#[tauri::command]
+async fn repair<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(repair_impl(&app)))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 脱敏访问凭据：把 `token=<值>`（URL / JSON / 日志通用）替换为 `token=***`。
+/// 只认精确的 `token=` 前缀，输出仅用于诊断包——多脱敏无害，漏脱敏有害。
+fn redact_secrets(s: &str) -> String {
+    const MARKER: &str = "token=";
+    const SECRET_CHARS: fn(u8) -> bool =
+        |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-' | b'%');
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if s[i..].starts_with(MARKER) {
+            out.push_str(MARKER);
+            out.push_str("***");
+            i += MARKER.len();
+            while i < bytes.len() && SECRET_CHARS(bytes[i]) {
+                i += 1;
+            }
+        } else {
+            // 逐字符复制（UTF-8 多字节安全：按首字节判长度）
+            let b = bytes[i];
+            let len = if b < 0x80 { 1 } else if b >> 5 == 0b110 { 2 } else if b >> 4 == 0b1110 { 3 } else if b >> 3 == 0b11110 { 4 } else { 1 };
+            let end = (i + len).min(s.len());
+            out.push_str(&s[i..end]);
+            i = end;
+        }
+    }
+    out
+}
+
+/// 本机 TCP 监听快照（unix: lsof / windows: netstat），排端口冲突用
+fn listening_ports_report() -> String {
+    let out = if cfg!(target_os = "windows") {
+        std::process::Command::new("netstat").args(["-ano"]).output()
+    } else {
+        std::process::Command::new("lsof")
+            .args(["-nP", "-iTCP", "-sTCP:LISTEN"])
+            .output()
+    };
+    match out {
+        Ok(o) => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .take(100)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(e) => format!("无法获取（{e}）"),
+    }
+}
+
+/// 导出脱敏诊断包（状态页「导出诊断」按钮）。返回文件路径并在文件管理器中定位。
+/// 不包含：账号会话、任何 token（redact_secrets 统一处理）。
+fn export_diagnostics_impl<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
+    let home = pocket_home(app)?;
+    let pkg = app.package_info();
+    let read_json_or_null = |rel: &str| -> serde_json::Value {
+        std::fs::read_to_string(home.join(rel))
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(t.trim()).ok())
+            .unwrap_or(serde_json::Value::Null)
+    };
+    // run.json 含 webUrl token：整体序列化 → 脱敏 → 再解析回 JSON
+    let run: serde_json::Value = serde_json::from_str(&redact_secrets(
+        &serde_json::to_string(&read_json_or_null("run.json")).unwrap_or_default(),
+    ))
+    .unwrap_or(serde_json::Value::Null);
+    let sys_node = toolchain::probe_system_node()
+        .map(|p| p.version)
+        .unwrap_or_else(|e| format!("不可用（{e}）"));
+    let mut node_versions: Vec<String> = std::fs::read_dir(home.join("runtimes").join("node"))
+        .map(|es| {
+            es.flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    node_versions.sort();
+    let bridge = match toolchain::resolve_bridge(&home) {
+        Ok((_, _, v)) => serde_json::json!({ "installed": true, "version": v }),
+        Err(e) => serde_json::json!({ "installed": false, "error": e }),
+    };
+    let log_tail = std::fs::read_to_string(home.join("dshc.log"))
+        .map(|t| {
+            let lines: Vec<&str> = t.lines().collect();
+            let start = lines.len().saturating_sub(200);
+            redact_secrets(&lines[start..].join("\n"))
+        })
+        .unwrap_or_default();
+
+    let diag = serde_json::json!({
+        "kind": "dsh-pocket-diagnostics",
+        "generatedAt": now_ms(),
+        "appVersion": pkg.version.to_string(),
+        "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        "settings": read_settings(app),
+        "toolchain": read_json_or_null("toolchain.json"),
+        "systemNode": sys_node,
+        "managedNodeVersions": node_versions,
+        "bridge": bridge,
+        "workerRun": run,
+        "listeningPorts": listening_ports_report(),
+        "dshcLogTail": log_tail,
+    });
+    let path = home.join(format!("diagnostics-{}.json", now_ms()));
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&diag).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("写入诊断文件失败: {e}"))?;
+    {
+        use tauri_plugin_opener::OpenerExt;
+        let _ = app.opener().reveal_item_in_dir(&path);
+    }
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 导出脱敏诊断包（返回文件路径）
+#[tauri::command]
+async fn export_diagnostics<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || export_diagnostics_impl(&app))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
 }
 
 // ─────────────── 首次引导（去 sidecar 化：一切从网络组装）───────────────
@@ -1962,6 +2255,8 @@ pub fn run() {
             dshc_start,
             dshc_stop,
             port_cleanup,
+            repair,
+            export_diagnostics,
             dshc_resume,
             preflight_check,
             bootstrap_status,
@@ -2155,5 +2450,51 @@ mod lib_logic_tests {
     #[test]
     fn now_ms_is_sane() {
         assert!(now_ms() > 1_700_000_000_000); // 2023-11 之后
+    }
+}
+
+#[cfg(test)]
+mod recovery_logic_tests {
+    use super::*;
+
+    #[test]
+    fn url_origin_extracts_scheme_host_port() {
+        assert_eq!(url_origin("http://127.0.0.1:3080/?token=x"), Some("http://127.0.0.1:3080".into()));
+        assert_eq!(url_origin("http://localhost:3080/app"), Some("http://localhost:3080".into()));
+        assert_eq!(url_origin("https://example.com"), Some("https://example.com".into()));
+        assert_eq!(url_origin("not a url"), None);
+    }
+
+    #[test]
+    fn auto_restart_needs_onboarding_and_no_stop_flag() {
+        // 崩溃自愈：掉线 + 引导完成 + 无 stop-flag
+        assert!(should_auto_restart(false, true, false));
+        // 用户主动停止（有 stop-flag）不抢启动
+        assert!(!should_auto_restart(false, true, true));
+        // 未完成引导：交给向导
+        assert!(!should_auto_restart(false, false, false));
+        // 本来就在跑：无需重启
+        assert!(!should_auto_restart(true, true, false));
+    }
+
+    #[test]
+    fn restart_interval_backs_off_and_caps() {
+        let base = restart_interval(0);
+        assert!(restart_interval(1) > base);
+        assert!(restart_interval(3) > restart_interval(2));
+        assert_eq!(restart_interval(6), restart_interval(10), "封顶后不再增长");
+        assert!(restart_interval(6) <= Duration::from_secs(600));
+    }
+
+    #[test]
+    fn redact_secrets_masks_token_values() {
+        assert_eq!(redact_secrets("http://127.0.0.1:3080/?token=abc123-X.y"), "http://127.0.0.1:3080/?token=***");
+        assert_eq!(redact_secrets("\"webUrl\":\"http://x/?token=a1&port\":3"), "\"webUrl\":\"http://x/?token=***&port\":3");
+        // 无值 / 行尾
+        assert_eq!(redact_secrets("token="), "token=***");
+        // 不含 token= 的文本原样保留
+        assert_eq!(redact_secrets("hello world"), "hello world");
+        // tokenizer= 不误伤（token= 后无 secret 字符时值段为空）
+        assert_eq!(redact_secrets("my tokenizer=fun"), "my tokenizer=fun");
     }
 }

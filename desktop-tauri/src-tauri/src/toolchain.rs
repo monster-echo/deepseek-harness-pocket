@@ -127,7 +127,7 @@ fn npm_cli_for_node_dir(node_bin_dir: &Path) -> Option<PathBuf> {
     }
 }
 
-fn managed_node_part(dir: PathBuf) -> Option<NodePart> {
+pub fn managed_node_part(dir: PathBuf) -> Option<NodePart> {
     let (node_rel, npm_rel) = node_rel_paths();
     let node = dir.join(node_rel);
     if !node.exists() {
@@ -206,6 +206,11 @@ fn probe_node_version(node: &Path) -> Option<String> {
     }
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (!text.is_empty()).then_some(text)
+}
+
+/// node 能否执行并报出版本（一键修复的健康判据；比「文件存在」更强）
+pub fn node_runs(node: &Path) -> bool {
+    probe_node_version(node).is_some()
 }
 
 /// 探测 PATH 上全局安装的 dsh（用户已有环境优先：向导 Harness 步展示/直接可用）。

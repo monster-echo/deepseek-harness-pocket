@@ -1341,7 +1341,9 @@ mod bootstrap_tests {
 /// 网络引导流的集成测试：真实走 下载(.part) → SHASUMS 校验 → 解压 → 就位 → toolchain.json，
 /// 镜像指向本进程内起的极简 HTTP 服务。这条链在 0.2.0–0.2.7 期间对所有新装机是坏的，
 /// 且单测只能覆盖到纯函数——这里用真 HTTP + 真文件系统补上。
-#[cfg(test)]
+// Windows 上 tauri 的 test feature 会使测试 exe 加载即崩（STATUS_ENTRYPOINT_NOT_FOUND），
+// 这组 mock runtime 集成测试只在非 Windows 跑；Windows CI 保留全部纯逻辑测试。
+#[cfg(all(test, not(target_os = "windows")))]
 mod bootstrap_e2e_tests {
     use super::*;
     use std::collections::HashMap;

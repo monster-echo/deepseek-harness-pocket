@@ -35,8 +35,11 @@ flate2 = "1"
 tar = "0.4"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 
-[dev-dependencies]
-# tauri mock runtime：集成测试里构造 AppHandle（emit 进度事件无副作用）
+# tauri mock runtime：集成测试里构造 AppHandle（emit 进度事件无副作用）。
+# Windows 上启用 test feature 会让整个测试 exe 加载失败（STATUS_ENTRYPOINT_NOT_FOUND，
+# 0xc0000139，webview2 loader 入口解析不出），故仅非 Windows 测试主机启用；
+# bootstrap_e2e_tests 模块以同一 cfg 圈起，Windows CI 仍跑全部纯逻辑测试。
+[target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 
 [profile.release]

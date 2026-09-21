@@ -103,13 +103,17 @@ jobs:
             echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
             echo "APPLE_SIGNING_IDENTITY=Developer ID Application: Zhenwei Ruan (2VA9TC6SG4)"
             echo "APPLE_TEAM_ID=2VA9TC6SG4"
-            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ]; then
+          } >> "$GITHUB_ENV"
+          # 公证凭据只在两者都配置时导出——bundler 检测到部分设置会直接报错。
+          # ::warning:: 必须走 stdout；写进 GITHUB_ENV 会因格式非法炸掉该 step。
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ]; then
+            {
               echo "APPLE_ID=$APPLE_ID"
               echo "APPLE_PASSWORD=$APPLE_PASSWORD"
-            else
-              echo "::warning::APPLE_ID / APPLE_PASSWORD secrets 未配置，本次产物签名但跳过公证"
-            fi
-          } >> "$GITHUB_ENV"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::warning::APPLE_ID / APPLE_PASSWORD secrets 未配置，本次产物签名但跳过公证"
+          fi
 
       - name: Build app (tauri)
         env:

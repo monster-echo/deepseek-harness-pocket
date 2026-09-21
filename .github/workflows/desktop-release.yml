@@ -115,6 +115,10 @@ jobs:
             echo "::warning::APPLE_ID / APPLE_PASSWORD secrets 未配置，本次产物签名但跳过公证"
           fi
 
+      # 测试闸门：必经逻辑（工具链引导/版本比较）单测不过就不发包
+      - name: Run unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
       - name: Build app (tauri)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

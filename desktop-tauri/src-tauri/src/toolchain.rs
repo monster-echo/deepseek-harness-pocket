@@ -28,7 +28,7 @@ pub const NPM_REGISTRY: &str = "https://registry.npmmirror.com";
 // ── 解析结果 ─────────────────────────────────────────────
 
 /// Node 来源（供状态展示与 toolchain.json 记录）
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NodeSource {
     System,
     Managed,
@@ -44,6 +44,7 @@ impl NodeSource {
 }
 
 /// 可运行的 Node 侧最小集：npm 命令（装 bridge/dsh/pnpm）只需要它，不需要 bridge 已就位
+#[derive(Debug)]
 pub struct NodePart {
     pub node: PathBuf,
     pub node_bin_dir: PathBuf,
@@ -152,8 +153,16 @@ fn managed_node_part(dir: PathBuf) -> Option<NodePart> {
 /// 返回 Ok = 可复用；Err = 原因（给向导灰置文案）。
 pub fn probe_system_node() -> Result<NodePart, String> {
     let path = std::env::var_os("PATH").unwrap_or_default();
+    probe_system_node_on(std::env::split_paths(&path))
+}
+
+/// 同上，但 PATH 目录由调用方注入（测试用；生产壳只读进程 env）。
+fn probe_system_node_on<I>(dirs: I) -> Result<NodePart, String>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
     let exe = if cfg!(target_os = "windows") { "node.exe" } else { "node" };
-    for dir in std::env::split_paths(&path) {
+    for dir in dirs {
         let candidate = dir.join(exe);
         if !candidate.is_file() {
             continue;
@@ -260,8 +269,14 @@ fn pick_managed(home: &Path) -> Option<NodePart> {
 /// 解析 Node 侧（npm 命令的前置条件；bridge 未装不影响本函数）。
 /// 顺序：DSH_POCKET_SIDECAR env → toolchain.json 声明 → 受管最高版本 → dev 态源码旁 sidecar。
 pub fn resolve_node(home: &Path) -> Result<NodePart, String> {
+    let sidecar = std::env::var("DSH_POCKET_SIDECAR").ok().filter(|s| !s.is_empty());
+    resolve_node_with(home, sidecar.as_deref())
+}
+
+/// 同上，但 sidecar 目录由调用方注入（测试用；None = env 未设置）。
+fn resolve_node_with(home: &Path, sidecar_env: Option<&str>) -> Result<NodePart, String> {
     // 1. 显式环境变量（旧 sidecar 布局 / 测试 / dev）
-    if let Ok(dir) = std::env::var("DSH_POCKET_SIDECAR") {
+    if let Some(dir) = sidecar_env {
         if !dir.is_empty() {
             let root = PathBuf::from(&dir);
             let (node_rel, _) = node_rel_paths();
@@ -336,10 +351,16 @@ pub fn resolve(home: &Path) -> Result<Toolchain, String> {
 
 /// PATH 前置：node bin 目录 + 受管 tools bin（pnpm）。tools 不存在时前置空目录无害。
 pub fn path_env(home: &Path, node_bin_dir: &Path) -> Result<std::ffi::OsString, String> {
+    let base = std::env::var_os("PATH").unwrap_or_default();
+    path_env_with(&base, home, node_bin_dir)
+}
+
+/// 同上，但前置基础 PATH 由调用方注入（测试用）。
+fn path_env_with(base: &std::ffi::OsStr, home: &Path, node_bin_dir: &Path) -> Result<std::ffi::OsString, String> {
     std::env::join_paths(
         std::iter::once(node_bin_dir.to_path_buf())
             .chain(std::iter::once(tools_bin_dir(home)))
-            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
+            .chain(std::env::split_paths(base)),
     )
     .map_err(|e| format!("PATH 组装失败: {e}"))
 }
@@ -622,6 +643,10 @@ fn extract_node_archive(archive: &Path, dest: &Path) -> Result<(), String> {
             continue;
         }
         let out = dest.join(rel);
+        // 目录条目缺失的 tar 也能解：按需建父目录（与上面 zip 分支对齐）
+        if let Some(p) = out.parent() {
+            std::fs::create_dir_all(p).map_err(|e| format!("创建目录失败: {e}"))?;
+        }
         entry.unpack(&out).map_err(|e| format!("tar 解压失败: {e}"))?;
     }
     // 确保可执行位（tar 权限语义在不同实现间有差异，node 必须可执行）
@@ -972,5 +997,330 @@ mod tests {
         let digest = sha256_hex(&archive).unwrap();
         let text = format!("not-a-valid-line\n\n{digest}  node-v24.0.0-linux-arm64.tar.gz\n");
         verify_shasums(&archive, &text).unwrap();
+    }
+}
+
+/// 引导链（必经逻辑）的单元测试：布局解析 / 版本择优 / 探测 / 解压 / 清理。
+/// AppHandle 绑定的 bootstrap_*_impl 网络流程不在单测范围（见 README 已知缺口）。
+#[cfg(test)]
+mod bootstrap_tests {
+    use super::*;
+
+    fn temp_home(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("dsh-pocket-bt-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 摆一个受管 node 发行版布局（node + npm-cli 只需存在，不需要可执行）
+    fn install_fake_node(root: &Path, version: &str) {
+        let (node_rel, npm_rel) = node_rel_paths();
+        let node = root.join(version).join(node_rel);
+        std::fs::create_dir_all(node.parent().unwrap()).unwrap();
+        std::fs::write(&node, b"fake").unwrap();
+        let npm = root.join(version).join(npm_rel);
+        std::fs::create_dir_all(npm.parent().unwrap()).unwrap();
+        std::fs::write(&npm, b"fake").unwrap();
+    }
+
+    // ── 布局路径构建 ─────────────────────────────────────
+
+    #[test]
+    fn path_builders_layout() {
+        let home = PathBuf::from("/home");
+        assert_eq!(node_dir(&home, "v24.21.0"), PathBuf::from("/home/runtimes/node/v24.21.0"));
+        assert_eq!(tools_dir(&home), PathBuf::from("/home/runtimes/tools"));
+        assert_eq!(
+            tools_bin_dir(&home),
+            PathBuf::from("/home/runtimes/tools/node_modules/.bin")
+        );
+        assert_eq!(
+            bridge_root(&home),
+            PathBuf::from("/home/runtimes/bridge/node_modules/@deepseek-harness-pocket/bridge")
+        );
+    }
+
+    #[test]
+    fn node_source_strings() {
+        assert_eq!(NodeSource::System.as_str(), "system");
+        assert_eq!(NodeSource::Managed.as_str(), "managed");
+    }
+
+    #[test]
+    fn toolchain_json_roundtrip_and_malformed() {
+        let home = temp_home("tj");
+        write_toolchain_json(&home, NodeSource::Managed, "v24.21.0").unwrap();
+        assert_eq!(
+            read_toolchain_json(&home),
+            Some(("managed".into(), "v24.21.0".into()))
+        );
+        // 坏 JSON / 空目录都返回 None，而不是 panic
+        std::fs::write(home.join("toolchain.json"), "{oops").unwrap();
+        assert_eq!(read_toolchain_json(&home), None);
+        assert_eq!(read_toolchain_json(&temp_home("tj-empty")), None);
+    }
+
+    // ── 发行版布局识别 ───────────────────────────────────
+
+    #[test]
+    fn managed_node_part_requires_node_and_npm() {
+        let home = temp_home("mnp");
+        let dir = home.join("v24.21.0");
+        // 只有 node、缺 npm-cli → 不算完整发行版
+        let (node_rel, npm_rel) = node_rel_paths();
+        std::fs::create_dir_all(dir.join(node_rel).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(node_rel), b"fake").unwrap();
+        assert!(managed_node_part(dir.clone()).is_none());
+        // 补上 npm-cli → 完整
+        std::fs::create_dir_all(dir.join(npm_rel).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(npm_rel), b"fake").unwrap();
+        let part = managed_node_part(dir.clone()).unwrap();
+        assert_eq!(part.version, "v24.21.0");
+        assert_eq!(part.source, NodeSource::Managed);
+    }
+
+    #[test]
+    fn npm_cli_resolves_from_bin_dir() {
+        let home = temp_home("npmcli");
+        install_fake_node(&home.join("runtimes").join("node"), "v24.21.0");
+        let part = managed_node_part(home.join("runtimes").join("node").join("v24.21.0")).unwrap();
+        assert!(part.npm_cli.is_file());
+        assert!(npm_cli_for_node_dir(&home.join("nowhere")).is_none());
+    }
+
+    // ── pick_managed：声明优先，其次最高版本 ────────────
+
+    #[test]
+    fn pick_managed_prefers_declared_then_highest() {
+        let home = temp_home("pick");
+        let root = home.join("runtimes").join("node");
+        install_fake_node(&root, "v22.23.2");
+        install_fake_node(&root, "v24.21.0");
+        // 无声明 → 最高版本
+        assert_eq!(pick_managed(&home).unwrap().version, "v24.21.0");
+        // 声明 v22 → 用 v22
+        write_toolchain_json(&home, NodeSource::Managed, "v22.23.2").unwrap();
+        assert_eq!(pick_managed(&home).unwrap().version, "v22.23.2");
+        // 声明的版本目录被删 → 回落最高版本
+        std::fs::remove_dir_all(node_dir(&home, "v22.23.2")).unwrap();
+        assert_eq!(pick_managed(&home).unwrap().version, "v24.21.0");
+        // 全空 → None
+        assert!(pick_managed(&temp_home("pick-empty")).is_none());
+    }
+
+    // ── resolve_node 优先级（sidecar 注入版）────────────
+
+    #[test]
+    fn resolve_sidecar_takes_priority() {
+        let sidecar = temp_home("sidecar-root");
+        // 旧 sidecar 布局契约：<root>/bin/node + <root>/node/lib/.../npm-cli.js
+        let node = sidecar.join("bin/node");
+        std::fs::create_dir_all(node.parent().unwrap()).unwrap();
+        std::fs::write(&node, b"fake").unwrap();
+        let npm = sidecar.join("node/lib/node_modules/npm/bin/npm-cli.js");
+        std::fs::create_dir_all(npm.parent().unwrap()).unwrap();
+        std::fs::write(&npm, b"fake").unwrap();
+        let part = resolve_node_with(&temp_home("sidecar-home"), Some(sidecar.to_str().unwrap()))
+            .unwrap();
+        assert_eq!(part.source, NodeSource::Managed);
+        assert!(part.node.starts_with(&sidecar));
+    }
+
+    #[test]
+    fn resolve_sidecar_missing_node_errors() {
+        let err = resolve_node_with(&temp_home("sidecar-bad"), Some("/nonexistent/dir")).unwrap_err();
+        assert!(err.contains("缺少 node"), "unexpected: {err}");
+    }
+
+    // ── 系统 Node 探测（注入 PATH 目录）─────────────────
+
+    /// 造一个假 node 可执行（打印给定版本）；unix only（脚本 shebang）
+    #[cfg(unix)]
+    fn fake_node_bin(dir: &Path, prints: &str, exit_ok: bool) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let node = dir.join("node");
+        let body = if exit_ok {
+            format!("#!/bin/sh\necho {prints}\n")
+        } else {
+            "#!/bin/sh\necho boom >&2\nexit 1\n".to_string()
+        };
+        std::fs::write(&node, body).unwrap();
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
+        node
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_probe_accepts_modern_node() {
+        let home = temp_home("sys-ok");
+        let bin = home.join("fakebin");
+        fake_node_bin(&bin, "v22.11.0", true);
+        // npm-cli 必须能从 bin 目录反推到：<bin>/../lib/node_modules/npm/bin/npm-cli.js
+        let npm = home.join("lib/node_modules/npm/bin/npm-cli.js");
+        std::fs::create_dir_all(npm.parent().unwrap()).unwrap();
+        std::fs::write(&npm, b"fake").unwrap();
+        let part = probe_system_node_on([bin]).unwrap();
+        assert_eq!(part.source, NodeSource::System);
+        assert_eq!(part.version, "v22.11.0");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_probe_rejects_old_node() {
+        let home = temp_home("sys-old");
+        let bin = home.join("fakebin");
+        fake_node_bin(&bin, "v14.21.1", true);
+        let err = probe_system_node_on([bin]).unwrap_err();
+        assert!(err.contains("过旧"), "unexpected: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_probe_rejects_broken_node() {
+        let home = temp_home("sys-broken");
+        let bin = home.join("fakebin");
+        fake_node_bin(&bin, "v22.0.0", false);
+        let err = probe_system_node_on([bin]).unwrap_err();
+        assert!(err.contains("无法执行"), "unexpected: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_probe_requires_npm() {
+        let home = temp_home("sys-nonpm");
+        let bin = home.join("fakebin");
+        fake_node_bin(&bin, "v22.0.0", true);
+        let err = probe_system_node_on([bin]).unwrap_err();
+        assert!(err.contains("缺少 npm"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn system_probe_no_node_at_all() {
+        let err = probe_system_node_on([temp_home("sys-none")]).unwrap_err();
+        assert!(err.contains("未安装"), "unexpected: {err}");
+    }
+
+    // ── PATH 前置 ────────────────────────────────────────
+
+    #[test]
+    fn path_env_prepends_node_and_tools() {
+        let home = temp_home("pathenv");
+        let node_bin = home.join("node-bin");
+        std::fs::create_dir_all(&node_bin).unwrap();
+        let base = std::env::join_paths(["/usr/bin", "/bin"]).unwrap();
+        let joined = path_env_with(&base, &home, &node_bin).unwrap();
+        let dirs: Vec<PathBuf> = std::env::split_paths(&joined).collect();
+        assert_eq!(dirs[0], node_bin);
+        assert_eq!(dirs[1], tools_bin_dir(&home));
+        assert!(dirs.contains(&PathBuf::from("/usr/bin")));
+        assert!(dirs.contains(&PathBuf::from("/bin")));
+    }
+
+    // ── 版本选择与平台 ───────────────────────────────────
+
+    #[test]
+    fn version_for_major_maps_choices() {
+        assert_eq!(version_for_major(24).unwrap(), "v24.21.0");
+        assert_eq!(version_for_major(22).unwrap(), "v22.23.2");
+        let err = version_for_major(26).unwrap_err();
+        assert!(err.contains("不支持"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn dist_platform_matches_current_target() {
+        let got = dist_platform().unwrap();
+        let want = match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => "darwin-arm64",
+            ("macos", "x86_64") => "darwin-x64",
+            ("windows", "x86_64") => "win-x64",
+            _ => unreachable!(),
+        };
+        assert_eq!(got, want);
+    }
+
+    // ── 残留清理 ─────────────────────────────────────────
+
+    #[test]
+    fn cleanup_partials_removes_only_partials() {
+        let home = temp_home("cleanup");
+        let cache = home.join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("node-v24.tar.gz.part"), b"x").unwrap();
+        std::fs::write(cache.join("keep.txt"), b"x").unwrap();
+        let node_root = home.join("runtimes").join("node");
+        std::fs::create_dir_all(node_root.join("v24.21.0.partial")).unwrap();
+        std::fs::create_dir_all(node_root.join("v24.21.0")).unwrap();
+        cleanup_partials(&home);
+        assert!(!cache.join("node-v24.tar.gz.part").exists());
+        assert!(cache.join("keep.txt").exists());
+        assert!(!node_root.join("v24.21.0.partial").exists());
+        assert!(node_root.join("v24.21.0").exists());
+    }
+
+    // ── tar.gz 解压（剥首层 + 可执行位）─────────────────
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_strips_top_dir_and_keeps_exec_bit() {
+        use flate2::write::GzEncoder;
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = temp_home("extract");
+        // 组装源文件并打 tar.gz（首层目录名与官方发行版一致）
+        let stage = home.join("stage");
+        let node_src = stage.join("bin/node");
+        std::fs::create_dir_all(node_src.parent().unwrap()).unwrap();
+        std::fs::write(&node_src, b"#!/bin/sh\ntrue\n").unwrap();
+        std::fs::set_permissions(&node_src, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let npm_src = stage.join("lib/node_modules/npm/bin/npm-cli.js");
+        std::fs::create_dir_all(npm_src.parent().unwrap()).unwrap();
+        std::fs::write(&npm_src, b"fake").unwrap();
+
+        let archive = home.join("node.tar.gz");
+        let f = std::fs::File::create(&archive).unwrap();
+        let enc = GzEncoder::new(f, flate2::Compression::default());
+        let mut builder = tar::Builder::new(enc);
+        builder
+            .append_path_with_name(&node_src, "node-v24.21.0-darwin-arm64/bin/node")
+            .unwrap();
+        builder
+            .append_path_with_name(
+                &npm_src,
+                "node-v24.21.0-darwin-arm64/lib/node_modules/npm/bin/npm-cli.js",
+            )
+            .unwrap();
+        builder.into_inner().unwrap().finish().unwrap().flush().unwrap();
+
+        let dest = home.join("out");
+        extract_node_archive(&archive, &dest).unwrap();
+        let node = dest.join("bin/node");
+        assert!(node.is_file());
+        assert_eq!(
+            std::fs::metadata(&node).unwrap().permissions().mode() & 0o111,
+            0o111,
+            "node 必须保留可执行位"
+        );
+        assert!(dest.join("lib/node_modules/npm/bin/npm-cli.js").is_file());
+    }
+
+    // ── 向导状态快照契约（空 home 形状）─────────────────
+
+    #[test]
+    fn bootstrap_status_empty_home_shape() {
+        let home = temp_home("status");
+        let v = bootstrap_status_impl(&home);
+        assert_eq!(v["onboardingDone"], false);
+        assert_eq!(v["node"]["installed"], false);
+        // systemNode 探测走进程真实 PATH，结果因机器而异，只断言字段存在
+        assert!(v["systemNode"].is_object());
+        assert!(v["systemNode"]["found"].is_boolean());
+        assert_eq!(v["bridge"]["installed"], false);
+        assert_eq!(v["dshInstalled"], false);
+        assert_eq!(v["nodeChoices"].as_array().unwrap().len(), NODE_CHOICES.len());
+        assert_eq!(v["nodeChoices"][0]["major"], 24);
+        assert_eq!(v["bridge"]["min"], MIN_BRIDGE_VERSION);
     }
 }

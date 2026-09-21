@@ -2079,3 +2079,81 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running DSH Pocket");
 }
+
+/// 必经纯逻辑的单元测试：版本比较（受管 Node/dsh 择优 + bridge 版本门的基础）、
+/// URL 编码（登录回调跳转）、预检条目形状、目录体积统计。
+#[cfg(test)]
+mod lib_logic_tests {
+    use super::*;
+
+    #[test]
+    fn compare_versions_numeric_segments() {
+        use std::cmp::Ordering::*;
+        // 字典序在这里是错的：字符串 "0.1.10" < "0.1.9"
+        assert_eq!(compare_versions("0.1.10", "0.1.9"), Greater);
+        assert_eq!(compare_versions("0.1.4", "0.1.10"), Less);
+        assert_eq!(compare_versions("2.0.0", "1.9.9"), Greater);
+        assert_eq!(compare_versions("1.2.3", "1.2.3"), Equal);
+        // v 前缀归一
+        assert_eq!(compare_versions("v1.2.3", "1.2.3"), Equal);
+        // 缺段按 0
+        assert_eq!(compare_versions("1.2", "1.2.0"), Equal);
+        assert_eq!(compare_versions("1.2", "1.2.1"), Less);
+        // 非数字段按 0；带连字符的预发布段按段比较
+        assert_eq!(compare_versions("1.x.0", "1.0.0"), Equal);
+        assert_eq!(compare_versions("0.1.4-rc", "0.1.4"), Equal);
+        // bridge 门：MIN_BRIDGE_VERSION = 0.1.4
+        assert_eq!(compare_versions("0.1.3", "0.1.4"), Less);
+        assert_eq!(compare_versions("0.1.5", "0.1.4"), Greater);
+    }
+
+    #[test]
+    fn urlencode_keeps_unreserved_and_escapes_rest() {
+        assert_eq!(urlencode("abcXYZ012-_.~"), "abcXYZ012-_.~");
+        assert_eq!(urlencode("a b"), "a%20b");
+        assert_eq!(urlencode("a+b/c?d=1&e"), "a%2Bb%2Fc%3Fd%3D1%26e");
+        assert_eq!(urlencode("%"), "%25");
+        // 中文按 UTF-8 逐字节转义
+        assert_eq!(urlencode("中"), "%E4%B8%AD");
+    }
+
+    #[test]
+    fn preflight_item_shape() {
+        let no_fix = preflight_item("gateway", "warn", "不可达", None);
+        assert_eq!(no_fix["id"], "gateway");
+        assert_eq!(no_fix["state"], "warn");
+        assert_eq!(no_fix["detail"], "不可达");
+        assert!(no_fix["fix"].is_null());
+        let with_fix = preflight_item("node", "fail", "缺失", Some("安装"));
+        assert_eq!(with_fix["fix"], "安装");
+    }
+
+    #[test]
+    fn dir_size_sums_nested_files() {
+        let root = std::env::temp_dir().join(format!("dsh-pocket-ds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.bin"), [0u8; 10]).unwrap();
+        std::fs::write(root.join("sub").join("b.bin"), [0u8; 5]).unwrap();
+        assert_eq!(dir_size(&root), 15);
+        // 不存在的目录 = 0，不 panic
+        assert_eq!(dir_size(&root.join("nope")), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn managed_dsh_bin_layout() {
+        let dir = PathBuf::from("/runtimes/dsh/0.1.5");
+        let bin = managed_dsh_bin(&dir);
+        if cfg!(target_os = "windows") {
+            assert_eq!(bin, PathBuf::from("/runtimes/dsh/0.1.5/node_modules/.bin/dsh.cmd"));
+        } else {
+            assert_eq!(bin, PathBuf::from("/runtimes/dsh/0.1.5/node_modules/.bin/dsh"));
+        }
+    }
+
+    #[test]
+    fn now_ms_is_sane() {
+        assert!(now_ms() > 1_700_000_000_000); // 2023-11 之后
+    }
+}

@@ -1119,13 +1119,11 @@ mod bootstrap_tests {
     #[test]
     fn resolve_sidecar_takes_priority() {
         let sidecar = temp_home("sidecar-root");
-        // 旧 sidecar 布局契约：<root>/bin/node + <root>/node/lib/.../npm-cli.js
-        let node = sidecar.join("bin/node");
+        // 旧 sidecar 布局契约：posix <root>/bin/node，win <root>/node.exe（npm-cli 有 fallback，无需存在）
+        let node_rel = if cfg!(target_os = "windows") { "node.exe" } else { "bin/node" };
+        let node = sidecar.join(node_rel);
         std::fs::create_dir_all(node.parent().unwrap()).unwrap();
         std::fs::write(&node, b"fake").unwrap();
-        let npm = sidecar.join("node/lib/node_modules/npm/bin/npm-cli.js");
-        std::fs::create_dir_all(npm.parent().unwrap()).unwrap();
-        std::fs::write(&npm, b"fake").unwrap();
         let part = resolve_node_with(&temp_home("sidecar-home"), Some(sidecar.to_str().unwrap()))
             .unwrap();
         assert_eq!(part.source, NodeSource::Managed);

@@ -671,6 +671,16 @@ fn extract_node_archive(archive: &Path, dest: &Path) -> Result<(), String> {
 
 /// 安装受管 Node（major ∈ NODE_CHOICES）。已装则幂等返回。
 pub fn node_install_impl<R: Runtime>(app: &AppHandle<R>, home: &Path, major: u8) -> Result<String, String> {
+    node_install_impl_with(app, home, major, NODE_MIRROR)
+}
+
+/// 同上，镜像可注入（集成测试指向本地 mock 镜像；生产壳传 NODE_MIRROR）。
+pub fn node_install_impl_with<R: Runtime>(
+    app: &AppHandle<R>,
+    home: &Path,
+    major: u8,
+    mirror: &str,
+) -> Result<String, String> {
     let version = version_for_major(major)?;
     let platform = dist_platform()?;
     let final_dir = node_dir(home, version);
@@ -681,7 +691,7 @@ pub fn node_install_impl<R: Runtime>(app: &AppHandle<R>, home: &Path, major: u8)
 
     let ext = if cfg!(target_os = "windows") { "zip" } else { "tar.gz" };
     let filename = format!("node-{version}-{platform}.{ext}");
-    let url = format!("{NODE_MIRROR}/{version}/{filename}");
+    let url = format!("{mirror}/{version}/{filename}");
     let archive = home.join("cache").join(format!("{filename}.part"));
 
     let step = "node";
@@ -689,7 +699,7 @@ pub fn node_install_impl<R: Runtime>(app: &AppHandle<R>, home: &Path, major: u8)
     download_with_progress(app, &url, &archive, step)?;
 
     emit_progress(app, serde_json::json!({ "step": step, "phase": "verify" }));
-    let shasums_url = format!("{NODE_MIRROR}/{version}/SHASUMS256.txt");
+    let shasums_url = format!("{mirror}/{version}/SHASUMS256.txt");
     crate::ensure_tls_provider();
     let shasums = reqwest::blocking::get(&shasums_url)
         .and_then(|r| r.error_for_status())
@@ -1325,5 +1335,210 @@ mod bootstrap_tests {
         assert_eq!(v["nodeChoices"].as_array().unwrap().len(), NODE_CHOICES.len());
         assert_eq!(v["nodeChoices"][0]["major"], 24);
         assert_eq!(v["bridge"]["min"], MIN_BRIDGE_VERSION);
+    }
+}
+
+/// 网络引导流的集成测试：真实走 下载(.part) → SHASUMS 校验 → 解压 → 就位 → toolchain.json，
+/// 镜像指向本进程内起的极简 HTTP 服务。这条链在 0.2.0–0.2.7 期间对所有新装机是坏的，
+/// 且单测只能覆盖到纯函数——这里用真 HTTP + 真文件系统补上。
+#[cfg(test)]
+mod bootstrap_e2e_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// 极简测试镜像：单线程应答器，路由 → 字节体；未注册路由回 404；drop 即停。
+    struct MockMirror {
+        url: String,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl MockMirror {
+        fn start(routes: HashMap<String, Vec<u8>>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let stop = Arc::new(AtomicBool::new(false));
+            let stop2 = stop.clone();
+            std::thread::spawn(move || {
+                listener.set_nonblocking(true).ok();
+                while !stop2.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let mut buf = [0u8; 2048];
+                            let _ = stream.read(&mut buf);
+                            let req = String::from_utf8_lossy(&buf);
+                            let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+                            let mut resp = match routes.get(&path) {
+                                Some(body) => {
+                                    let mut r = format!(
+                                        "HTTP/1.0 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                        body.len()
+                                    )
+                                    .into_bytes();
+                                    r.extend_from_slice(body);
+                                    r
+                                }
+                                None => b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                            };
+                            let _ = stream.write_all(&mut resp);
+                        }
+                        Err(_) => std::thread::sleep(Duration::from_millis(10)),
+                    }
+                }
+            });
+            Self { url, stop }
+        }
+    }
+
+    impl Drop for MockMirror {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn sha256_of(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(bytes))
+    }
+
+    /// 造一个与官方发行版同构的压缩包（posix tar.gz 带 bin/node + npm-cli；win zip 带 node.exe）
+    fn node_archive_bytes(version: &str) -> Vec<u8> {
+        let platform = dist_platform().unwrap();
+        let prefix = format!("node-{version}-{platform}");
+        if cfg!(target_os = "windows") {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            let opts = zip::write::SimpleFileOptions::default();
+            z.start_file(format!("{prefix}/node.exe"), opts).unwrap();
+            z.write_all(b"fake node").unwrap();
+            z.start_file(format!("{prefix}/node_modules/npm/bin/npm-cli.js"), opts).unwrap();
+            z.write_all(b"fake npm").unwrap();
+            z.finish().unwrap().into_inner()
+        } else {
+            use flate2::write::GzEncoder;
+            let buf = std::env::temp_dir().join(format!("dsh-pocket-e2e-{}-node.tar.gz", std::process::id()));
+            let f = std::fs::File::create(&buf).unwrap();
+            let enc = GzEncoder::new(f, flate2::Compression::default());
+            let mut builder = tar::Builder::new(enc);
+            let node_body = b"#!/bin/sh\necho v24.21.0\n";
+            let mut h = tar::Header::new_gnu();
+            h.set_size(node_body.len() as u64);
+            h.set_mode(0o755);
+            h.set_cksum();
+            builder
+                .append_data(&mut h, format!("{prefix}/bin/node"), node_body.as_slice())
+                .unwrap();
+            let npm_body = b"fake npm";
+            let mut h2 = tar::Header::new_gnu();
+            h2.set_size(npm_body.len() as u64);
+            h2.set_mode(0o644);
+            h2.set_cksum();
+            builder
+                .append_data(&mut h2, format!("{prefix}/lib/node_modules/npm/bin/npm-cli.js"), npm_body.as_slice())
+                .unwrap();
+            builder.into_inner().unwrap().finish().unwrap().flush().unwrap();
+            std::fs::read(&buf).unwrap()
+        }
+    }
+
+    fn temp_home(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("dsh-pocket-e2e-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn install_end_to_end_from_mirror() {
+        let app = tauri::test::mock_app();
+        let home = temp_home("ok");
+        let version = version_for_major(24).unwrap();
+        let platform = dist_platform().unwrap();
+        let ext = if cfg!(target_os = "windows") { "zip" } else { "tar.gz" };
+        let filename = format!("node-{version}-{platform}.{ext}");
+        let archive = node_archive_bytes(version);
+
+        let mut routes = HashMap::new();
+        routes.insert(format!("/{version}/{filename}"), archive.clone());
+        routes.insert(
+            format!("/{version}/SHASUMS256.txt"),
+            format!("{}  {}\n", sha256_of(&archive), filename).into_bytes(),
+        );
+        let mirror = MockMirror::start(routes);
+
+        let msg = node_install_impl_with(app.handle(), &home, 24, &mirror.url).unwrap();
+        assert!(msg.contains(version), "unexpected: {msg}");
+
+        // 就位且健康：pick_managed 能选中、toolchain.json 声明正确
+        let part = pick_managed(&home).unwrap_or_else(|| panic!("installed node should be pickable"));
+        assert_eq!(part.version, version);
+        assert_eq!(
+            read_toolchain_json(&home),
+            Some(("managed".into(), version.into()))
+        );
+        // 引导状态契约联动：向导应视为 node 已就绪
+        let status = bootstrap_status_impl(&home);
+        assert_eq!(status["node"]["installed"], true);
+        assert_eq!(status["node"]["version"], version);
+        assert_eq!(status["node"]["source"], "managed");
+    }
+
+    #[test]
+    fn install_fails_closed_on_tampered_artifact() {
+        let app = tauri::test::mock_app();
+        let home = temp_home("tamper");
+        let version = version_for_major(24).unwrap();
+        let platform = dist_platform().unwrap();
+        let ext = if cfg!(target_os = "windows") { "zip" } else { "tar.gz" };
+        let filename = format!("node-{version}-{platform}.{ext}");
+        let archive = node_archive_bytes(version);
+
+        let mut routes = HashMap::new();
+        routes.insert(format!("/{version}/{filename}"), archive);
+        // 清单是「好摘要」，但产物是另一份字节 → 必须拒收
+        routes.insert(
+            format!("/{version}/SHASUMS256.txt"),
+            format!("{}  {filename}\n", "0".repeat(64)).into_bytes(),
+        );
+        let mirror = MockMirror::start(routes);
+
+        let err = node_install_impl_with(app.handle(), &home, 24, &mirror.url).unwrap_err();
+        assert!(err.contains("不符"), "unexpected: {err}");
+        // 决不能就位
+        assert!(pick_managed(&home).is_none());
+        assert!(!home.join("toolchain.json").exists());
+    }
+
+    #[test]
+    fn install_fails_when_shasums_missing() {
+        let app = tauri::test::mock_app();
+        let home = temp_home("nosh");
+        let version = version_for_major(24).unwrap();
+        let platform = dist_platform().unwrap();
+        let ext = if cfg!(target_os = "windows") { "zip" } else { "tar.gz" };
+        let filename = format!("node-{version}-{platform}.{ext}");
+        // 产物能下载（200），清单 404 → 精确命中「下载 SHASUMS256.txt 失败」
+        let mut routes = HashMap::new();
+        routes.insert(format!("/{version}/{filename}"), node_archive_bytes(version));
+        let mirror = MockMirror::start(routes);
+        let err = node_install_impl_with(app.handle(), &home, 24, &mirror.url).unwrap_err();
+        assert!(err.contains("SHASUMS256.txt"), "unexpected: {err}");
+        assert!(pick_managed(&home).is_none());
+    }
+
+    #[test]
+    fn install_fails_when_mirror_unreachable() {
+        let app = tauri::test::mock_app();
+        let home = temp_home("down");
+        // 占一个端口立刻松手：连接必然被拒
+        let addr: std::net::SocketAddr = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap()
+        };
+        let err = node_install_impl_with(app.handle(), &home, 24, &format!("http://{addr}")).unwrap_err();
+        assert!(err.contains("下载失败") || err.contains("下载中断"), "unexpected: {err}");
+        assert!(pick_managed(&home).is_none());
     }
 }

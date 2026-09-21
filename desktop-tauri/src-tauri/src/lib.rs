@@ -402,11 +402,7 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
         let autostart = autostart_enabled(&app);
         if prev_autostart != Some(autostart) {
             refresh_tray_menu(&app);
-            if let Some(win) = app.get_webview_window("main") {
-                if let Ok(menu) = app_menu(&app) {
-                    let _ = win.set_menu(menu);
-                }
-            }
+            let _ = install_menu(&app);
             prev_autostart = Some(autostart);
         }
 
@@ -433,21 +429,15 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
-/// 应用原生菜单（Windows：标题栏下的菜单条；macOS：屏幕顶部菜单栏）。
-/// 结构：文件（主页面/引导页/配置）· 编辑 · 控制台（含启动/停止）· 帮助（检查更新/关于）。
-fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
-    use tauri::menu::{Menu, MenuItem, SubmenuBuilder};
-
-    let file = SubmenuBuilder::new(app, "文件")
-        .item(&MenuItem::with_id(app, "menu:open-main", "主页面", true, None::<&str>)?)
-        .item(&MenuItem::with_id(app, "menu:guide", "引导页", true, None::<&str>)?)
-        .item(&MenuItem::with_id(app, "menu:settings", "配置", true, None::<&str>)?)
-        .build()?;
+/// 「控制台」子菜单：状态/账号/版本/日志 + 启动/停止 Worker + 自启勾选。
+/// macOS 菜单栏与 Windows 窗口菜单共用一份。
+fn console_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Submenu<R>> {
+    use tauri::menu::{MenuItem, SubmenuBuilder};
 
     let autostart_item = tauri::menu::CheckMenuItemBuilder::with_id("autostart", "开机自启")
         .checked(autostart_enabled(app))
         .build(app)?;
-    let console = SubmenuBuilder::new(app, "控制台")
+    SubmenuBuilder::new(app, "控制台")
         .item(&MenuItem::with_id(app, "console:status", "运行状态", true, None::<&str>)?)
         // 「扫码登录」并入「账号」：账号页未登录时本就显示扫码二维码，无需两个入口
         .item(&MenuItem::with_id(app, "console:account", "账号", true, None::<&str>)?)
@@ -458,7 +448,52 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R
         .item(&MenuItem::with_id(app, "worker:stop", "停止 Worker", true, None::<&str>)?)
         .separator()
         .item(&autostart_item)
+        .build()
+}
+
+/// 应用原生菜单（平台各异，挂载统一走 install_menu）。
+///
+/// macOS：菜单栏是 app 级的，NSApp 会把第一个 submenu 的标题强制改成应用名，
+/// 所以第一位必须是 app 菜单本身（关于/检查更新/设置/隐藏/退出）。设置 app 菜单后
+/// 系统默认菜单被整体替换，⌘Q 必须自带一条，否则 Cmd+Q 直接失效；「编辑」同理
+/// 不能省，否则 ⌘C/⌘V 没有菜单项派发 selector。
+///
+/// Windows/Linux：结构 文件（主页面/引导页/配置）· 编辑 · 控制台 · 帮助（检查更新/关于）。
+#[cfg(target_os = "macos")]
+fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, SubmenuBuilder};
+
+    let app_submenu = SubmenuBuilder::new(app, "DSH Pocket")
+        .item(&PredefinedMenuItem::about(app, Some("关于 DSH Pocket"), None)?)
+        .item(&MenuItem::with_id(app, "menu:update", "检查更新…", true, None::<&str>)?)
+        .separator()
+        .item(&MenuItem::with_id(app, "menu:settings", "设置…", true, Some("CmdOrCtrl+,"))?)
+        .item(&PredefinedMenuItem::hide(app, Some("隐藏 DSH Pocket"))?)
+        .separator()
+        .item(&MenuItem::with_id(app, "quit", "退出 DSH Pocket", true, Some("CmdOrCtrl+Q"))?)
         .build()?;
+
+    let edit = SubmenuBuilder::new(app, "编辑")
+        .undo().redo().separator()
+        .cut().copy().paste().select_all()
+        .build()?;
+
+    let console = console_submenu(app)?;
+
+    Menu::with_items(app, &[&app_submenu, &edit, &console])
+}
+
+#[cfg(not(target_os = "macos"))]
+fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{Menu, MenuItem, SubmenuBuilder};
+
+    let file = SubmenuBuilder::new(app, "文件")
+        .item(&MenuItem::with_id(app, "menu:open-main", "主页面", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "menu:guide", "引导页", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "menu:settings", "配置", true, None::<&str>)?)
+        .build()?;
+
+    let console = console_submenu(app)?;
 
     let help = SubmenuBuilder::new(app, "帮助")
         .item(&MenuItem::with_id(app, "menu:update", "检查更新…", true, None::<&str>)?)
@@ -521,11 +556,7 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
             }
             // 托盘与窗口菜单都带这个勾选项：状态变化后两侧一起重建
             refresh_tray_menu(app);
-            if let Some(win) = app.get_webview_window("main") {
-                if let Ok(menu) = app_menu(app) {
-                    let _ = win.set_menu(menu);
-                }
-            }
+            let _ = install_menu(app);
         }
         "worker:start" => {
             let app = app.clone();
@@ -569,9 +600,16 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
     }
 }
 
-/// 把应用菜单挂到主窗口（Windows：标题栏菜单条；macOS：顶部菜单栏）
-fn set_window_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+/// 菜单唯一挂载/刷新入口。
+/// macOS：必须走 AppHandle::set_menu——Window::set_menu 在 macOS 是静默 no-op
+///（Tauri 文档明言 unsupported，菜单栏为 app 级）。
+/// Windows/Linux：保持窗口级、只挂主窗口——AppHandle::set_menu 在这两个平台会
+/// 附加到所有无显式菜单的窗口，无边框自定义标题栏的 console 窗口会被污染。
+fn install_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let menu = app_menu(app)?;
+    #[cfg(target_os = "macos")]
+    app.set_menu(menu)?;
+    #[cfg(not(target_os = "macos"))]
     if let Some(win) = app.get_webview_window("main") {
         win.set_menu(menu)?;
     }
@@ -2345,7 +2383,7 @@ pub fn run() {
                 }
             }
             build_tray(app.handle())?;
-            set_window_menu(app.handle())?;
+            install_menu(app.handle())?;
             start_poller(app.handle().clone());
             // 开机即在线：未运行则拉起（与原 Flutter 端行为一致）；失败不再静默吞掉
             let handle = app.handle().clone();

@@ -35,6 +35,10 @@ flate2 = "1"
 tar = "0.4"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 
+[dev-dependencies]
+# tauri mock runtime：集成测试里构造 AppHandle（emit 进度事件无副作用）
+tauri = { version = "2", features = ["test"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

@@ -28,6 +28,15 @@ export default function App() {
   return <MainSurface />;
 }
 
+/**
+ * 主窗口顶部拖拽条：主窗口是 Overlay 标题栏（macOS 红绿灯浮在内容上），
+ * 没有 drag-region 就拖不动、双击不能 Zoom。z-[60] 压过向导/模态（z-50），
+ * 28px 高不挡内容——dsh web 页的拖拽条由 Rust 侧 selfheal_auth_probe 注入。
+ */
+function DragStrip() {
+  return <div data-tauri-drag-region className="fixed inset-x-0 top-0 z-[60] h-7" />;
+}
+
 function MainSurface() {
   const [phase, setPhase] = useState<"checking" | "wizard" | "guide">("checking");
   const [wizardReason, setWizardReason] = useState<string | null>(null);
@@ -106,21 +115,28 @@ function MainSurface() {
 
   if (phase === "checking") {
     return (
-      <div className="flex h-full items-center justify-center bg-background text-muted-foreground">
-        <span className="text-[13px]">正在启动…</span>
-      </div>
+      <>
+        <DragStrip />
+        <div className="flex h-full items-center justify-center bg-background text-muted-foreground">
+          <span className="text-[13px]">正在启动…</span>
+        </div>
+      </>
     );
   }
   if (phase === "wizard") {
     return (
-      <OnboardingWizard
-        reason={wizardReason}
-        onFinished={() => setPhase("guide")}
-      />
+      <>
+        <DragStrip />
+        <OnboardingWizard
+          reason={wizardReason}
+          onFinished={() => setPhase("guide")}
+        />
+      </>
     );
   }
   return (
     <>
+      <DragStrip />
       <GuidePage onOpenWizard={() => setWizardDialog(true)} />
       {wizardDialog ? (
         <OnboardingWizard

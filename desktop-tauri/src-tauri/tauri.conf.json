@@ -22,19 +22,6 @@
         "center": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
-      },
-      {
-        "label": "console",
-        "title": "控制台",
-        "width": 920,
-        "height": 680,
-        "minWidth": 760,
-        "minHeight": 520,
-        "resizable": true,
-        "center": true,
-        "visible": false,
-        "url": "index.html?window=console",
-        "decorations": false
       }
     ],
     "security": {

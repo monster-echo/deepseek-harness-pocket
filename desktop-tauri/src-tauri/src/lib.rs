@@ -255,6 +255,12 @@ fn selfheal_auth_probe<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
     let _ = win.eval(&format!(
         "if (/authentication required/i.test(document.body ? document.body.innerText : '')) document.title = '{REAUTH_FLAG_TITLE}';"
     ));
+    // 主窗口常驻态是 dsh web 页（外部页面加不了 drag-region）：
+    // 注入顶部拖拽条，配合 Tauri 拖拽脚本的 document 级委托实现拖动/双击最大化。
+    // tick 每 3s 重跑一次，按 id 幂等。
+    let _ = win.eval(
+        "(function(){if(document.getElementById('dsh-drag-strip'))return;var d=document.createElement('div');d.id='dsh-drag-strip';d.setAttribute('data-tauri-drag-region','');d.style.cssText='position:fixed;top:0;left:0;right:0;height:28px;z-index:2147483646;user-select:none;-webkit-user-select:none;cursor:default';(document.body||document.documentElement).appendChild(d)})();",
+    );
     if let Ok(title) = win.title() {
         if title == REAUTH_FLAG_TITLE {
             let _ = win.eval("document.title = document.title.replace('DSH_POCKET_REAUTH', '');");
@@ -374,13 +380,27 @@ fn open_console<R: Runtime>(app: &AppHandle<R>, panel: &str) {
         return;
     }
     let url = format!("index.html?window=console&panel={panel}");
-    if let Ok(win) = WebviewWindowBuilder::new(app, "console", WebviewUrl::App(url.into()))
+    // 按平台建窗口（静态配置无法分平台）：Windows 无边框走前端自绘标题栏
+    //（TitleBar.tsx Windows 分支）；macOS 用原生 Overlay 标题栏（红绿灯 + 原生拖拽），
+    // 与主窗口同款配置——自绘 Windows 风格在 macOS 是错位的。
+    let builder = WebviewWindowBuilder::new(app, "console", WebviewUrl::App(url.into()))
         .title("控制台")
         .inner_size(920.0, 680.0)
         .min_inner_size(760.0, 520.0)
-        .build()
-    {
+        .resizable(true)
+        .center()
+        .visible(false);
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .decorations(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.decorations(false);
+    if let Ok(win) = builder.build() {
+        let _ = win.show();
         let _ = win.set_focus();
+        let _ = win.emit("console-panel", panel);
     }
 }
 

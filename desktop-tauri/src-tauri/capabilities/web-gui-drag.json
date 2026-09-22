@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "web-gui-drag",
+  "description": "dsh web GUI 是远程页（run.json webUrl，本机 127.0.0.1/localhost），其顶部拖拽条由 selfheal_auth_probe 注入，IPC 从远程 origin 发起——Tauri v2 ACL 中本地 capability 不覆盖远程上下文（Origin::Remote 只匹配 remote.urls），必须单独授权最小拖拽权限。",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}

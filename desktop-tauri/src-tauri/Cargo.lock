@@ -898,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-pocket"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "flate2",
  "reqwest",

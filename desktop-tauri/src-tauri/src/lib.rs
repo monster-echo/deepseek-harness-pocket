@@ -37,6 +37,88 @@ static LAST_NAVIGATED_AT: AtomicU64 = AtomicU64::new(0);
 /// dsh web 的事件流可能不再恢复——模型胶囊等实时界面停在过去，用户以为操作没生效。
 const WEBVIEW_STALE_RELOAD_MS: u64 = 30 * 60 * 1000;
 
+/// 页面内「后台唤醒」重连阈值：页面重新可见时，若已隐藏超过该时长，先做一次
+/// 同源探活（HEAD 请求），**探活失败才**主动触发 dsh 客户端自带的连接恢复。
+///
+/// 为什么不直接重连：派发 offline→online 会走 `connection/reset`，丢弃并重拉全部
+/// 投影，GUI 会闪「Loading history… / Deep diving…」。而多数情况下 WebKit 恢复后
+/// 网络栈是好的，dsh 客户端自己的断线重连已经生效，无需我们插手。探活通过就
+/// 完全不动页面（体验与 Chrome 一致）；探活失败说明网络栈确实坏死了，才走
+/// offline→online 强制恢复（模型胶囊「选了不生效」的正面修复，见下）。
+///
+/// 为什么需要兜底：dsh web 的实时界面（模型胶囊、用量、审批等）全部由 Host 推送的
+/// 投影驱动——模型胶囊读的是 `modelSelection` 投影，客户端在选完模型后**不做乐观
+/// 更新**（见 dsh-client-ui-model-selection：成功只关菜单，值仍等推送）。macOS 把
+/// 托盘常驻窗口的 WKWebView 挂起后，浏览器既不会报 online/offline，`$events` 也不
+/// 一定结束，客户端因此不会重连，投影就停在挂起前的值上：菜单里选好了，胶囊还是
+/// 旧的。派发 offline→online 会走 dsh 客户端自己的恢复路径（ConnectionController
+/// 重建物理 WebSocket、重开 `$events`），不整页重载、不丢输入草稿。
+/// 比 [`WEBVIEW_STALE_RELOAD_MS`] 的整页重载轻得多。
+const RESUME_STALE_RESYNC_MS: u64 = 5 * 60 * 1000;
+
+/// 同源探活的超时（毫秒）：超时未响应视为网络栈坏死，触发强制恢复。
+const RESUME_PROBE_TIMEOUT_MS: u32 = 4000;
+
+/// 注入页面内的后台唤醒看门狗（幂等；`__MS__` 由调用点替换为阈值毫秒数）。
+/// 只监听「隐藏时长」，被遮挡/最小化/隐藏窗口都会让 WebKit 触发 visibilitychange，
+/// 可见后超过阈值就重连；纯窗口聚焦（隐藏期间没走 visibilitychange 的平台差异）兜底。
+const RESUME_WATCHDOG_JS: &str = "(function(){\
+if(window.__dshPocketResumeWatch)return;window.__dshPocketResumeWatch=1;\
+var STALE_MS=__MS__,PROBE_MS=__PROBE_MS__,hiddenAt=0,probing=false;\
+function awayMs(){return hiddenAt===0?0:Date.now()-hiddenAt}\
+function resync(){hiddenAt=0;\
+if(probing)return;probing=true;\
+var done=false;\
+function finish(alive){if(done)return;done=true;probing=false;\
+if(alive)return;\
+try{window.dispatchEvent(new Event('offline'))}catch(e){}\
+setTimeout(function(){try{window.dispatchEvent(new Event('online'))}catch(e){}},100)}\
+try{var ctl=new AbortController();\
+fetch(location.origin+'/?__dshResumeProbe='+Date.now(),{method:'HEAD',cache:'no-store',credentials:'include',signal:ctl.signal})\
+.then(function(){try{ctl.abort()}catch(e){};finish(true)},\
+function(){try{ctl.abort()}catch(e){};finish(false)});\
+setTimeout(function(){try{ctl.abort()}catch(e){};finish(false)},PROBE_MS);\
+}catch(e){finish(false)}}\
+document.addEventListener('visibilitychange',function(){\
+if(document.visibilityState==='hidden'){hiddenAt=Date.now();return}\
+if(awayMs()>=STALE_MS)resync();else hiddenAt=0});\
+window.addEventListener('focus',function(){if(awayMs()>=STALE_MS)resync()});\
+window.addEventListener('pageshow',function(e){if(e&&e.persisted)resync()});\
+})();";
+
+/// 在 dsh web 页面里安装看门狗；每次轮询 tick 调一次，脚本自身按全局标志幂等。
+fn inject_resume_watchdog<R: Runtime>(win: &tauri::WebviewWindow<R>) {
+    let js = RESUME_WATCHDOG_JS
+        .replace("__MS__", &RESUME_STALE_RESYNC_MS.to_string())
+        .replace("__PROBE_MS__", &RESUME_PROBE_TIMEOUT_MS.to_string());
+    let _ = win.eval(&js);
+}
+
+/// dsh 菜单的 WebKit 焦点时序补丁（幂等）。
+///
+/// 现象：WKWebView/Safari 里，模型菜单下钻后焦点落在「当前选中行」，此时按下
+/// 另一行，WebKit 先把焦点从旧行挪走、新按钮尚未聚焦，发出 `relatedTarget=null`
+/// 的 focusout；dsh 菜单的 `onBlur` 判定 `relatedTarget instanceof Node` 失败，
+/// 误判「焦点离开菜单」提前 `close()`——菜单在 mouseup 前卸载，click 落到聊天
+/// 正文上，选择从未发生（`session/selectModel` 请求都不发出）。Chrome 在
+/// mousedown 时立即聚焦新按钮（relatedTarget=菜单内行），因此网页没事；
+/// Safari 实测同样复现，属 dsh 客户端在 WebKit 下的通用缺陷。
+///
+/// 补丁：菜单内 mousedown 阻止默认焦点转移（focusout 根本不发生），菜单得以
+/// 存活到 click，选择正常提交。副作用仅是鼠标点选时焦点不随行移动，键盘导航
+/// 不受影响。upstream 修复后可移除。
+const MENU_FOCUS_SHIM_JS: &str = "(function(){\
+if(window.__dshMenuFocusShim)return;window.__dshMenuFocusShim=1;\
+document.addEventListener('mousedown',function(e){\
+if(e.target&&e.target.closest&&e.target.closest('[role=menu]'))e.preventDefault();\
+},true);\
+})();";
+
+/// 在 dsh web 页面里安装菜单焦点补丁；每次轮询 tick 调一次，脚本自身幂等。
+fn inject_menu_focus_shim<R: Runtime>(win: &tauri::WebviewWindow<R>) {
+    let _ = win.eval(MENU_FOCUS_SHIM_JS);
+}
+
 /// 记录「刚完成一次导航/刷新」的时间戳。
 fn mark_navigated_now() {
     let now = std::time::SystemTime::now()
@@ -261,6 +343,11 @@ fn selfheal_auth_probe<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
     let _ = win.eval(
         "(function(){if(document.getElementById('dsh-drag-strip'))return;var d=document.createElement('div');d.id='dsh-drag-strip';d.setAttribute('data-tauri-drag-region','');d.style.cssText='position:fixed;top:0;left:0;right:0;height:28px;z-index:2147483646;user-select:none;-webkit-user-select:none;cursor:default';(document.body||document.documentElement).appendChild(d)})();",
     );
+    // 后台唤醒自愈：页面重新可见且隐藏够久时，触发一次 dsh 客户端重连，刷新推送投影
+    //（模型胶囊「选了不生效」的正面修复，见 RESUME_STALE_RESYNC_MS 注释）。
+    inject_resume_watchdog(&win);
+    // WebKit 菜单焦点时序补丁：修「模型菜单点了没反应/请求不发」（Safari 同病，见注释）。
+    inject_menu_focus_shim(&win);
     if let Ok(title) = win.title() {
         if title == REAUTH_FLAG_TITLE {
             let _ = win.eval("document.title = document.title.replace('DSH_POCKET_REAUTH', '');");

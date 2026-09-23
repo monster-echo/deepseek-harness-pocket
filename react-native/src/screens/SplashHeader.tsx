@@ -1,7 +1,6 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { colors, radii, spacing } from '../theme/tokens';
-import { styles } from '../theme/styles';
+import { Pressable, View } from 'react-native';
+import { Text } from '@/components/ui/text';
 
 type SplashHeaderProps = Readonly<{
   canSkip: boolean;
@@ -17,48 +16,25 @@ export function SplashHeader({
   surfaceColor,
 }: SplashHeaderProps) {
   return (
-    <View style={headerStyles.header}>
+    <View className="min-h-[44px] flex-row items-center justify-between">
       <View
         accessibilityLabel={`倒计时 ${countdown}`}
         accessibilityLiveRegion="polite"
-        style={[headerStyles.countdown, { backgroundColor: surfaceColor }]}
+        className="h-11 w-11 items-center justify-center rounded-full"
+        style={{ backgroundColor: surfaceColor }}
       >
-        <Text style={headerStyles.countdownNumber}>{countdown}</Text>
+        <Text className="text-primary text-lg font-bold">{countdown}</Text>
       </View>
       {canSkip ? (
         <Pressable
           accessibilityLabel="跳过宣传页"
           accessibilityRole="button"
           onPress={onSkip}
-          style={headerStyles.skip}
+          className="min-h-[44px] min-w-[44px] items-center justify-center px-3"
         >
-          <Text style={styles.secondary}>跳过</Text>
+          <Text className="text-muted-foreground text-sm">跳过</Text>
         </Pressable>
       ) : null}
     </View>
   );
 }
-
-const headerStyles = StyleSheet.create({
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    minHeight: 44,
-  },
-  skip: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 44,
-    minWidth: 44,
-    paddingHorizontal: spacing.x3,
-  },
-  countdown: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 44,
-    height: 44,
-    borderRadius: radii.round,
-  },
-  countdownNumber: { fontSize: 18, fontWeight: '700', color: colors.brand },
-});

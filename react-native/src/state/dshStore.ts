@@ -4,7 +4,7 @@
  */
 
 import { create } from 'zustand'
-import type { ServerRequest, WorkerPresence } from '@deepseek-harness-pocket/bridge-protocol'
+import type { AgentPresetInfo, CredentialRecordInfo, FeedbackCategory, FeedbackItem, FeedbackRating, JobSnapshot, ServerRequest, SessionSearchHit, SettingsSectionInfo, SkillInfo, WorkerPresence } from '@deepseek-harness-pocket/bridge-protocol'
 import { GatewayConnection, type GatewayStatus } from '../dsh/connection'
 import { DshClient, type HandshakeInfo } from '../dsh/client'
 import { emptySessionView, projectSessionList, reduceSessionEvent, type SessionListItem, type SessionView } from '../features/conversation/reducer'
@@ -29,9 +29,21 @@ interface DshState {
   /** 当前 Worker 的 workspace 注册表缓存：sidebar/新建会话首帧直接渲染，listWorkspaces 后台刷新 */
   workspaces: readonly WorkspaceRow[]
   serverRequests: readonly ServerRequest[]
+  /** 当前会话的后台任务（jobs 帧推送 + jobs.list 拉取） */
+  jobs: readonly JobSnapshot[]
+  /** 当前会话的消息级反馈（messageId → 条目） */
+  feedback: Readonly<Record<string, FeedbackItem>>
+  /** 侧栏搜索的正文命中（跨会话） */
+  contentHits: readonly SessionSearchHit[]
+  /** 技能目录缓存（Composer 的 `/` 技能源） */
+  skillCatalog: readonly SkillInfo[]
+  /** Worker 设置命名空间概览（只读） */
+  workerSections: readonly SettingsSectionInfo[]
+  /** Worker 凭据记录元信息（无秘密值） */
+  workerCredentials: readonly CredentialRecordInfo[]
   notice: string | null
-  /** worker 模型目录缓存（Composer 的模型列表）；inputModalities 用于图片能力提示 */
-  modelCatalog: readonly { id: string; name?: string; inputModalities?: readonly ('text' | 'image')[] }[]
+  /** worker 模型目录缓存（Composer 的模型列表）；inputModalities 用于图片能力提示；provider 为所属路由 */
+  modelCatalog: readonly { id: string; name?: string; provider?: string; inputModalities?: readonly ('text' | 'image')[] }[]
 
   connectGateway(): void
   disconnectGateway(): void
@@ -48,6 +60,25 @@ interface DshState {
   renameWorkspace(id: string, title: string): Promise<boolean>
   deleteWorkspace(id: string): Promise<boolean>
   listPlugins(): Promise<readonly { id: string; name: string; enabled: boolean }[]>
+  /** 主动刷新当前会话后台任务（打开面板时） */
+  refreshJobs(): Promise<void>
+  /** 拉取当前会话的消息反馈 */
+  loadFeedback(): Promise<void>
+  /** 提交/覆盖一条消息反馈 */
+  rateMessage(messageId: string, rating: FeedbackRating, note?: string, category?: FeedbackCategory): Promise<void>
+  /** 删除一条消息反馈 */
+  removeFeedback(messageId: string): Promise<void>
+  /** 侧栏正文搜索（空 query 清空结果） */
+  searchContent(query: string): Promise<void>
+  /** 拉取技能目录（按会话工作区分层） */
+  listSkills(): Promise<void>
+  /** 拉取 Worker 配置（只读） */
+  loadWorkerConfig(): Promise<void>
+  /** 写入/删除凭据（成功后自动刷新配置） */
+  setCredential(ref: string, value: string): Promise<boolean>
+  unsetCredential(ref: string): Promise<boolean>
+  /** 写回设置命名空间；返回冲突时的当前修订号（成功为 null） */
+  updateSetting(ns: string, patch: Record<string, unknown>, expectedRevision?: number): Promise<number | null | 'error'>
   sessionContext(sessionId: string): Promise<{ projectedTokens: number; contextWindow: number; systemTokens: number; toolsTokens: number; messageTokens: number } | null>
   createSession(cwd: string, opts?: { reasoningEffort?: string; permission?: string }): Promise<string | null>
   forkSession(sessionId: string, boundary?: number): Promise<string | null>
@@ -62,10 +93,17 @@ interface DshState {
   setPermission(preset: string): Promise<void>
   listCommands(): Promise<readonly { name: string; description: string }[]>
   listModels(): Promise<{ providers: readonly { id: string; name?: string; models: readonly { id: string; name?: string; inputModalities?: readonly ('text' | 'image')[] }[] }[]; current: { provider: string; model: string } | null }>
-  listPresets(): Promise<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]>
+  listPresets(): Promise<readonly AgentPresetInfo[]>
   /** 新会话默认：模型路由与 agent preset（发起端记录） */
   newSessionDefaults: { provider: string; model: string } | null
   newSessionPreset: string
+  /**
+   * 新建会话页预选工作区（顶栏/侧边栏切换工作区时写入）。
+   * Composer 挂载时优先于持久化的 lastWorkspace；消费后由 Composer 清空，
+   * 避免下次进入新建页时用旧值覆盖用户后来手选的目录。
+   */
+  newSessionWorkspace: string | null
+  setNewSessionWorkspace(path: string | null): void
   setNewSessionDefaults(route: { provider: string; model: string } | null, preset?: string): void
   /** 排队发送：turn 进行时允许输入并排队，turn 结束后自动发送 */
   queueSend: boolean
@@ -73,12 +111,15 @@ interface DshState {
   /** 置顶会话（手动排序）；置顶的会话排在列表最前 */
   pinnedSessionIds: readonly string[]
   togglePinSession(id: string): void
-  respondQuestion(requestId: string, answer: string): Promise<void>
+  respondQuestion(requestId: string, answers: readonly { id: string; selected: readonly string[]; custom?: string }[]): Promise<void>
 }
 
 /** 模块级连接与客户端（非响应式部分不放 store）。 */
 let gateway: GatewayConnection | null = null
 let client: DshClient | null = null
+
+/** 最近一次正文搜索词（防止快速输入时旧结果覆盖新结果）。 */
+let latestContentQuery = ''
 
 /** 通知条：写入后 8 秒自动清除，避免残留误导。 */
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
@@ -138,10 +179,17 @@ export const useDshStore = create<DshState>((set, get) => {
     sessionView: emptySessionView,
     workspaces: [],
     serverRequests: [],
+    jobs: [],
+    feedback: {},
+    contentHits: [],
+    skillCatalog: [],
+    workerSections: [],
+    workerCredentials: [],
     notice: null,
     modelCatalog: [],
     newSessionDefaults: null,
     newSessionPreset: '',
+    newSessionWorkspace: null,
     queueSend: false,
     pinnedSessionIds: [],
 
@@ -155,14 +203,14 @@ export const useDshStore = create<DshState>((set, get) => {
       gateway = null
       client?.dispose(true)
       client = null
-      set({ gatewayStatus: 'idle', activeWorkerId: null, sessions: [], activeSessionId: null, sessionLoading: false, sessionView: emptySessionView, workspaces: [] })
+      set({ gatewayStatus: 'idle', activeWorkerId: null, sessions: [], activeSessionId: null, sessionLoading: false, sessionView: emptySessionView, jobs: [], feedback: {}, workspaces: [] })
     },
 
     openWorker(workerId) {
       const g = ensureGateway()
       client?.dispose(true)
       client = null
-      set({ activeWorkerId: workerId, sessions: [], activeSessionId: null, sessionLoading: false, sessionView: emptySessionView, serverRequests: [], workspaces: [] })
+      set({ activeWorkerId: workerId, sessions: [], activeSessionId: null, sessionLoading: false, sessionView: emptySessionView, serverRequests: [], jobs: [], feedback: {}, workspaces: [] })
       g.openWorker(workerId)
     },
 
@@ -265,6 +313,157 @@ export const useDshStore = create<DshState>((set, get) => {
       }
     },
 
+    async setCredential(ref, value) {
+      if (client === null) return false
+      try {
+        await client.setCredential(ref, value)
+        setNotice(set, '密钥已保存到电脑')
+        await get().loadWorkerConfig()
+        return true
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+        return false
+      }
+    },
+
+    async unsetCredential(ref) {
+      if (client === null) return false
+      try {
+        await client.unsetCredential(ref)
+        setNotice(set, '密钥已删除')
+        await get().loadWorkerConfig()
+        return true
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+        return false
+      }
+    },
+
+    async updateSetting(ns, patch, expectedRevision) {
+      if (client === null) return 'error'
+      try {
+        const outcome = await client.updateSetting(ns, patch, expectedRevision)
+        // 冲突：把当前修订号交给 UI 提示后重试
+        if (!outcome.updated) return outcome.actualRevision
+        setNotice(set, '配置已写回电脑')
+        await get().loadWorkerConfig()
+        return null
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+        return 'error'
+      }
+    },
+
+    async loadWorkerConfig() {
+      if (client === null) return
+      try {
+        const config = await client.workerConfig()
+        set({ workerSections: [...config.sections], workerCredentials: [...config.credentials] })
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+      }
+    },
+
+    async listSkills() {
+      if (client === null) return
+      const sessionId = get().activeSessionId
+      const cwd = sessionId !== null
+        ? get().sessions.find((x) => x.id === sessionId)?.cwd ?? undefined
+        : get().newSessionWorkspace ?? undefined
+      try {
+        const skills = await client.listSkills(cwd ?? undefined)
+        set({ skillCatalog: [...skills] })
+      } catch {
+        // 技能目录不可用：`/` 只显示命令
+      }
+    },
+
+    async searchContent(query) {
+      const trimmed = query.trim()
+      latestContentQuery = trimmed
+      if (trimmed.length === 0 || client === null) {
+        set({ contentHits: [] })
+        return
+      }
+      try {
+        const hits = await client.searchSessions(trimmed, 20)
+        // 只接受最后一次查询的结果（快速输入时避免乱序覆盖）
+        if (latestContentQuery !== trimmed) return
+        set({ contentHits: [...hits] })
+      } catch {
+        // 搜索不可用：静默降级（标题过滤仍在）
+        set({ contentHits: [] })
+      }
+    },
+
+    async loadFeedback() {
+      if (client === null) return
+      const sessionId = get().activeSessionId
+      if (sessionId === null) {
+        set({ feedback: {} })
+        return
+      }
+      try {
+        const items = await client.listFeedback(sessionId)
+        if (sessionId !== get().activeSessionId) return
+        const map: Record<string, FeedbackItem> = {}
+        for (const item of items) map[item.messageId] = item
+        set({ feedback: map })
+      } catch {
+        // 只读降级：拉取失败不打扰用户
+      }
+    },
+
+    async rateMessage(messageId, rating, note, category) {
+      const sessionId = get().activeSessionId
+      if (client === null || sessionId === null) return
+      try {
+        const item = await client.putFeedback(sessionId, messageId, rating, note, category)
+        if (item === null) {
+          setNotice(set, '反馈未保存')
+          return
+        }
+        set({ feedback: { ...get().feedback, [item.messageId]: item } })
+        setNotice(set, rating === 'positive' ? '感谢反馈' : '已记录，感谢反馈')
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+      }
+    },
+
+    async removeFeedback(messageId) {
+      const sessionId = get().activeSessionId
+      const existing = get().feedback[messageId]
+      if (client === null || sessionId === null || existing === undefined) return
+      try {
+        const ok = await client.deleteFeedback(sessionId, messageId, existing.version)
+        if (!ok) {
+          setNotice(set, '反馈删除失败')
+          return
+        }
+        const next = { ...get().feedback }
+        delete next[messageId]
+        set({ feedback: next })
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+      }
+    },
+
+    async refreshJobs() {
+      if (client === null) return
+      const sessionId = get().activeSessionId
+      if (sessionId === null) {
+        set({ jobs: [] })
+        return
+      }
+      try {
+        const jobs = await client.listJobs(sessionId)
+        if (sessionId !== get().activeSessionId) return
+        set({ jobs: [...jobs] })
+      } catch (error) {
+        setNotice(set, error instanceof Error ? error.message : String(error))
+      }
+    },
+
     async listPlugins() {
       if (client === null) return []
       try {
@@ -326,7 +525,7 @@ export const useDshStore = create<DshState>((set, get) => {
       if (prevId !== null && prevId !== sessionId) {
         void client.closeSession(prevId).catch(() => {})
       }
-      set({ activeSessionId: sessionId, sessionLoading: true, sessionView: emptySessionView })
+      set({ activeSessionId: sessionId, sessionLoading: true, sessionView: emptySessionView, jobs: [], feedback: {} })
       try {
         await client.openSession(sessionId)
       } catch (error) {
@@ -339,7 +538,7 @@ export const useDshStore = create<DshState>((set, get) => {
     },
 
     startNewSession() {
-      set({ activeSessionId: null, sessionLoading: false, sessionView: emptySessionView })
+      set({ activeSessionId: null, sessionLoading: false, sessionView: emptySessionView, jobs: [], feedback: {} })
     },
 
     async sendMessage(text, images) {
@@ -407,7 +606,9 @@ export const useDshStore = create<DshState>((set, get) => {
       if (client === null) return { providers: [], current: null }
       try {
         const result = await client.listModels(get().activeSessionId ?? '')
-        const catalog = result.providers[0]?.models ?? []
+        // 目录合并所有 provider 的模型并带上所属路由：
+        // 只取 providers[0] 会让自定义路由（glm / ali-codingplan 等）的模型在手机端永远选不到
+        const catalog = result.providers.flatMap((p) => p.models.map((m) => ({ ...m, provider: p.id })))
         if (catalog.length > 0 && get().modelCatalog.length === 0) {
           set({ modelCatalog: catalog })
         }
@@ -424,6 +625,10 @@ export const useDshStore = create<DshState>((set, get) => {
       } catch {
         return []
       }
+    },
+
+    setNewSessionWorkspace(path) {
+      set({ newSessionWorkspace: path })
     },
 
     setNewSessionDefaults(route, preset) {
@@ -454,10 +659,10 @@ export const useDshStore = create<DshState>((set, get) => {
       }
     },
 
-    async respondQuestion(requestId, answer) {
+    async respondQuestion(requestId, answers) {
       if (client === null) return
       try {
-        await client.respondQuestion(requestId, answer)
+        await client.respondQuestion(requestId, answers)
         set({ serverRequests: get().serverRequests.filter((r) => r.body.requestId !== requestId) })
       } catch (error) {
         setNotice(set, error instanceof Error ? error.message : String(error))
@@ -492,6 +697,11 @@ async function startClient(workerId: string, set: Set, get: Get): Promise<void> 
       },
       onServerRequest: (request) => {
         set({ serverRequests: [...get().serverRequests, request] })
+      },
+      onJobs: (sessionId, jobs) => {
+        // worker 会为所有已订阅连接广播；只接受当前会话的
+        if (sessionId !== get().activeSessionId) return
+        set({ jobs: [...jobs] })
       },
       onAuthResult: (ok) => {
         if (!ok) set({ notice: 'Worker 鉴权失败', activeWorkerId: null })

@@ -1,16 +1,15 @@
 /**
  * 通用 Bottom Sheet（@gorhom/bottom-sheet）：拖拽把手关闭、snap 停靠、
- * 键盘避让（extend）。半屏弹层统一用它；全屏页（目录选择器）与
- * 居中确认卡仍用 RN Modal。
+ * 键盘避让（extend）。RNR 迁移后配色改由 Uniwind CSS 变量驱动。
  */
 
 import React, { useEffect, useRef } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomSheetBackdrop, BottomSheetModal, BottomSheetScrollView, BottomSheetView } from '@gorhom/bottom-sheet';
+import { useCSSVariable } from 'uniwind';
+import { Text } from '@/components/ui/text';
 import { AppIcon } from './AppIcon';
-import { usePreferences } from '../preferences/PreferencesProvider';
-import { spacing } from '../theme/tokens';
 
 export interface SheetProps {
   readonly visible: boolean
@@ -23,9 +22,13 @@ export interface SheetProps {
 }
 
 export function Sheet(props: Readonly<SheetProps>): React.JSX.Element {
-  const { palette } = usePreferences()
   const insets = useSafeAreaInsets()
   const ref = useRef<BottomSheetModal>(null)
+  const [surface, border, muted] = useCSSVariable([
+    '--color-card',
+    '--color-border',
+    '--color-muted-foreground',
+  ]) as [string, string, string]
 
   useEffect(() => {
     if (props.visible) ref.current?.present()
@@ -40,13 +43,14 @@ export function Sheet(props: Readonly<SheetProps>): React.JSX.Element {
 
   const snapPoints = props.snapPoints !== undefined ? [...props.snapPoints] : ['60%', '90%']
   const header = (
-    <View style={[styles.header, { borderBottomColor: palette.border }]}>
-      <Text style={[styles.title, { color: palette.text }]}>{props.title}</Text>
+    <View className="border-border/60 mb-2 flex-row items-center justify-between border-b pb-2">
+      <Text className="text-base font-bold">{props.title}</Text>
       <Pressable onPress={close} hitSlop={10}>
-        <AppIcon name="close" color={palette.textSecondary} size={18} />
+        <AppIcon name="close" color={muted} size={18} />
       </Pressable>
     </View>
   )
+  const contentStyle = { paddingHorizontal: 16, paddingBottom: 24 + insets.bottom }
 
   return (
     <BottomSheetModal
@@ -56,20 +60,20 @@ export function Sheet(props: Readonly<SheetProps>): React.JSX.Element {
       backdropComponent={(bp) => (
         <BottomSheetBackdrop {...bp} opacity={0.5} appearsOnIndex={0} disappearsOnIndex={-1} onPress={close} />
       )}
-      handleIndicatorStyle={{ backgroundColor: palette.border, width: 40 }}
-      backgroundStyle={{ backgroundColor: palette.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24 }}
+      handleIndicatorStyle={{ backgroundColor: border, width: 40 }}
+      backgroundStyle={{ backgroundColor: surface, borderTopLeftRadius: 24, borderTopRightRadius: 24 }}
       // extend：键盘弹出时弹层伸到最高档并压缩可视内容区，输入不被覆盖
       keyboardBehavior="extend"
       keyboardBlurBehavior="restore"
       onDismiss={props.onClose}
     >
       {props.scrollable === true ? (
-        <BottomSheetScrollView contentContainerStyle={[styles.content, { paddingBottom: spacing.x6 + insets.bottom }]}>
+        <BottomSheetScrollView contentContainerStyle={contentStyle}>
           {header}
           {props.children}
         </BottomSheetScrollView>
       ) : (
-        <BottomSheetView style={[styles.content, { paddingBottom: spacing.x6 + insets.bottom }]}>
+        <BottomSheetView style={contentStyle}>
           {header}
           {props.children}
         </BottomSheetView>
@@ -77,9 +81,3 @@ export function Sheet(props: Readonly<SheetProps>): React.JSX.Element {
     </BottomSheetModal>
   )
 }
-
-const styles = StyleSheet.create({
-  content: { paddingHorizontal: spacing.x4 },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: spacing.x2, borderBottomWidth: StyleSheet.hairlineWidth, marginBottom: spacing.x2 },
-  title: { fontSize: 16, fontWeight: '700' },
-})

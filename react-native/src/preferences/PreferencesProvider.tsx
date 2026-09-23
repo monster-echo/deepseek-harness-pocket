@@ -1,9 +1,8 @@
-import React, { createContext, ReactNode, useContext } from 'react';
+import React, { createContext, ReactNode, useContext, useEffect } from 'react';
 import { useColorScheme } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { Uniwind } from 'uniwind';
 import { useApp } from '../state/AppStore';
-import { colors, darkColors, ThemeColors } from '../theme/tokens';
-import { applyTheme } from '../theme/styles';
 
 type ThemeMode = 'system' | 'light' | 'dark';
 type Locale = 'zh-CN' | 'en-US';
@@ -11,28 +10,37 @@ type Locale = 'zh-CN' | 'en-US';
 type PreferencesValue = Readonly<{
   locale: Locale;
   mode: ThemeMode;
+  /** 当前是否深色（system 按系统解析）；状态栏样式用 */
   dark: boolean;
-  palette: ThemeColors;
+  /** 内容字号缩放（0.9–1.3），来自用户设置 */
   textScale: number;
   text: (key: TranslationKey) => string;
 }>;
 
 const PreferencesContext = createContext<PreferencesValue | null>(null);
 
+/**
+ * 用户偏好：语言、明暗模式、内容字号。
+ *
+ * 颜色不再由这里提供——RNR 迁移后所有颜色来自 `src/global.css` 的 `--color-*`
+ * 变量，明暗由 `Uniwind.setTheme` 驱动；组件只写 className。
+ */
 export function PreferencesProvider({ children }: Readonly<{ children: ReactNode }>) {
   const { user } = useApp();
   const systemScheme = useColorScheme();
   const mode = normalizeTheme(user?.settings.theme);
   const locale = user?.settings.language === 'en-US' ? 'en-US' : 'zh-CN';
   const dark = mode === 'dark' || (mode === 'system' && systemScheme === 'dark');
-  const palette = dark ? darkColors : colors;
   const textScale = normalizeTextScale(user?.settings.textScale);
-  applyTheme(palette, textScale);
+  // 用户主题偏好驱动 Uniwind（RNR 组件的 dark: 变体与 --color-* 变量都依赖它）。
+  // setTheme 是外部 store 写操作，放到 effect 里，避免渲染期副作用。
+  useEffect(() => {
+    Uniwind.setTheme(mode);
+  }, [mode]);
   const value: PreferencesValue = {
     locale,
     mode,
     dark,
-    palette,
     textScale,
     text: (key) => translations[locale][key],
   };

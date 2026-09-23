@@ -1,20 +1,135 @@
 import React, { useEffect, useState } from 'react';
-import { Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, ScrollView, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { useCSSVariable } from 'uniwind';
 import { invalidateAssetUrl, resolveAssetUrl } from '../data/apiClient';
 import * as ImagePicker from 'expo-image-picker';
-import {
-  AppButton,
-  AppCard,
-  ListRow,
-  OfflineBanner,
-  PageHeader,
-} from '../design-system/components';
+import { Avatar as AvatarPrimitive, AvatarFallback } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Text } from '@/components/ui/text';
 import { useApp } from '../state/AppStore';
 import { AvatarCropEditor } from '../profile/AvatarCropEditor';
 import { ProfileIdentityCard } from '../profile/ProfileIdentityCard';
-import { usePreferences } from '../preferences/PreferencesProvider';
-import { colors, radii, spacing } from '../theme/tokens';
-import { styles } from '../theme/styles';
+import { AppIcon, IconName } from '../design-system/AppIcon';
+import { telemetry } from '../telemetry/Telemetry';
+import type { AppRoute } from '../navigation/routes';
+
+type ActionButtonVariant = 'primary' | 'secondary' | 'danger';
+
+function AppButton({
+  label,
+  onPress,
+  icon,
+  variant = 'primary',
+  disabled = false,
+  analyticsId,
+  testID,
+}: Readonly<{
+  label: string;
+  onPress: () => void;
+  icon?: IconName;
+  variant?: ActionButtonVariant;
+  disabled?: boolean;
+  analyticsId?: string;
+  testID?: string;
+}>) {
+  const foreground = useCSSVariable([
+    '--color-primary-foreground',
+    '--color-foreground',
+    '--color-destructive-foreground',
+  ]) as [string, string, string];
+  const iconColor =
+    variant === 'secondary' ? foreground[1] : variant === 'danger' ? foreground[2] : foreground[0];
+  return (
+    <Button
+      accessibilityRole="button"
+      className="min-h-[52px] w-full"
+      disabled={disabled}
+      testID={testID}
+      variant={variant === 'primary' ? 'default' : variant === 'danger' ? 'destructive' : 'outline'}
+      onPress={() => {
+        telemetry.track('ui_action', { action_id: analyticsId ?? `button.${label}` });
+        onPress();
+      }}
+    >
+      {icon ? <AppIcon name={icon} color={iconColor} size={20} /> : null}
+      <Text>{label}</Text>
+    </Button>
+  );
+}
+
+function PageHeader({ title }: Readonly<{ title: string }>) {
+  const navigation = useNavigation();
+  const canGoBack = navigation.canGoBack();
+  return (
+    <View className="border-border/60 h-[58px] flex-row items-center justify-between border-b px-2">
+      <View className="w-[88px] items-start">
+        {canGoBack ? (
+          <Button
+            accessibilityLabel="返回"
+            onPress={() => navigation.goBack()}
+            size="icon"
+            variant="ghost"
+          >
+            <AppIcon name="arrow-left" size={20} />
+          </Button>
+        ) : null}
+      </View>
+      <Text className="absolute left-[88px] right-[88px] text-center text-[17px] font-bold">
+        {title}
+      </Text>
+      <View className="w-[88px] items-end" />
+    </View>
+  );
+}
+
+function AppCard({ children }: Readonly<{ children: React.ReactNode }>) {
+  return (
+    <Card className="gap-0 py-0">
+      <CardContent className="gap-3 py-4">{children}</CardContent>
+    </Card>
+  );
+}
+
+function OfflineBanner() {
+  const { online, refreshBootstrap } = useApp();
+  if (online) return null;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      className="bg-muted min-h-10 flex-row items-center justify-center gap-2 px-4"
+      onPress={() => void refreshBootstrap()}
+    >
+      <AppIcon name="alert" size={18} />
+      <Text className="text-xs font-semibold">当前离线，正在使用本地配置 · 点击重试</Text>
+    </Pressable>
+  );
+}
+
+function ListRow({
+  label,
+  route,
+  icon,
+  value,
+}: Readonly<{ label: string; route: AppRoute; icon?: IconName; value?: string }>) {
+  const { navigate } = useApp();
+  return (
+    <Pressable
+      className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4 active:bg-accent/50"
+      onPress={() => {
+        telemetry.track('ui_action', { action_id: route });
+        navigate(route);
+      }}
+    >
+      {icon ? <AppIcon name={icon} size={20} /> : null}
+      <Text className="flex-1 text-base">{label}</Text>
+      {value ? <Text className="text-muted-foreground text-sm">{value}</Text> : null}
+      <AppIcon name="chevron-right" size={18} />
+    </Pressable>
+  );
+}
 
 export function ProfileScreen() {
   const { user, config, navigate, signOut, showConfirm } = useApp();
@@ -27,10 +142,10 @@ export function ProfileScreen() {
     onConfirm: signOut,
   });
   return (
-    <View style={styles.page}>
+    <View className="bg-background flex-1">
       <OfflineBanner />
       <PageHeader title="我的" />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerClassName="gap-4 p-4">
         <ProfileIdentityCard
           displayName={user.displayName}
           username={user.username}
@@ -38,9 +153,9 @@ export function ProfileScreen() {
           bio={user.bio}
           avatarUrl={user.avatarUrl}
         />
-        <View style={profileStyles.membership}>
-          <Text style={profileStyles.membershipTitle}>{tier?.name ?? user.tierId}</Text>
-          <Text style={profileStyles.membershipText}>
+        <View className="bg-foreground gap-3 rounded-2xl p-5">
+          <Text className="text-background text-[22px] font-bold">{tier?.name ?? user.tierId}</Text>
+          <Text className="text-muted-foreground text-sm">
             {tier?.summary ?? '会员信息由服务端动态配置'}
           </Text>
           <AppButton
@@ -72,13 +187,13 @@ export function ProfileScreen() {
 function SignedOutProfile() {
   const { navigate } = useApp();
   return (
-    <View style={styles.page}>
+    <View className="bg-background flex-1">
       <PageHeader title="我的" />
-      <View style={styles.centered}>
+      <View className="flex-1 items-center justify-center gap-4 p-6">
         <Avatar label="M" />
-        <Text style={styles.title}>登录后同步你的数据</Text>
-        <Text style={styles.secondary}>会员、订单与设置会安全同步。</Text>
-        <View style={profileStyles.fullWidth}>
+        <Text className="text-foreground text-[28px] font-bold">登录后同步你的数据</Text>
+        <Text className="text-muted-foreground text-sm">会员、订单与设置会安全同步。</Text>
+        <View className="w-full">
           <AppButton label="登录或注册" onPress={() => navigate('auth.signIn')} />
         </View>
       </View>
@@ -88,7 +203,6 @@ function SignedOutProfile() {
 
 // 头像显示：兼容 objectKey（→ presigned 24h）/ http(s) / data: 三种形态。
 function Avatar({ avatarUrl, label }: Readonly<{ avatarUrl?: string | null; label: string }>) {
-  const { palette } = usePreferences();
   const [resolved, setResolved] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
@@ -103,7 +217,7 @@ function Avatar({ avatarUrl, label }: Readonly<{ avatarUrl?: string | null; labe
       <Image
         accessibilityLabel="用户头像"
         source={{ uri: resolved }}
-        style={profileStyles.avatar}
+        className="size-14 rounded-full"
         onError={() => {
           if (avatarUrl) invalidateAssetUrl(avatarUrl);
           setResolved(null);
@@ -112,9 +226,11 @@ function Avatar({ avatarUrl, label }: Readonly<{ avatarUrl?: string | null; labe
     );
   }
   return (
-    <View style={[profileStyles.avatar, { backgroundColor: palette.brandSoft }]}>
-      <Text style={profileStyles.avatarText}>{label}</Text>
-    </View>
+    <AvatarPrimitive alt="用户头像" className="size-14">
+      <AvatarFallback>
+        <Text className="text-primary text-xl font-bold">{label}</Text>
+      </AvatarFallback>
+    </AvatarPrimitive>
   );
 }
 
@@ -145,9 +261,9 @@ export function EditProfileScreen() {
     }
   };
   return (
-    <View style={styles.page}>
+    <View className="bg-background flex-1">
       <PageHeader title="个人资料" />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerClassName="gap-4 p-4">
         <ProfileIdentityCard
           displayName={displayName || user?.username || 'M'}
           username={user?.username ?? ''}
@@ -156,27 +272,28 @@ export function EditProfileScreen() {
           avatarUrl={avatarUrl}
           onAvatarPress={() => void chooseAvatar()}
         />
-        <Text style={styles.sectionLabel}>用户名（不可修改）</Text>
-        <Text style={styles.secondary}>@{user?.username}</Text>
-        <Text style={styles.sectionLabel}>显示名称</Text>
-        <TextInput
+        <Text className="text-muted-foreground ml-1 text-xs font-bold tracking-wide">用户名（不可修改）</Text>
+        <Text className="text-muted-foreground text-sm">@{user?.username}</Text>
+        <Text className="text-muted-foreground ml-1 text-xs font-bold tracking-wide">显示名称</Text>
+        <Input
           accessibilityLabel="显示名称"
+          className="min-h-[52px]"
           maxLength={40}
           onChangeText={setDisplayName}
-          style={styles.input}
           value={displayName}
         />
-        <Text style={styles.sectionLabel}>个人简介</Text>
-        <TextInput
+        <Text className="text-muted-foreground ml-1 text-xs font-bold tracking-wide">个人简介</Text>
+        <Input
           accessibilityLabel="个人简介"
+          className="min-h-[96px]"
           maxLength={160}
           multiline
           onChangeText={setBio}
           placeholder="介绍一下自己"
-          style={[styles.input, profileStyles.bioInput]}
+          style={{ textAlignVertical: 'top' }}
           value={bio}
         />
-        <Text style={styles.caption}>点击上方头像选择图片，可拖动和缩放裁剪为 512×512。</Text>
+        <Text className="text-muted-foreground text-xs">点击上方头像选择图片，可拖动和缩放裁剪为 512×512。</Text>
         <AppButton
           disabled={busy}
           label={busy ? '保存中…' : '保存资料'}
@@ -197,25 +314,3 @@ export function EditProfileScreen() {
     </View>
   );
 }
-
-const profileStyles = StyleSheet.create({
-  fullWidth: { width: '100%' },
-  bioInput: { minHeight: 96, textAlignVertical: 'top' },
-  avatar: {
-    width: 56,
-    height: 56,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radii.round,
-    backgroundColor: colors.brandSoft,
-  },
-  avatarText: { color: colors.brand, fontSize: 20, fontWeight: '700' },
-  membership: {
-    borderRadius: radii.card,
-    padding: spacing.x5,
-    gap: spacing.x3,
-    backgroundColor: colors.text,
-  },
-  membershipTitle: { color: colors.surface, fontSize: 22, fontWeight: '700' },
-  membershipText: { color: colors.border, fontSize: 14 },
-});

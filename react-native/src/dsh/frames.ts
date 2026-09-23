@@ -12,7 +12,7 @@ export function parseWorkerFrameSafe(value: unknown): WorkerToPhoneFrame | null 
   const v = value as Record<string, unknown>
   const known = [
     'auth-ok', 'auth-rejected', 'rpc-result', 'event', 'snapshot',
-    'server-request', 'ping', 'resync-needed',
+    'server-request', 'ping', 'resync-needed', 'jobs',
   ]
   if (typeof v.kind === 'string' && known.includes(v.kind)) {
     return v as unknown as WorkerToPhoneFrame

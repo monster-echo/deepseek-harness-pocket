@@ -1,12 +1,12 @@
 import React from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { AppButton } from '../design-system/components';
+import { Image as ImageIcon } from 'lucide-react-native';
+import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
+import { Text } from '@/components/ui/text';
 import { useApp } from '../state/AppStore';
-import { usePreferences } from '../preferences/PreferencesProvider';
-import { colors, radii, spacing } from '../theme/tokens';
-import { styles } from '../theme/styles';
 
 export type FeedbackScreenshot = Readonly<{
   fileName: string;
@@ -25,7 +25,6 @@ export function FeedbackScreenshots({
   onChange: (next: readonly FeedbackScreenshot[]) => void;
 }>) {
   const { showToast } = useApp();
-  const { palette } = usePreferences();
   const choose = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
@@ -50,43 +49,41 @@ export function FeedbackScreenshots({
   };
 
   return (
-    <View style={screenshotStyles.section}>
-      <View style={screenshotStyles.heading}>
-        <Text style={styles.sectionLabel}>问题截图</Text>
-        <Text style={styles.caption}>{value.length}/{maximumScreenshots}</Text>
+    <View className="gap-3">
+      <View className="flex-row items-center justify-between">
+        <Text className="text-muted-foreground ml-1 text-xs font-bold tracking-wide">问题截图</Text>
+        <Text className="text-muted-foreground text-xs">{value.length}/{maximumScreenshots}</Text>
       </View>
       {value.length ? (
-        <View style={screenshotStyles.previews}>
+        <View className="flex-row flex-wrap gap-3">
           {value.map((screenshot, index) => (
             <View
               key={`${screenshot.fileName}-${index}`}
-              style={[screenshotStyles.previewCard, { backgroundColor: palette.surface }]}
+              className="bg-card overflow-hidden rounded-lg"
             >
               <Image
                 accessibilityLabel={`问题截图 ${index + 1}`}
                 source={{ uri: screenshot.data }}
-                style={screenshotStyles.preview}
+                className="h-[104px] w-[104px]"
               />
               <Pressable
                 accessibilityRole="button"
+                className="min-h-[44px] items-center justify-center"
                 onPress={() => remove(index)}
-                style={screenshotStyles.remove}
               >
-                <Text style={screenshotStyles.removeText}>移除</Text>
+                <Text className="text-destructive font-bold">移除</Text>
               </Pressable>
             </View>
           ))}
         </View>
       ) : (
-        <Text style={styles.secondary}>可上传最多 3 张截图，帮助我们定位问题。</Text>
+        <Text className="text-muted-foreground text-sm">可上传最多 3 张截图，帮助我们定位问题。</Text>
       )}
       {value.length < maximumScreenshots ? (
-        <AppButton
-          icon="image"
-          label="添加问题截图"
-          onPress={() => void choose()}
-          variant="secondary"
-        />
+        <Button className="min-h-[52px] w-full" variant="outline" onPress={() => void choose()}>
+          <Icon as={ImageIcon} size={20} />
+          <Text>添加问题截图</Text>
+        </Button>
       ) : null}
     </View>
   );
@@ -121,17 +118,3 @@ function isScreenshot(
 ): value is FeedbackScreenshot {
   return value !== null;
 }
-
-const screenshotStyles = StyleSheet.create({
-  section: { gap: spacing.x3 },
-  heading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  previews: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.x3 },
-  previewCard: {
-    overflow: 'hidden',
-    borderRadius: radii.control,
-    backgroundColor: colors.surface,
-  },
-  preview: { width: 104, height: 104 },
-  remove: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-  removeText: { color: colors.error, fontWeight: '700' },
-});

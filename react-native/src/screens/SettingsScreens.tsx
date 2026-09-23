@@ -1,17 +1,22 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import {
-  AppButton, AppCard, ListRow, OfflineBanner, PageHeader, ToggleRow,
-} from '../design-system/components';
-import { AppIcon } from '../design-system/AppIcon';
+import { Pressable, ScrollView, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { ArrowLeft, Check, ChevronRight, Crown, Lock, Settings as SettingsIcon, TriangleAlert } from 'lucide-react-native';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Icon } from '@/components/ui/icon';
+import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
+import { Text } from '@/components/ui/text';
 import { Sheet } from '../design-system/Sheet';
 import { SessionView } from '../domain/models';
 import { AppRoute } from '../navigation/routes';
 import { TranslationKey, usePreferences } from '../preferences/PreferencesProvider';
 import { useApp } from '../state/AppStore';
+import type { AgentPresetInfo } from '@deepseek-harness-pocket/bridge-protocol';
 import { useDshStore } from '../state/dshStore';
-import { radii, spacing } from '../theme/tokens';
-import { styles } from '../theme/styles';
+import { telemetry } from '../telemetry/Telemetry';
 
 type SettingItem = Readonly<{
   policy?: string;
@@ -45,9 +50,66 @@ const groups: readonly SettingGroup[] = [
   ] },
 ];
 
+/** RNR 顶栏：返回键（React Navigation canGoBack）+ 居中标题 + 右侧动作。 */
+function ScreenHeader({ title, rightAction }: Readonly<{
+  title: string;
+  rightAction?: Readonly<{ label: string; onPress: () => void; disabled?: boolean }>;
+}>) {
+  const navigation = useNavigation();
+  const canGoBack = navigation.canGoBack();
+  return (
+    <View className="border-border/60 h-[58px] flex-row items-center justify-between border-b px-2">
+      <View className="w-[88px] items-start">
+        {canGoBack ? (
+          <Button
+            accessibilityLabel="返回"
+            onPress={() => navigation.goBack()}
+            size="icon"
+            variant="ghost"
+          >
+            <Icon as={ArrowLeft} className="size-5" />
+          </Button>
+        ) : null}
+      </View>
+      <Text className="absolute left-[88px] right-[88px] text-center text-[17px] font-bold">
+        {title}
+      </Text>
+      <View className="w-[88px] items-end">
+        {rightAction ? (
+          <Button
+            accessibilityLabel={rightAction.label}
+            disabled={rightAction.disabled}
+            onPress={rightAction.onPress}
+            size="sm"
+            variant="ghost"
+          >
+            <Text className="text-sm font-bold">{rightAction.label}</Text>
+          </Button>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+/** 离线提示条（原 design-system OfflineBanner 的就地 RNR 版）。 */
+function OfflineBanner() {
+  const { online, refreshBootstrap } = useApp();
+  if (online) return null;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      className="bg-muted min-h-10 flex-row items-center justify-center gap-2 px-4"
+      onPress={() => void refreshBootstrap()}
+    >
+      <Icon as={TriangleAlert} className="size-[18px]" />
+      <Text className="text-xs font-semibold">当前离线，正在使用本地配置 · 点击重试</Text>
+    </Pressable>
+  );
+}
+
 export function SettingsScreen() {
-  const { config, user } = useApp();
-  const { text, palette } = usePreferences();
+  const { config, user, navigate } = useApp();
+  const { text } = usePreferences();
   const [modelSheet, setModelSheet] = useState(false);
   const [presetSheet, setPresetSheet] = useState(false);
   const [pluginSheet, setPluginSheet] = useState(false);
@@ -56,47 +118,74 @@ export function SettingsScreen() {
   const visible = (item: SettingItem) => !item.policy
     || config.settingsPolicy[item.policy]?.visibility === 'visible';
   return (
-    <View style={styles.page}>
+    <View className="bg-background flex-1">
       <OfflineBanner />
-      <PageHeader title={text('settings')} />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <AppCard>
-          <Text style={styles.heading}>{user?.displayName ?? text('guest')}</Text>
-          <Text style={styles.secondary}>
-            {user ? (user.hasEmail && user.email ? user.email : '未绑定邮箱') : text('signInSync')}
-          </Text>
-        </AppCard>
+      <ScreenHeader title={text('settings')} />
+      <ScrollView contentContainerClassName="gap-4 p-4">
+        <Card className="gap-0 py-0">
+          <CardContent className="gap-3 py-4">
+            <Text className="text-xl font-bold">{user?.displayName ?? text('guest')}</Text>
+            <Text className="text-muted-foreground text-sm">
+              {user ? (user.hasEmail && user.email ? user.email : '未绑定邮箱') : text('signInSync')}
+            </Text>
+          </CardContent>
+        </Card>
         {/* Agent 设置（dsh worker 级：模型 / Agent 预设） */}
-        <Text style={styles.sectionLabel}>Agent</Text>
-        <AppCard>
-          <Pressable style={agentStyles.row} onPress={() => setModelSheet(true)}>
-            <AppIcon name="settings" color={palette.textSecondary} size={16} />
-            <Text style={[agentStyles.rowLabel, { color: palette.text }]}>模型</Text>
-            <AppIcon name="chevron-right" color={palette.textSecondary} size={16} />
-          </Pressable>
-          <Pressable style={agentStyles.row} onPress={() => setPresetSheet(true)}>
-            <AppIcon name="crown" color={palette.textSecondary} size={16} />
-            <Text style={[agentStyles.rowLabel, { color: palette.text }]}>Agent 预设</Text>
-            <AppIcon name="chevron-right" color={palette.textSecondary} size={16} />
-          </Pressable>
-          <Pressable style={agentStyles.row} onPress={() => setPluginSheet(true)}>
-            <AppIcon name="settings" color={palette.textSecondary} size={16} />
-            <Text style={[agentStyles.rowLabel, { color: palette.text }]}>插件</Text>
-            <AppIcon name="chevron-right" color={palette.textSecondary} size={16} />
-          </Pressable>
-          <ToggleRow label="排队发送" value={queueSend} onChange={setQueueSend} />
-        </AppCard>
+        <Text className="text-muted-foreground ml-1 text-xs font-bold tracking-wider">Agent</Text>
+        <Card className="gap-0 py-0">
+          <CardContent className="gap-3 py-4">
+            <Pressable className="flex-row items-center gap-3 py-3" onPress={() => setModelSheet(true)}>
+              <Icon as={SettingsIcon} className="text-muted-foreground size-4" />
+              <Text className="flex-1 text-[15px]">模型</Text>
+              <Icon as={ChevronRight} className="text-muted-foreground size-4" />
+            </Pressable>
+            <Pressable className="flex-row items-center gap-3 py-3" onPress={() => setPresetSheet(true)}>
+              <Icon as={Crown} className="text-muted-foreground size-4" />
+              <Text className="flex-1 text-[15px]">Agent 预设</Text>
+              <Icon as={ChevronRight} className="text-muted-foreground size-4" />
+            </Pressable>
+            <Pressable className="flex-row items-center gap-3 py-3" onPress={() => setPluginSheet(true)}>
+              <Icon as={SettingsIcon} className="text-muted-foreground size-4" />
+              <Text className="flex-1 text-[15px]">插件</Text>
+              <Icon as={ChevronRight} className="text-muted-foreground size-4" />
+            </Pressable>
+            <Pressable className="flex-row items-center gap-3 py-3" onPress={() => navigate("settings.workerConfig")}>
+              <Icon as={SettingsIcon} className="text-muted-foreground size-4" />
+              <Text className="flex-1 text-[15px]">Worker 配置（只读）</Text>
+              <Icon as={ChevronRight} className="text-muted-foreground size-4" />
+            </Pressable>
+            <View className="min-h-[54px] flex-row items-center gap-3 px-4">
+              <Text className="flex-1 text-base">排队发送</Text>
+              <Switch checked={queueSend} onCheckedChange={setQueueSend} />
+            </View>
+          </CardContent>
+        </Card>
         {groups.map((group) => (
           <View key={group.title}>
-            <Text style={styles.sectionLabel}>{text(group.title)}</Text>
-            <AppCard>{group.items.filter(visible).map((item) => (
-              <ListRow
-                key={item.route}
-                label={text(item.label)}
-                route={item.route}
-                value={settingValue(item, user?.settings, text)}
-              />
-            ))}</AppCard>
+            <Text className="text-muted-foreground ml-1 text-xs font-bold tracking-wider">
+              {text(group.title)}
+            </Text>
+            <Card className="gap-0 py-0">
+              <CardContent className="gap-3 py-4">
+                {group.items.filter(visible).map((item) => {
+                  const value = settingValue(item, user?.settings, text);
+                  return (
+                    <Pressable
+                      key={item.route}
+                      className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4 active:bg-accent/50"
+                      onPress={() => {
+                        telemetry.track('ui_action', { action_id: item.route });
+                        navigate(item.route);
+                      }}
+                    >
+                      <Text className="flex-1 text-base">{text(item.label)}</Text>
+                      {value ? <Text className="text-muted-foreground text-sm">{value}</Text> : null}
+                      <Icon as={ChevronRight} className="text-muted-foreground size-[18px]" />
+                    </Pressable>
+                  );
+                })}
+              </CardContent>
+            </Card>
           </View>
         ))}
       </ScrollView>
@@ -108,7 +197,6 @@ export function SettingsScreen() {
 }
 
 function PluginSheet({ visible, onClose }: Readonly<{ visible: boolean; onClose: () => void }>) {
-  const { palette } = usePreferences();
   const [plugins, setPlugins] = useState<readonly { id: string; name: string; enabled: boolean }[]>([]);
   const listPlugins = useDshStore((s) => s.listPlugins);
   useEffect(() => {
@@ -118,20 +206,21 @@ function PluginSheet({ visible, onClose }: Readonly<{ visible: boolean; onClose:
   return (
     <Sheet visible={visible} title={`插件（${plugins.length}）`} onClose={onClose} scrollable snapPoints={['55%', '85%']}>
       {plugins.map((p) => (
-        <View key={p.id} style={[agentStyles.option, { borderColor: palette.border }]}>
-          <View style={{ flex: 1 }}>
-            <Text style={[agentStyles.optionText, { color: palette.text }]}>{p.name}</Text>
+        <View key={p.id} className="border-border mb-2 flex-row items-center gap-2 rounded-xl border p-3">
+          <View className="flex-1">
+            <Text className="text-sm font-semibold">{p.name}</Text>
           </View>
-          <Text style={{ fontSize: 11, color: p.enabled ? palette.success : palette.textSecondary }}>{p.enabled ? '已启用' : '已停用'}</Text>
+          <Text className={`text-[11px] ${p.enabled ? 'text-success' : 'text-muted-foreground'}`}>
+            {p.enabled ? '已启用' : '已停用'}
+          </Text>
         </View>
       ))}
-      {plugins.length === 0 && <Text style={[agentStyles.hint, { color: palette.textSecondary }]}>插件列表为空（需活跃 worker）</Text>}
+      {plugins.length === 0 && <Text className="text-muted-foreground p-2 text-xs">插件列表为空（需活跃 worker）</Text>}
     </Sheet>
   )
 }
 
 function ModelSheet({ visible, onClose }: Readonly<{ visible: boolean; onClose: () => void }>) {
-  const { palette } = usePreferences();
   const { showToast } = useApp();
   const [models, setModels] = useState<readonly { id: string; name?: string }[]>([]);
   const listModels = useDshStore((s) => s.listModels);
@@ -146,24 +235,28 @@ function ModelSheet({ visible, onClose }: Readonly<{ visible: boolean; onClose: 
       {models.map((m) => {
         const selected = (current?.model ?? 'deepseek-v4-flash') === m.id
         return (
-          <Pressable key={m.id} style={[agentStyles.option, { borderColor: selected ? palette.brand : palette.border }]} onPress={() => { setDefaults({ provider: 'deepseek-official', model: m.id }); showToast(`默认模型 ${m.id}`, 'info'); onClose(); }}>
-            <View style={{ flex: 1 }}>
-              <Text style={[agentStyles.optionText, { color: palette.text, fontFamily: 'Menlo' }]}>{m.id}</Text>
-              {m.name !== undefined && m.name.length > 0 && <Text style={[agentStyles.optionSub, { color: palette.textSecondary }]}>{m.name}</Text>}
+          <Pressable
+            key={m.id}
+            className={`mb-2 flex-row items-center gap-2 rounded-xl border p-3 ${selected ? 'border-primary' : 'border-border'}`}
+            onPress={() => { setDefaults({ provider: 'deepseek-official', model: m.id }); showToast(`默认模型 ${m.id}`, 'info'); onClose(); }}
+          >
+            <View className="flex-1">
+              <Text className="font-mono text-sm font-semibold">{m.id}</Text>
+              {m.name !== undefined && m.name.length > 0 && <Text className="text-muted-foreground mt-0.5 text-[11px]">{m.name}</Text>}
             </View>
-            {selected && <AppIcon name="check" color={palette.brand} size={16} />}
+            {selected && <Icon as={Check} className="text-primary size-4" />}
           </Pressable>
         )
       })}
-      {models.length === 0 && <Text style={[agentStyles.hint, { color: palette.textSecondary }]}>目录为空（需活跃 worker）</Text>}
+      {models.length === 0 && <Text className="text-muted-foreground p-2 text-xs">目录为空（需活跃 worker）</Text>}
     </Sheet>
   )
 }
 
 function PresetSheet({ visible, onClose }: Readonly<{ visible: boolean; onClose: () => void }>) {
-  const { palette } = usePreferences();
   const { showToast } = useApp();
-  const [presets, setPresets] = useState<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]>([]);
+  const [presets, setPresets] = useState<readonly AgentPresetInfo[]>([]);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const listPresets = useDshStore((s) => s.listPresets);
   const setDefaults = useDshStore((s) => s.setNewSessionDefaults);
   const current = useDshStore((s) => s.newSessionPreset);
@@ -176,16 +269,46 @@ function PresetSheet({ visible, onClose }: Readonly<{ visible: boolean; onClose:
       {presets.map((p) => {
         const selected = (current.length > 0 ? current : 'standard') === p.id
         return (
-          <Pressable key={p.id} style={[agentStyles.option, { borderColor: selected ? palette.brand : palette.border }]} onPress={() => { setDefaults(null, p.id); showToast(`默认模式 ${p.name ?? p.id}`, 'info'); onClose(); }}>
-            <View style={{ flex: 1 }}>
-              <Text style={[agentStyles.optionText, { color: palette.text }]}>{p.name ?? p.id}{p.isDefault ? '（默认）' : ''}</Text>
-              {p.description !== undefined && <Text style={[agentStyles.optionSub, { color: palette.textSecondary }]} numberOfLines={2}>{p.description}</Text>}
+          <Pressable
+            key={p.id}
+            className={`mb-2 flex-row items-center gap-2 rounded-xl border p-3 ${selected ? 'border-primary' : 'border-border'}`}
+            onPress={() => { setDefaults(null, p.id); showToast(`默认模式 ${p.name ?? p.id}`, 'info'); onClose(); }}
+          >
+            <View className="flex-1">
+              <View className="flex-row items-center gap-2">
+                <Text className="text-sm font-semibold">{p.name ?? p.id}{p.isDefault ? '（默认）' : ''}</Text>
+                <Badge variant="secondary">
+                  <Text>{p.trust === 'user' ? '自定义' : '内置'}</Text>
+                </Badge>
+              </View>
+              {p.description !== undefined && <Text className="text-muted-foreground mt-0.5 text-[11px]" numberOfLines={2}>{p.description}</Text>}
+              {p.broken !== undefined && (
+                <Text className="text-destructive mt-0.5 text-[11px]">无法使用：{p.broken}</Text>
+              )}
+              {p.composition !== undefined && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={expanded === p.id ? '收起组成' : '查看组成'}
+                  hitSlop={6}
+                  className="mt-1 self-start"
+                  onPress={() => setExpanded(expanded === p.id ? null : p.id)}
+                >
+                  <Text className="text-primary text-[11px]">
+                    {expanded === p.id ? '收起组成' : '查看组成'}
+                  </Text>
+                </Pressable>
+              )}
+              {expanded === p.id && p.composition !== undefined && (
+                <Text className="text-muted-foreground mt-1 font-mono text-[10.5px] leading-[15px]">
+                  {p.composition}
+                </Text>
+              )}
             </View>
-            {selected && <AppIcon name="check" color={palette.brand} size={16} />}
+            {selected && <Icon as={Check} className="text-primary size-4" />}
           </Pressable>
         )
       })}
-      {presets.length === 0 && <Text style={[agentStyles.hint, { color: palette.textSecondary }]}>preset 目录为空（需活跃 worker）</Text>}
+      {presets.length === 0 && <Text className="text-muted-foreground p-2 text-xs">preset 目录为空（需活跃 worker）</Text>}
     </Sheet>
   )
 }
@@ -217,39 +340,52 @@ export function AccountSecurityScreen() {
       navigate('auth.signIn');
     }
   };
+  const submitLabel = busy ? '修改中…' : '修改密码';
   return (
-    <View style={styles.page}>
-      <PageHeader title="账户与安全" />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <AppCard>
-          <ListRow
-            label="登录邮箱"
-            value={user ? (user.hasEmail && user.email ? user.email : '未绑定邮箱') : '未登录'}
-          />
-          <ListRow label="身份绑定" value="邮箱密码" />
-        </AppCard>
-        <TextInput
+    <View className="bg-background flex-1">
+      <ScreenHeader title="账户与安全" />
+      <ScrollView contentContainerClassName="gap-4 p-4">
+        <Card className="gap-0 py-0">
+          <CardContent className="gap-3 py-4">
+            <View className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4">
+              <Text className="flex-1 text-base">登录邮箱</Text>
+              <Text className="text-muted-foreground text-sm">
+                {user ? (user.hasEmail && user.email ? user.email : '未绑定邮箱') : '未登录'}
+              </Text>
+            </View>
+            <View className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4">
+              <Text className="flex-1 text-base">身份绑定</Text>
+              <Text className="text-muted-foreground text-sm">邮箱密码</Text>
+            </View>
+          </CardContent>
+        </Card>
+        <Input
           accessibilityLabel="当前密码"
+          className="min-h-[52px]"
           onChangeText={setCurrent}
           placeholder="当前密码"
           secureTextEntry
-          style={styles.input}
           value={current}
         />
-        <TextInput
+        <Input
           accessibilityLabel="新密码"
+          className="min-h-[52px]"
           onChangeText={setNext}
           placeholder="至少 8 位新密码"
           secureTextEntry
-          style={styles.input}
           value={next}
         />
-        <AppButton
+        <Button
+          className="min-h-[52px] w-full"
           disabled={busy || !user}
-          label={busy ? '修改中…' : '修改密码'}
-          icon="lock"
-          onPress={() => void submit()}
-        />
+          onPress={() => {
+            telemetry.track('ui_action', { action_id: `button.${submitLabel}` });
+            void submit();
+          }}
+        >
+          <Icon as={Lock} className="size-5" />
+          <Text>{submitLabel}</Text>
+        </Button>
       </ScrollView>
     </View>
   );
@@ -265,20 +401,35 @@ export function DevicesScreen() {
     if (await revokeSession(id)) setSessions((items) => items.filter((item) => item.id !== id));
   };
   return (
-    <View style={styles.page}>
-      <PageHeader title="登录设备" />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+    <View className="bg-background flex-1">
+      <ScreenHeader title="登录设备" />
+      <ScrollView contentContainerClassName="gap-4 p-4">
         {sessions.map((session) => (
-          <AppCard key={session.id}>
-            <ListRow
-              label={session.deviceName}
-              value={session.current ? '当前设备' : '撤销'}
-              onPress={session.current ? undefined : () => void revoke(session.id)}
-            />
-            <Text style={styles.caption}>最近活动：{formatDate(session.lastSeenAt)}</Text>
-          </AppCard>
+          <Card key={session.id} className="gap-0 py-0">
+            <CardContent className="gap-3 py-4">
+              {session.current ? (
+                <View className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4">
+                  <Text className="flex-1 text-base">{session.deviceName}</Text>
+                  <Text className="text-muted-foreground text-sm">当前设备</Text>
+                </View>
+              ) : (
+                <Pressable
+                  className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4 active:bg-accent/50"
+                  onPress={() => {
+                    telemetry.track('ui_action', { action_id: `row.${session.deviceName}` });
+                    void revoke(session.id);
+                  }}
+                >
+                  <Text className="flex-1 text-base">{session.deviceName}</Text>
+                  <Text className="text-muted-foreground text-sm">撤销</Text>
+                  <Icon as={ChevronRight} className="text-muted-foreground size-[18px]" />
+                </Pressable>
+              )}
+              <Text className="text-muted-foreground text-xs">最近活动：{formatDate(session.lastSeenAt)}</Text>
+            </CardContent>
+          </Card>
         ))}
-        {!sessions.length ? <Text style={styles.secondary}>暂无活动会话。</Text> : null}
+        {!sessions.length ? <Text className="text-muted-foreground text-sm">暂无活动会话。</Text> : null}
       </ScrollView>
     </View>
   );
@@ -287,12 +438,3 @@ export function DevicesScreen() {
 function formatDate(value: string) {
   return new Date(value).toLocaleString('zh-CN');
 }
-
-const agentStyles = {
-  row: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing.x3, paddingVertical: spacing.x3 },
-  rowLabel: { flex: 1, fontSize: 15 },
-  hint: { fontSize: 12, padding: spacing.x2 },
-  option: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing.x2, borderWidth: 1, borderRadius: radii.control, padding: spacing.x3, marginBottom: spacing.x2 },
-  optionText: { fontSize: 14, fontWeight: '600' as const },
-  optionSub: { fontSize: 11, marginTop: 2 },
-};

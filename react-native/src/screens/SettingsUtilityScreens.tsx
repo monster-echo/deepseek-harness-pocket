@@ -1,14 +1,55 @@
 import React, { useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
-import {
-  AppButton,
-  AppCard,
-  ListRow,
-  PageHeader,
-} from '../design-system/components';
+import { Pressable, ScrollView, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { ArrowLeft, ChevronRight } from 'lucide-react-native';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Icon } from '@/components/ui/icon';
+import { Text } from '@/components/ui/text';
 import { useStorageMaintenance, openSystemSettings } from '../settings/useStorageMaintenance';
 import { useApp } from '../state/AppStore';
-import { styles } from '../theme/styles';
+import { telemetry } from '../telemetry/Telemetry';
+
+/** RNR 顶栏：返回键（React Navigation canGoBack）+ 居中标题 + 右侧动作。 */
+function ScreenHeader({ title, rightAction }: Readonly<{
+  title: string;
+  rightAction?: Readonly<{ label: string; onPress: () => void; disabled?: boolean }>;
+}>) {
+  const navigation = useNavigation();
+  const canGoBack = navigation.canGoBack();
+  return (
+    <View className="border-border/60 h-[58px] flex-row items-center justify-between border-b px-2">
+      <View className="w-[88px] items-start">
+        {canGoBack ? (
+          <Button
+            accessibilityLabel="返回"
+            onPress={() => navigation.goBack()}
+            size="icon"
+            variant="ghost"
+          >
+            <Icon as={ArrowLeft} className="size-5" />
+          </Button>
+        ) : null}
+      </View>
+      <Text className="absolute left-[88px] right-[88px] text-center text-[17px] font-bold">
+        {title}
+      </Text>
+      <View className="w-[88px] items-end">
+        {rightAction ? (
+          <Button
+            accessibilityLabel={rightAction.label}
+            disabled={rightAction.disabled}
+            onPress={rightAction.onPress}
+            size="sm"
+            variant="ghost"
+          >
+            <Text className="text-sm font-bold">{rightAction.label}</Text>
+          </Button>
+        ) : null}
+      </View>
+    </View>
+  );
+}
 
 export function TextSizeScreen() {
   const { user, saveSettings, busy } = useApp();
@@ -19,30 +60,46 @@ export function TextSizeScreen() {
     { value: 1.15, label: '较大' },
     { value: 1.3, label: '特大' },
   ] as const;
+  const saveLabel = busy ? '保存中…' : '保存字体大小';
   return (
-    <View style={styles.page}>
-      <PageHeader title="字体大小" />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <AppCard>
-          <Text style={[styles.body, { fontSize: 16 * scale }]}>
-            这是当前字体大小的实时预览。
-          </Text>
-        </AppCard>
-        <AppCard>
-          {options.map((option) => (
-            <ListRow
-              key={option.value}
-              label={option.label}
-              onPress={() => setScale(option.value)}
-              value={scale === option.value ? '已选择' : ''}
-            />
-          ))}
-        </AppCard>
-        <AppButton
+    <View className="bg-background flex-1">
+      <ScreenHeader title="字体大小" />
+      <ScrollView contentContainerClassName="gap-4 p-4">
+        <Card className="gap-0 py-0">
+          <CardContent className="gap-3 py-4">
+            <Text className="text-base" style={{ fontSize: 16 * scale }}>
+              这是当前字体大小的实时预览。
+            </Text>
+          </CardContent>
+        </Card>
+        <Card className="gap-0 py-0">
+          <CardContent className="gap-3 py-4">
+            {options.map((option) => (
+              <Pressable
+                key={option.value}
+                className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4 active:bg-accent/50"
+                onPress={() => {
+                  telemetry.track('ui_action', { action_id: `row.${option.label}` });
+                  setScale(option.value);
+                }}
+              >
+                <Text className="flex-1 text-base">{option.label}</Text>
+                {scale === option.value ? <Text className="text-muted-foreground text-sm">已选择</Text> : null}
+                <Icon as={ChevronRight} className="text-muted-foreground size-[18px]" />
+              </Pressable>
+            ))}
+          </CardContent>
+        </Card>
+        <Button
+          className="min-h-[52px] w-full"
           disabled={busy || !user}
-          label={busy ? '保存中…' : '保存字体大小'}
-          onPress={() => void saveSettings({ textScale: scale })}
-        />
+          onPress={() => {
+            telemetry.track('ui_action', { action_id: `button.${saveLabel}` });
+            void saveSettings({ textScale: scale });
+          }}
+        >
+          <Text>{saveLabel}</Text>
+        </Button>
       </ScrollView>
     </View>
   );
@@ -67,23 +124,37 @@ export function StorageScreen() {
       }
     },
   });
+  const clearLabel = storage.loading ? '处理中…' : '清理可再生成缓存';
   return (
-    <View style={styles.page}>
-      <PageHeader title="存储与缓存" />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <AppCard>
-          <ListRow label="本地键值数量" value={String(storage.summary?.keys ?? 0)} />
-          <ListRow label="本地数据大小" value={formatBytes(storage.summary?.bytes ?? 0)} />
-        </AppCard>
-        <Text style={styles.secondary}>
+    <View className="bg-background flex-1">
+      <ScreenHeader title="存储与缓存" />
+      <ScrollView contentContainerClassName="gap-4 p-4">
+        <Card className="gap-0 py-0">
+          <CardContent className="gap-3 py-4">
+            <View className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4">
+              <Text className="flex-1 text-base">本地键值数量</Text>
+              <Text className="text-muted-foreground text-sm">{String(storage.summary?.keys ?? 0)}</Text>
+            </View>
+            <View className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4">
+              <Text className="flex-1 text-base">本地数据大小</Text>
+              <Text className="text-muted-foreground text-sm">{formatBytes(storage.summary?.bytes ?? 0)}</Text>
+            </View>
+          </CardContent>
+        </Card>
+        <Text className="text-muted-foreground text-sm">
           清理只移除待上传遥测等可再生成缓存，不会删除登录凭证、个人设置或离线配置。
         </Text>
-        <AppButton
+        <Button
+          className="min-h-[52px] w-full"
           disabled={storage.loading}
-          label={storage.loading ? '处理中…' : '清理可再生成缓存'}
-          onPress={clearCache}
-          variant="secondary"
-        />
+          onPress={() => {
+            telemetry.track('ui_action', { action_id: `button.${clearLabel}` });
+            clearCache();
+          }}
+          variant="outline"
+        >
+          <Text>{clearLabel}</Text>
+        </Button>
       </ScrollView>
     </View>
   );
@@ -97,20 +168,27 @@ export function PermissionsScreen() {
     }
   };
   return (
-    <View style={styles.page}>
-      <PageHeader title="权限管理" />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <AppCard>
-          <Text style={styles.heading}>系统权限由设备管理</Text>
-          <Text style={styles.secondary}>
-            相机、相册、通知和麦克风权限只在相关功能需要时申请。你可以随时前往系统设置修改。
-          </Text>
-        </AppCard>
-        <AppButton
-          label="打开系统设置"
-          onPress={() => void openSettings()}
-          variant="secondary"
-        />
+    <View className="bg-background flex-1">
+      <ScreenHeader title="权限管理" />
+      <ScrollView contentContainerClassName="gap-4 p-4">
+        <Card className="gap-0 py-0">
+          <CardContent className="gap-3 py-4">
+            <Text className="text-xl font-bold">系统权限由设备管理</Text>
+            <Text className="text-muted-foreground text-sm">
+              相机、相册、通知和麦克风权限只在相关功能需要时申请。你可以随时前往系统设置修改。
+            </Text>
+          </CardContent>
+        </Card>
+        <Button
+          className="min-h-[52px] w-full"
+          onPress={() => {
+            telemetry.track('ui_action', { action_id: 'button.打开系统设置' });
+            void openSettings();
+          }}
+          variant="outline"
+        >
+          <Text>打开系统设置</Text>
+        </Button>
       </ScrollView>
     </View>
   );

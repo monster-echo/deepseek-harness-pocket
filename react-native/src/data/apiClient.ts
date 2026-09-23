@@ -287,6 +287,9 @@ export function registerSessionExpiredHandler(handler: (() => void) | null) {
   sessionExpiredHandler = handler;
 }
 
+/** 单次请求上限：超过即视为服务不可用（启动页因此不会无限等待）。 */
+const REQUEST_TIMEOUT_MS = 12_000;
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return sendRequest<T>(path, options, false);
 }
@@ -301,9 +304,17 @@ async function sendRequest<T>(
     anonymousIdReader(),
   ]);
   let response: Response;
+  // 请求必须有上限：启动页要等首次 bootstrap 结束才分流，
+  // 没有超时的话后端一旦不响应（网络/代理/假 IP 路由异常）就会永久停在启动页。
+  const controller = new AbortController();
+  const externalSignal = options.signal ?? undefined;
+  const forwardAbort = (): void => controller.abort();
+  externalSignal?.addEventListener?.('abort', forwardAbort);
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     response = await fetch(`${getApiBase()}${path}`, {
       ...options,
+      signal: controller.signal,
       headers: {
         ...clientHeaders(),
         ...(installationId ? { 'X-Installation-Id': installationId } : {}),
@@ -313,6 +324,9 @@ async function sendRequest<T>(
     });
   } catch {
     throw serviceUnavailableError();
+  } finally {
+    clearTimeout(timer);
+    externalSignal?.removeEventListener?.('abort', forwardAbort);
   }
   if (response.status === 401 && !retried) {
     console.log(`[AUTH-DEBUG] 401 on ${path}, attempting refresh (retried=${retried})`);

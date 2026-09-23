@@ -3,19 +3,14 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
-import {
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { Modal, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AppIcon } from "../../design-system/AppIcon";
-import { usePreferences } from "../../preferences/PreferencesProvider";
-import { useDshStore } from "../../state/dshStore";
-import { spacing, radii } from "../../theme/tokens";
+import { ChevronRight, Folder, X } from "lucide-react-native";
+import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
+import { Text } from "@/components/ui/text";
+import { cn } from "@/lib/utils";
+import { useDshStore } from "@/state/dshStore";
 
 export function DirectoryPickerSheet(
   props: Readonly<{
@@ -24,7 +19,6 @@ export function DirectoryPickerSheet(
     onPicked: (path: string) => void;
   }>,
 ) {
-  const { palette } = usePreferences();
   const insets = useSafeAreaInsets();
   const [current, setCurrent] = useState<string>("/");
   const [dirs, setDirs] = useState<readonly { name: string; path: string }[]>(
@@ -83,27 +77,22 @@ export function DirectoryPickerSheet(
       onRequestClose={props.onClose}
     >
       <View
-        style={[
-          styles.container,
-          {
-            backgroundColor: palette.background,
-            paddingTop: insets.top + spacing.x1,
-            paddingBottom: insets.bottom,
-          },
-        ]}
+        className="bg-background flex-1"
+        style={{
+          paddingTop: insets.top + 4,
+          paddingBottom: insets.bottom,
+        }}
       >
         {/* 顶栏 */}
-        <View style={[styles.header, { borderBottomColor: palette.border }]}>
+        <View className="border-border flex-row items-center gap-3 border-b px-3 pb-2">
           <Pressable onPress={props.onClose} hitSlop={12}>
-            <AppIcon name="close" color={palette.text} size={22} />
+            <Icon as={X} className="text-foreground size-[22px]" />
           </Pressable>
-          <Text style={[styles.title, { color: palette.text }]}>
+          <Text className="text-foreground flex-1 text-base font-semibold">
             选择电脑上的目录
           </Text>
           <Pressable onPress={props.onClose} hitSlop={12}>
-            <Text style={[styles.cancelText, { color: palette.brand }]}>
-              取消
-            </Text>
+            <Text className="text-muted-foreground text-sm">取消</Text>
           </Pressable>
         </View>
 
@@ -112,7 +101,7 @@ export function DirectoryPickerSheet(
           horizontal
           style={{ flexGrow: 0 }}
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={[styles.crumbs, { paddingRight: spacing.x3 }]}
+          contentContainerClassName="flex-row items-center gap-1 px-3 py-2"
         >
           <Crumb
             label="/"
@@ -142,10 +131,10 @@ export function DirectoryPickerSheet(
           })}
         </ScrollView>
         <View
-          style={{ paddingHorizontal: spacing.x4, paddingBottom: spacing.x2 }}
+          className="px-4 pb-2"
         >
           {!loading && dirs.length > 0 && (
-            <Text style={[styles.count, { color: palette.textSecondary }]}>
+            <Text className="text-muted-foreground pb-2 text-xs">
               共 {dirs.length} 个子目录
             </Text>
           )}
@@ -153,61 +142,56 @@ export function DirectoryPickerSheet(
         {/* 目录列表 */}
         <ScrollView
           ref={listRef}
-          style={styles.list}
+          className="flex-1 px-3"
           showsVerticalScrollIndicator
           scrollIndicatorInsets={{ right: 1 }}
-          contentContainerStyle={{ paddingBottom: spacing.x6 }}
+          contentContainerClassName="pb-6"
         >
-          {history.length > 0 && (
-            <Row name=".." detail="返回上级" onPress={back} />
-          )}
           {loading && (
-            <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            <Text className="text-muted-foreground p-3 text-[13px]">
               加载中…
             </Text>
           )}
-          {!loading && dirs.length === 0 && (
+          {!loading && dirs.length === 0 && history.length === 0 && (
             <Text
-              style={[
-                styles.hint,
-                {
-                  color:
-                    notice !== null ? palette.error : palette.textSecondary,
-                },
-              ]}
+              className={cn(
+                "p-3 text-[13px]",
+                notice !== null ? "text-destructive" : "text-muted-foreground",
+              )}
             >
               {notice !== null ? `读取失败：${notice}` : "没有子目录"}
             </Text>
           )}
-          {dirs.map((dir) => (
-            <Row
-              key={dir.path}
-              name={dir.name}
-              detail=""
-              onPress={() => enter(dir)}
-              chevron
-            />
-          ))}
+          {!loading && (dirs.length > 0 || history.length > 0) && (
+            <View className="bg-card border-border overflow-hidden rounded-xl border">
+              {history.length > 0 && (
+                <>
+                  <Row name=".." detail="返回上级" onPress={back} />
+                  <View className="bg-border h-px w-full" />
+                </>
+              )}
+              {dirs.map((dir, index) => (
+                <React.Fragment key={dir.path}>
+                  {index > 0 && <View className="bg-border h-px w-full" />}
+                  <Row name={dir.name} detail="" onPress={() => enter(dir)} chevron />
+                </React.Fragment>
+              ))}
+            </View>
+          )}
         </ScrollView>
 
         {/* 底部固定选择栏（避开 home indicator 由容器 paddingBottom 处理） */}
         <View
-          style={[
-            styles.footer,
-            {
-              borderTopColor: palette.border,
-              backgroundColor: palette.surface,
-            },
-          ]}
+          className="bg-card border-border flex-row items-center gap-3 border-t px-3 py-2"
         >
           <Text
-            style={[styles.footerPath, { color: palette.textSecondary }]}
+            className="text-muted-foreground flex-1 font-mono text-xs"
             numberOfLines={1}
           >
             {current}
           </Text>
-          <Pressable
-            style={[styles.pickButton, { backgroundColor: palette.brand }]}
+          <Button
+            className="h-auto px-4 py-2"
             onPress={() => {
               props.onPicked(current);
 
@@ -215,8 +199,8 @@ export function DirectoryPickerSheet(
               props.onClose();
             }}
           >
-            <Text style={styles.pickText}>选这个目录</Text>
-          </Pressable>
+            <Text className="text-[13px]">选这个目录</Text>
+          </Button>
         </View>
       </View>
     </Modal>
@@ -231,20 +215,19 @@ function Crumb(
     onPress: () => void;
   }>,
 ) {
-  const { palette } = usePreferences();
   return (
     <Pressable
-      style={[
-        styles.crumb,
-        props.current && { backgroundColor: palette.brandSoft },
-      ]}
+      className={cn(
+        "rounded-md px-2 py-1",
+        props.current && "bg-muted",
+      )}
       onPress={props.onPress}
     >
       <Text
-        style={[
-          styles.crumbText,
-          { color: props.current ? palette.brand : palette.textSecondary },
-        ]}
+        className={cn(
+          "max-w-[140px] text-xs",
+          props.current ? "text-foreground font-medium" : "text-muted-foreground",
+        )}
         numberOfLines={1}
       >
         {props.label}
@@ -261,25 +244,24 @@ function Row(
     chevron?: boolean;
   }>,
 ) {
-  const { palette } = usePreferences();
   return (
     <Pressable
-      style={[styles.row, { borderColor: palette.border }]}
+      className="active:bg-accent flex-row items-center gap-3 px-4 py-3"
       onPress={props.onPress}
     >
-      <View style={[styles.rowIcon, { backgroundColor: palette.surfaceMuted }]}>
-        <AppIcon name="chevron-right" color={palette.brand} size={16} />
+      <View className="bg-muted h-8 w-8 items-center justify-center rounded-md">
+        <Icon as={Folder} className="text-muted-foreground size-4" />
       </View>
-      <View style={styles.rowText}>
+      <View className="flex-1">
         <Text
-          style={[styles.rowName, { color: palette.text }]}
+          className="text-foreground text-sm font-medium"
           numberOfLines={1}
         >
           {props.name}
         </Text>
         {props.detail.length > 0 && (
           <Text
-            style={[styles.rowDetail, { color: palette.textSecondary }]}
+            className="text-muted-foreground mt-0.5 text-xs"
             numberOfLines={1}
           >
             {props.detail}
@@ -287,74 +269,8 @@ function Row(
         )}
       </View>
       {props.chevron === true && (
-        <AppIcon name="chevron-right" color={palette.textSecondary} size={16} />
+        <Icon as={ChevronRight} className="text-muted-foreground size-4" />
       )}
     </Pressable>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.x3,
-    paddingHorizontal: spacing.x3,
-    paddingBottom: spacing.x2,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  title: { fontSize: 16, flex: 1 },
-  pickButton: {
-    paddingHorizontal: spacing.x4,
-    paddingVertical: spacing.x2,
-    borderRadius: radii.round,
-  },
-  pickText: { color: "#FFFFFF", fontSize: 13 },
-  crumbs: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: spacing.x3,
-    paddingVertical: spacing.x2,
-    gap: spacing.x1,
-  },
-  count: { fontSize: 12, paddingBottom: spacing.x2 },
-  crumb: {
-    paddingHorizontal: spacing.x2,
-    paddingVertical: spacing.x1,
-    borderRadius: radii.small,
-  },
-  crumbText: { fontSize: 12, maxWidth: 140 },
-  cancelText: { fontSize: 15 },
-  footer: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.x3,
-    paddingHorizontal: spacing.x3,
-    paddingVertical: spacing.x2,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  footerPath: { flex: 1, fontSize: 12, fontFamily: "Menlo" },
-  list: { flex: 1, paddingHorizontal: spacing.x3 },
-  hint: { fontSize: 13, padding: spacing.x3 },
-  row: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: spacing.x2,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radii.control,
-    backgroundColor: "transparent",
-    padding: spacing.x2,
-    marginBottom: spacing.x2,
-  },
-  rowIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 1,
-  },
-  rowText: { flex: 1 },
-  rowName: { fontSize: 14 },
-  rowDetail: { fontSize: 12, marginTop: 2 },
-});

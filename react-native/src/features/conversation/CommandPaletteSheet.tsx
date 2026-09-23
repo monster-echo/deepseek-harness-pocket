@@ -2,17 +2,16 @@
  * 快捷命令 Sheet：单层命令列表，点按即以 /name 直接发送（免模型回合）。
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Pressable, ScrollView, View } from 'react-native';
+import { useCSSVariable } from 'uniwind';
 import { Sheet } from '../../design-system/Sheet';
 import { AppIcon } from '../../design-system/AppIcon';
-import { usePreferences } from '../../preferences/PreferencesProvider';
+import { Text } from '@/components/ui/text';
 import { useDshStore } from '../../state/dshStore';
-import { radii, spacing } from '../../theme/tokens';
 
 export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose: () => void; onCommand: (name: string) => void; onPickImage?: () => void }>): React.JSX.Element {
-  const { palette, textScale } = usePreferences()
-  styles = useMemo(() => makeStyles(textScale), [textScale])
+  const muted = useCSSVariable('--color-muted-foreground') as string | undefined;
   const onPickImage = props.onPickImage
   const [commands, setCommands] = useState<readonly { name: string; description: string }[]>([])
   const listCommands = useDshStore((s) => s.listCommands)
@@ -30,37 +29,37 @@ export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose:
 
   return (
     <Sheet visible={props.visible} title="快捷命令" onClose={props.onClose} scrollable snapPoints={['50%', '85%']}>
-      <ScrollView style={styles.list}>
+      <ScrollView className="max-h-[380px]">
         {onPickImage !== undefined && (
           <Pressable
-            style={({ pressed }) => [styles.row, { borderColor: palette.border }, pressed && { backgroundColor: palette.surfaceMuted }]}
+            className="border-border active:bg-muted mb-2 flex-row items-center gap-2 rounded-xl border p-3"
             onPress={() => {
               props.onClose()
               onPickImage()
             }}
           >
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.name, { color: palette.text }]}>添加图片</Text>
-              <Text style={[styles.desc, { color: palette.textSecondary }]} numberOfLines={1}>从相册选取，随消息发送</Text>
+            <View className="flex-1">
+              <Text className="text-foreground text-sm font-semibold">添加图片</Text>
+              <Text className="text-muted-foreground text-xs" numberOfLines={1}>从相册选取，随消息发送</Text>
             </View>
-            <AppIcon name="paperclip" color={palette.textSecondary} size={14} />
+            <AppIcon name="paperclip" color={muted} size={14} />
           </Pressable>
         )}
         {commands.map((cmd) => (
           <Pressable
             key={cmd.name}
-            style={({ pressed }) => [styles.row, { borderColor: palette.border }, pressed && { backgroundColor: palette.surfaceMuted }]}
+            className="border-border active:bg-muted mb-2 flex-row items-center gap-2 rounded-xl border p-3"
             onPress={() => run(cmd.name)}
           >
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.name, { color: palette.text, fontFamily: 'Menlo' }]}>/{cmd.name}</Text>
-              <Text style={[styles.desc, { color: palette.textSecondary }]} numberOfLines={1}>{cmd.description}</Text>
+            <View className="flex-1">
+              <Text className="text-foreground font-mono text-sm font-semibold">/{cmd.name}</Text>
+              <Text className="text-muted-foreground text-xs" numberOfLines={1}>{cmd.description}</Text>
             </View>
-            <AppIcon name="chevron-right" color={palette.textSecondary} size={14} />
+            <AppIcon name="chevron-right" color={muted} size={14} />
           </Pressable>
         ))}
         {commands.length === 0 && (
-          <Text style={[styles.empty, { color: palette.textSecondary }]}>
+          <Text className="text-muted-foreground p-3 text-center text-[13px]">
             {notice ?? '命令目录为空（需活跃会话）'}
           </Text>
         )}
@@ -68,14 +67,3 @@ export function CommandPaletteSheet(props: Readonly<{ visible: boolean; onClose:
     </Sheet>
   )
 }
-
-const makeStyles = (t: number) =>
-  StyleSheet.create({
-    list: { maxHeight: 380 },
-    row: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x3, marginBottom: spacing.x2 },
-    name: { fontSize: 14 * t, fontWeight: '600' },
-    desc: { fontSize: 12 * t },
-    empty: { fontSize: 13 * t, padding: spacing.x3, textAlign: 'center' },
-  })
-
-let styles = makeStyles(1)

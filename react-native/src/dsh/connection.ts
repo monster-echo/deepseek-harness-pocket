@@ -186,7 +186,7 @@ export class GatewayConnection {
   }
 }
 
-// ---------- REST（配对 / push token） ----------
+// ---------- REST（配对 / 扫码授权 / push token） ----------
 
 export async function restPost(path: string, body: unknown): Promise<unknown> {
   const token = await readAuthSessionToken()
@@ -201,7 +201,9 @@ export async function restPost(path: string, body: unknown): Promise<unknown> {
   })
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>
   if (!response.ok) {
-    throw new Error(typeof data['reason'] === 'string' ? data['reason'] : `HTTP ${response.status}`)
+    // Gateway 失败体有两种：{ ok: false, reason } 与 { error }，都把服务端文案透出给用户
+    const message = typeof data['reason'] === 'string' ? data['reason'] : data['error']
+    throw new Error(typeof message === 'string' ? message : `HTTP ${response.status}`)
   }
   return data
 }
@@ -209,6 +211,60 @@ export async function restPost(path: string, body: unknown): Promise<unknown> {
 export async function bindWorkerByCode(code: string, name?: string): Promise<{ workerId?: string }> {
   const result = (await restPost('/api/v1/pairing/bind', { code, name })) as { workerId?: string }
   return result
+}
+
+/**
+ * 手机扫码授权桌面端登录：把二维码里的电脑绑定到当前账号（Bearer = 手机会话）。
+ *
+ * 电脑名称/平台只用于二维码展示，真正绑定靠 code + hostKey；
+ * email 可选（协议里用于桌面端展示账号，未绑邮箱时不传）。
+ * 失败（码过期 410 / 未知 404 / 电脑未注册 422 等）由 restPost 抛出带服务端文案的 Error。
+ */
+export async function approveDeviceLink(
+  code: string,
+  email?: string,
+): Promise<{ workerId?: string; workerName?: string; alreadyBound?: boolean }> {
+  const body: { code: string; email?: string } = { code }
+  if (email !== undefined && email.length > 0) body.email = email
+  const result = (await restPost('/api/v1/devices/link/approve', body)) as {
+    workerId?: string
+    workerName?: string
+    alreadyBound?: boolean
+  }
+  return result
+}
+
+/**
+ * 扫到授权码后、确认前先问服务端「这是哪台电脑」（Telegram 同款两段式）。
+ *
+ * 返回的信息以服务端为准：电脑名优先取 gateway 侧已注册的 Worker 名，
+ * 而不是二维码里自称的名字——伪造二维码骗不出一个假身份。
+ * 失败（码过期 410 / 未知 404 / 已被他人使用 409）由 restPost 抛出带服务端文案的 Error。
+ */
+export async function previewDeviceLink(code: string): Promise<{
+  name: string
+  platform?: string
+  ip?: string
+  workerKnown: boolean
+  alreadyBound: boolean
+  expiresAt?: number
+}> {
+  const result = (await restPost('/api/v1/devices/link/preview', { code })) as {
+    name?: string
+    platform?: string
+    ip?: string
+    workerKnown?: boolean
+    alreadyBound?: boolean
+    expiresAt?: number
+  }
+  return {
+    name: result.name ?? '这台电脑',
+    platform: result.platform,
+    ip: result.ip,
+    workerKnown: result.workerKnown === true,
+    alreadyBound: result.alreadyBound === true,
+    expiresAt: result.expiresAt,
+  }
 }
 
 export async function registerPushToken(expoPushToken: string): Promise<void> {

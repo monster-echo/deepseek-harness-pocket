@@ -3,12 +3,12 @@
  * 数据来自 reducer 从 dsh 事件流解析的 sessionView.stats；缺失字段显示「—」。
  */
 
-import React, { useMemo } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import React from "react";
+import { View } from "react-native";
 import { Sheet } from "../../design-system/Sheet";
-import { usePreferences } from "../../preferences/PreferencesProvider";
+import { Text } from "@/components/ui/text";
+import { cn } from "@/lib/utils";
 import { useDshStore } from "../../state/dshStore";
-import { spacing } from "../../theme/tokens";
 
 function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -33,8 +33,6 @@ function ms(n: number): string {
 export function SessionInfoSheet(
   props: Readonly<{ visible: boolean; onClose: () => void }>,
 ): React.JSX.Element {
-  const { palette, textScale } = usePreferences();
-  styles = useMemo(() => makeStyles(textScale), [textScale]);
   const stats = useDshStore((s) => s.sessionView.stats);
   const totalUsage = useDshStore((s) => s.sessionView.totalUsage);
 
@@ -72,21 +70,17 @@ export function SessionInfoSheet(
       onClose={props.onClose}
       snapPoints={["50%", "80%"]}
     >
-      <View style={[styles.card, { backgroundColor: palette.surfaceMuted }]}>
-        {rows.map((row) => (
+      <View className="bg-card border-border overflow-hidden rounded-xl border">
+        {rows.map((row, index) => (
           <View
             key={row.label}
-            style={[styles.row, { borderBottomColor: palette.border }]}
+            className={cn(
+              'flex-row items-center justify-between px-4 py-2.5',
+              index < rows.length - 1 && 'border-border border-b',
+            )}
           >
-            <Text style={[styles.label, { color: palette.textSecondary }]}>
-              {row.label}
-            </Text>
-            <Text
-              style={[
-                styles.value,
-                { color: palette.text, fontFamily: "Menlo" },
-              ]}
-            >
+            <Text className="text-muted-foreground text-sm">{row.label}</Text>
+            <Text className="text-foreground font-mono text-sm">
               {row.value}
             </Text>
           </View>
@@ -95,20 +89,3 @@ export function SessionInfoSheet(
     </Sheet>
   );
 }
-
-const makeStyles = (t: number) =>
-  StyleSheet.create({
-    card: { borderRadius: 16, paddingHorizontal: spacing.x4, overflow: "hidden" },
-    row: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      paddingVertical: spacing.x2,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-    },
-    label: { fontSize: 14 * t },
-    value: { fontSize: 14 * t },
-    hint: { fontSize: 12 * t, marginTop: spacing.x3, textAlign: "center" },
-  });
-
-let styles = makeStyles(1);

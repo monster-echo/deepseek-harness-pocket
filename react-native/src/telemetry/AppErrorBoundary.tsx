@@ -1,6 +1,6 @@
 import React, { ErrorInfo, ReactNode } from 'react';
-import { Text, View } from 'react-native';
-import { styles } from '../theme/styles';
+import { View } from 'react-native';
+import { Text } from '@/components/ui/text';
 import { telemetry } from './Telemetry';
 
 type State = Readonly<{ failed: boolean }>;
@@ -24,11 +24,10 @@ export class AppErrorBoundary extends React.Component<
   render() {
     if (!this.state.failed) return this.props.children;
     return (
-      <View style={styles.centered}>
-        <Text style={styles.title}>页面暂时无法显示</Text>
-        <Text style={styles.secondary}>错误已经记录，请重新启动应用。</Text>
+      <View className="bg-background flex-1 items-center justify-center gap-4 p-6">
+        <Text className="text-foreground text-2xl font-bold">页面暂时无法显示</Text>
+        <Text className="text-muted-foreground text-sm">错误已经记录，请重新启动应用。</Text>
       </View>
     );
   }
 }
-

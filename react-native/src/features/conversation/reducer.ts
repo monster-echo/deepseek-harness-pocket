@@ -11,6 +11,13 @@
  */
 
 import type { DshSessionEvent } from '@deepseek-harness-pocket/bridge-protocol'
+import {
+  emptyTrajectoryFold,
+  foldTrajectory,
+  type TrajectoryFold,
+  type TrajectoryStep,
+} from './trajectory'
+import { describeTool, type TodoEntry, type ToolDescriptor } from './toolPresentation'
 
 // ---------- 视图模型 ----------
 
@@ -23,7 +30,7 @@ export type ToolStatus = 'running' | 'ok' | 'error' | 'stopped'
 
 export interface TimelineItem {
   readonly key: string
-  readonly kind: 'user' | 'assistant' | 'tool' | 'turnEnd' | 'compaction' | 'contextInjection'
+  readonly kind: 'user' | 'assistant' | 'tool' | 'turnEnd' | 'compaction' | 'contextInjection' | 'notice'
   /** 产生该条目的事件 seq（分叉 boundary 用） */
   readonly seq?: number
   // user
@@ -33,6 +40,8 @@ export interface TimelineItem {
   readonly streaming?: boolean
   readonly stopped?: boolean
   readonly usage?: { input: number; output: number }
+  /** assistant 消息 id（消息级反馈的 CAS 键，来自 message.id） */
+  readonly messageId?: string
   // tool
   readonly callId?: string
   readonly variant?: ToolVariant
@@ -41,11 +50,15 @@ export interface TimelineItem {
   readonly argsPretty?: string
   readonly outputPreview?: string
   readonly errorLine?: string
+  /** 结构化工具呈现（diff / 待办 / 技能 / 交付文件）；由 toolPresentation 归一化 */
+  readonly descriptor?: ToolDescriptor
   // turnEnd（turn-tail 统计，对齐 dsh TurnTailNodeView 时钟行）
   readonly turnReason?: 'completed' | 'error' | 'max-tokens' | 'aborted'
   readonly reasonMessage?: string
   readonly ranMs?: number
   readonly turnTokens?: { input: number; output: number }
+  /** 本回合 present 工具交付的文件（回合尾 chips，对齐 Web 的 Files changed） */
+  readonly files?: readonly string[]
   // compaction 标记行（对齐 dsh CompactionItem）
   readonly compaction?: { items: number; tokens: number; summaryText: string }
   // contextInjection（对齐 dsh ContextInjectionRow：非 user 来源的上下文注入）
@@ -77,6 +90,19 @@ export interface SessionStats {
   readonly turnOutput: number
 }
 
+/** 当前目标（对齐 dsh-goal 的 GoalProjection + 进程内 activation）。 */
+export interface GoalState {
+  readonly id: string
+  readonly revision: number
+  readonly objective: string
+  readonly phase: 'active' | 'paused' | 'blocked' | 'complete'
+  readonly blockedReason?: Readonly<{ code: string; message: string }>
+  readonly maxGoalRounds: number
+  readonly roundsStarted: number
+  /** 进程内续跑资格（goal/activation-changed；未知为 null） */
+  readonly activation: 'armed' | 'disarmed' | null
+}
+
 export interface SessionView {
   readonly items: readonly TimelineItem[]
   /** 当前流式 assistant 条目下标（-1 无） */
@@ -96,6 +122,16 @@ export interface SessionView {
   readonly openStep: { startTime: number; firstTokenTime: number } | null
   /** 跨事件 fold 状态：tool/call 派发时间（callId → time，用于 toolMs 累计） */
   readonly pendingCalls: Record<string, number>
+  /** 轨迹投影（批次 1：移动端「轨迹」页数据源；steps 按 seq 递增） */
+  readonly trajectory: readonly TrajectoryStep[]
+  /** 轨迹 fold 的持久状态（turn 计数 / pending 工具下标）；UI 只读 trajectory */
+  readonly trajectoryFold: TrajectoryFold
+  /** 最近一次 todo_write 的待办清单（composer 上方 To-do dock 数据源） */
+  readonly todos: readonly TodoEntry[]
+  /** 当前目标（composer 上方 GoalBar 数据源；null = 无目标） */
+  readonly goal: GoalState | null
+  /** 计划模式是否激活（plan/mode 事件；composer Plan chip 数据源） */
+  readonly planActive: boolean
 }
 
 export const emptyStats: SessionStats = {
@@ -103,7 +139,7 @@ export const emptyStats: SessionStats = {
 }
 
 export const emptySessionView: SessionView = {
-  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 }, permissionCurrent: null, totalUsage: { input: 0, output: 0 }, stats: emptyStats, openStep: null, pendingCalls: {},
+  items: [], streamingIndex: -1, agentStatus: 'unknown', turnStartAt: -1, turnUsage: { input: 0, output: 0 }, permissionCurrent: null, totalUsage: { input: 0, output: 0 }, stats: emptyStats, openStep: null, pendingCalls: {}, trajectory: [], trajectoryFold: emptyTrajectoryFold(), todos: [], goal: null, planActive: false,
 }
 
 // ---------- dsh 事件负载工具 ----------
@@ -234,6 +270,14 @@ interface MutableState {
   openStep: { startTime: number; firstTokenTime: number } | null
   /** tool/call 派发时间（callId → time，用于 toolMs 累计） */
   pendingCalls: Record<string, number>
+  /** 轨迹 fold 持久状态（turn 计数 + pending 工具下标） */
+  trajectoryFold: TrajectoryFold
+  /** 最近一次 todo_write 的待办清单 */
+  todos: TodoEntry[]
+  /** 当前目标 */
+  goal: GoalState | null
+  /** 计划模式 */
+  planActive: boolean
 }
 
 function ensureStreamingAssistant(state: MutableState, key: string): number {
@@ -282,7 +326,14 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     turnCacheTotal: 0,
     openStep: view.openStep,
     pendingCalls: view.pendingCalls,
+    trajectoryFold: view.trajectoryFold,
+    todos: [...view.todos],
+    goal: view.goal,
+    planActive: view.planActive,
   }
+
+  // 轨迹投影独立于时间线：所有事件都先过一遍 fold（未命中类型原样返回）
+  state.trajectoryFold = foldTrajectory(state.trajectoryFold, event)
 
   switch (event.type) {
     case 'user/message': {
@@ -350,6 +401,12 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     case 'assistant/message': {
       const message = data['message'] as Data | undefined
       const blocks = message !== undefined ? pickBlocks(message) : []
+      const rawMessageId = message?.['id']
+      const messageId = typeof rawMessageId === 'string'
+        ? rawMessageId
+        : rawMessageId !== undefined && rawMessageId !== null
+          ? String(rawMessageId)
+          : undefined
       const usageRaw = data['usage'] as Data | undefined
       const usage = usageRaw !== undefined && typeof usageRaw['inputTokens'] === 'number' && typeof usageRaw['outputTokens'] === 'number'
         ? { input: usageRaw['inputTokens'] as number, output: usageRaw['outputTokens'] as number }
@@ -383,9 +440,9 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       }
       if (state.streamingIndex >= 0) {
         const idx = state.streamingIndex
-        state.items[idx] = { ...state.items[idx]!, blocks, streaming: false, usage, seq: event.seq }
+        state.items[idx] = { ...state.items[idx]!, blocks, streaming: false, usage, seq: event.seq, ...(messageId !== undefined ? { messageId } : {}) }
       } else if (blocks.length > 0) {
-        state.items.push({ key: `a${event.seq}`, kind: 'assistant', blocks, streaming: false, usage, seq: event.seq })
+        state.items.push({ key: `a${event.seq}`, kind: 'assistant', blocks, streaming: false, usage, seq: event.seq, ...(messageId !== undefined ? { messageId } : {}) })
       }
       state.streamingIndex = -1
       break
@@ -397,17 +454,21 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       if (typeof callId !== 'string' || typeof name !== 'string') break
       const argsJson = typeof data['arguments'] === 'string' ? data['arguments'] : ''
       const { variant, summary } = toolPresentation(name, argsJson)
+      const descriptor = describeTool(name, argsJson)
       let argsPretty = argsJson
       try {
         argsPretty = JSON.stringify(JSON.parse(argsJson), null, 2)
       } catch {
         // 聚合不全时保持原样
       }
+      if (descriptor.kind === 'todo' && descriptor.todos !== undefined) {
+        state.todos = [...descriptor.todos]
+      }
       const existing = findToolIndex(state, callId)
       if (existing >= 0) {
-        state.items[existing] = { ...state.items[existing]!, variant, summary, argsPretty }
+        state.items[existing] = { ...state.items[existing]!, variant, summary, argsPretty, descriptor }
       } else {
-        state.items.push({ key: `t${event.seq}`, kind: 'tool', callId, variant, summary, toolStatus: 'running', argsPretty })
+        state.items.push({ key: `t${event.seq}`, kind: 'tool', callId, variant, summary, toolStatus: 'running', argsPretty, descriptor })
       }
       const t = (event as unknown as { time?: unknown }).time
       if (typeof t === 'number') state.pendingCalls[callId] = t
@@ -504,6 +565,17 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       // turn 结束：清掉未落回的 tool 派发记录（对齐 dsh，取消/失败回合的残余调用丢弃）
       state.pendingCalls = {}
       state.openStep = null
+      // 回扫本回合（直到上一条 user 消息）的 present 交付文件——无需跨事件状态，
+      // 每次 reduce 都是纯函数式的，瞬态字段会在事件之间丢失。
+      const delivered: string[] = []
+      for (let i = state.items.length - 1; i >= 0; i -= 1) {
+        const entry = state.items[i]!
+        // 本回合边界：上一条用户消息或上一个回合尾
+        if (entry.kind === 'user' || entry.kind === 'turnEnd') break
+        if (entry.kind === 'tool' && entry.descriptor?.kind === 'present' && entry.descriptor.files !== undefined) {
+          delivered.unshift(...entry.descriptor.files)
+        }
+      }
       state.items.push({
         key: `e${event.seq}`,
         kind: 'turnEnd',
@@ -511,6 +583,7 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
         reasonMessage: message,
         ranMs,
         turnTokens,
+        ...(delivered.length > 0 ? { files: delivered } : {}),
       })
       state.agentStatus = 'idle'
       break
@@ -546,6 +619,83 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
       break
     }
 
+    case 'plan/mode': {
+      // 整值事件：{ active: boolean }
+      if (typeof data['active'] === 'boolean') state.planActive = data['active']
+      break
+    }
+
+    case 'goal/change': {
+      // 完整快照变更：clear 为墓碑，其余携带 GoalSnapshot
+      const operation = data['operation']
+      if (operation === 'clear') {
+        state.goal = null
+        break
+      }
+      const snapshot = data['goal'] as Data | undefined
+      if (snapshot === undefined || typeof snapshot['id'] !== 'string' || typeof snapshot['objective'] !== 'string') break
+      const phaseRaw = snapshot['phase']
+      const phase: GoalState['phase'] = phaseRaw === 'paused' || phaseRaw === 'blocked' || phaseRaw === 'complete'
+        ? phaseRaw
+        : 'active'
+      const reason = snapshot['blockedReason'] as Data | undefined
+      state.goal = {
+        id: snapshot['id'],
+        revision: typeof snapshot['revision'] === 'number' ? snapshot['revision'] : 0,
+        objective: snapshot['objective'],
+        phase,
+        ...(reason !== undefined && typeof reason['message'] === 'string'
+          ? { blockedReason: { code: typeof reason['code'] === 'string' ? reason['code'] : 'blocked', message: reason['message'] } }
+          : {}),
+        maxGoalRounds: typeof snapshot['maxGoalRounds'] === 'number' ? snapshot['maxGoalRounds'] : 0,
+        roundsStarted: typeof data['roundsStarted'] === 'number' ? data['roundsStarted'] : 0,
+        activation: state.goal?.activation ?? null,
+      }
+      break
+    }
+
+    case 'goal/activation-changed': {
+      // 进程内续跑资格变化；无 goal 表示当前无目标
+      const live = data['goal'] as Data | undefined
+      if (live === undefined || typeof live['id'] !== 'string') break
+      if (state.goal === null || state.goal.id !== live['id']) break
+      const activation = live['activation']
+      if (activation !== 'armed' && activation !== 'disarmed') break
+      state.goal = { ...state.goal, activation }
+      break
+    }
+
+    case 'llm/retry':
+    case 'llm/retry-started': {
+      // 批次 1：模型重试可见（对齐 Web 的 model-retry 行）
+      const attempt = pickNum(data, 'attempt', 'retryCount', 'retry')
+      const delayMs = pickNum(data, 'delayMs', 'delay', 'backoffMs')
+      const parts = ['模型重试']
+      if (attempt >= 0) parts.push(`#${attempt}`)
+      if (delayMs >= 0) parts.push(`${delayMs}ms 后`)
+      state.items.push({ key: `n${event.seq}`, kind: 'notice', text: parts.join(' · '), seq: event.seq })
+      break
+    }
+
+    case 'system/message': {
+      // 批次 1：系统消息可见
+      const content = data['content']
+      const text = Array.isArray(content)
+        ? content
+            .map((raw) => {
+              if (typeof raw !== 'object' || raw === null) return ''
+              const b = raw as Data
+              return typeof b['text'] === 'string' ? b['text'] : ''
+            })
+            .join('')
+            .trim()
+        : ''
+      if (text.length > 0) {
+        state.items.push({ key: `n${event.seq}`, kind: 'notice', text, seq: event.seq })
+      }
+      break
+    }
+
     case 'step/start': {
       const t = (event as unknown as { time?: unknown }).time
       state.openStep = { startTime: typeof t === 'number' ? t : -1, firstTokenTime: -1 }
@@ -575,6 +725,11 @@ export function reduceSessionEvent(view: SessionView, event: DshSessionEvent): S
     stats: state.stats,
     openStep: state.openStep,
     pendingCalls: state.pendingCalls,
+    trajectory: state.trajectoryFold.steps,
+    trajectoryFold: state.trajectoryFold,
+    todos: state.todos,
+    goal: state.goal,
+    planActive: state.planActive,
   }
 }
 
@@ -593,6 +748,12 @@ export interface SessionListItem {
   readonly live: boolean
   readonly agentStatus: string | null
   readonly title: string
+  /** fork 来源会话 id（血缘面包屑） */
+  readonly parentSession: string | null
+  /** 子代理会话标记 */
+  readonly origin: 'subagent' | null
+  /** 委派深度（顶层 0） */
+  readonly delegationDepth: number
 }
 
 export function projectSessionList(raw: unknown): readonly SessionListItem[] {
@@ -613,6 +774,13 @@ export function projectSessionList(raw: unknown): readonly SessionListItem[] {
       lastSeq: typeof e['lastSeq'] === 'number' ? e['lastSeq'] : -1,
       live: e['live'] === true,
       agentStatus: typeof e['agentStatus'] === 'string' ? e['agentStatus'] : null,
+      parentSession: typeof e['parentSession'] === 'string'
+        ? e['parentSession']
+        : e['parentSession'] !== undefined && e['parentSession'] !== null
+          ? String(e['parentSession'])
+          : null,
+      origin: e['origin'] === 'subagent' ? 'subagent' : null,
+      delegationDepth: typeof e['delegationDepth'] === 'number' ? e['delegationDepth'] : 0,
       title: semanticTitle ?? (cwd !== null ? cwd.split('/').filter(Boolean).pop() ?? cwd : `会话 ${new Date(createdAt).toLocaleString()}`),
     })
   }

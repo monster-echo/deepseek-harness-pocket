@@ -1,11 +1,59 @@
 import React, { useState } from 'react';
-import { ScrollView, Text, TextInput, View } from 'react-native';
-import { AppButton, AppCard, ListRow, PageHeader, ToggleRow } from '../design-system/components';
+import { Pressable, ScrollView, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { ArrowLeft, Check, ChevronRight, Trash } from 'lucide-react-native';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Icon } from '@/components/ui/icon';
+import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
+import { Text } from '@/components/ui/text';
 import { usePreferences } from '../preferences/PreferencesProvider';
 import { useApp } from '../state/AppStore';
-import { styles } from '../theme/styles';
+import { telemetry } from '../telemetry/Telemetry';
 
 export type PreferenceKind = 'notifications' | 'general' | 'privacy' | 'appearance' | 'language';
+
+/** RNR 顶栏：返回键（React Navigation canGoBack）+ 居中标题 + 右侧动作。 */
+function ScreenHeader({ title, rightAction }: Readonly<{
+  title: string;
+  rightAction?: Readonly<{ label: string; onPress: () => void; disabled?: boolean }>;
+}>) {
+  const navigation = useNavigation();
+  const canGoBack = navigation.canGoBack();
+  return (
+    <View className="border-border/60 h-[58px] flex-row items-center justify-between border-b px-2">
+      <View className="w-[88px] items-start">
+        {canGoBack ? (
+          <Button
+            accessibilityLabel="返回"
+            onPress={() => navigation.goBack()}
+            size="icon"
+            variant="ghost"
+          >
+            <Icon as={ArrowLeft} className="size-5" />
+          </Button>
+        ) : null}
+      </View>
+      <Text className="absolute left-[88px] right-[88px] text-center text-[17px] font-bold">
+        {title}
+      </Text>
+      <View className="w-[88px] items-end">
+        {rightAction ? (
+          <Button
+            accessibilityLabel={rightAction.label}
+            disabled={rightAction.disabled}
+            onPress={rightAction.onPress}
+            size="sm"
+            variant="ghost"
+          >
+            <Text className="text-sm font-bold">{rightAction.label}</Text>
+          </Button>
+        ) : null}
+      </View>
+    </View>
+  );
+}
 
 export function PreferenceScreen({ kind, title }: Readonly<{
   kind: PreferenceKind;
@@ -23,25 +71,33 @@ export function PreferenceScreen({ kind, title }: Readonly<{
   };
   const pageTitle = kind === 'appearance' ? text('appearance')
     : kind === 'language' ? text('language') : title;
+  const saveLabel = busy ? text('saving') : text('save');
   return (
-    <View style={styles.page}>
-      <PageHeader title={pageTitle} />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <AppCard>
-          <PreferenceFields
-            enabled={enabled}
-            kind={kind}
-            option={option}
-            setEnabled={setEnabled}
-            setOption={setOption}
-          />
-        </AppCard>
-        <AppButton
+    <View className="bg-background flex-1">
+      <ScreenHeader title={pageTitle} />
+      <ScrollView contentContainerClassName="gap-4 p-4">
+        <Card className="gap-0 py-0">
+          <CardContent className="gap-3 py-4">
+            <PreferenceFields
+              enabled={enabled}
+              kind={kind}
+              option={option}
+              setEnabled={setEnabled}
+              setOption={setOption}
+            />
+          </CardContent>
+        </Card>
+        <Button
+          className="min-h-[52px] w-full"
           disabled={busy || !user}
-          label={busy ? text('saving') : text('save')}
-          icon="check"
-          onPress={() => void save()}
-        />
+          onPress={() => {
+            telemetry.track('ui_action', { action_id: `button.${saveLabel}` });
+            void save();
+          }}
+        >
+          <Icon as={Check} className="size-5" />
+          <Text>{saveLabel}</Text>
+        </Button>
       </ScrollView>
     </View>
   );
@@ -57,19 +113,50 @@ function PreferenceFields({ enabled, kind, option, setEnabled, setOption }: Read
   const { text } = usePreferences();
   if (kind === 'appearance') return <>
     {(['system', 'light', 'dark'] as const).map((value) => (
-      <ListRow
+      <Pressable
         key={value}
-        label={text(value)}
-        onPress={() => setOption(value)}
-        value={option === value ? text('selected') : ''}
-      />
+        className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4 active:bg-accent/50"
+        onPress={() => {
+          telemetry.track('ui_action', { action_id: `row.${text(value)}` });
+          setOption(value);
+        }}
+      >
+        <Text className="flex-1 text-base">{text(value)}</Text>
+        {option === value ? <Text className="text-muted-foreground text-sm">{text('selected')}</Text> : null}
+        <Icon as={ChevronRight} className="text-muted-foreground size-[18px]" />
+      </Pressable>
     ))}
   </>;
   if (kind === 'language') return <>
-    <ListRow label={text('chinese')} onPress={() => setOption('zh-CN')} value={option === 'zh-CN' ? text('selected') : ''} />
-    <ListRow label={text('english')} onPress={() => setOption('en-US')} value={option === 'en-US' ? text('selected') : ''} />
+    <Pressable
+      className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4 active:bg-accent/50"
+      onPress={() => {
+        telemetry.track('ui_action', { action_id: `row.${text('chinese')}` });
+        setOption('zh-CN');
+      }}
+    >
+      <Text className="flex-1 text-base">{text('chinese')}</Text>
+      {option === 'zh-CN' ? <Text className="text-muted-foreground text-sm">{text('selected')}</Text> : null}
+      <Icon as={ChevronRight} className="text-muted-foreground size-[18px]" />
+    </Pressable>
+    <Pressable
+      className="border-border/50 min-h-[54px] flex-row items-center gap-3 border-b px-4 active:bg-accent/50"
+      onPress={() => {
+        telemetry.track('ui_action', { action_id: `row.${text('english')}` });
+        setOption('en-US');
+      }}
+    >
+      <Text className="flex-1 text-base">{text('english')}</Text>
+      {option === 'en-US' ? <Text className="text-muted-foreground text-sm">{text('selected')}</Text> : null}
+      <Icon as={ChevronRight} className="text-muted-foreground size-[18px]" />
+    </Pressable>
   </>;
-  return <ToggleRow label={preferenceLabel(kind)} value={enabled} onChange={setEnabled} />;
+  return (
+    <View className="min-h-[54px] flex-row items-center gap-3 px-4">
+      <Text className="flex-1 text-base">{preferenceLabel(kind)}</Text>
+      <Switch checked={enabled} onCheckedChange={setEnabled} />
+    </View>
+  );
 }
 
 function preferenceInitial(kind: PreferenceKind, settings?: Readonly<Record<string, unknown>>) {
@@ -108,25 +195,30 @@ export function DeleteAccountScreen() {
     onConfirm: async () => { if (await deleteAccount(password)) replace('home'); },
   });
   return (
-    <View style={styles.page}>
-      <PageHeader title="注销账户" />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.secondary}>请输入当前密码完成重新认证。</Text>
-        <TextInput
+    <View className="bg-background flex-1">
+      <ScreenHeader title="注销账户" />
+      <ScrollView contentContainerClassName="gap-4 p-4">
+        <Text className="text-muted-foreground text-sm">请输入当前密码完成重新认证。</Text>
+        <Input
           accessibilityLabel="当前密码"
+          className="min-h-[52px]"
           onChangeText={setPassword}
           placeholder="当前密码"
           secureTextEntry
-          style={styles.input}
           value={password}
         />
-        <AppButton
+        <Button
+          className="min-h-[52px] w-full"
           disabled={busy || !password}
-          label="永久删除账户"
-          icon="trash"
-          variant="danger"
-          onPress={requestDeletion}
-        />
+          onPress={() => {
+            telemetry.track('ui_action', { action_id: 'button.永久删除账户' });
+            requestDeletion();
+          }}
+          variant="destructive"
+        >
+          <Icon as={Trash} className="size-5" />
+          <Text>永久删除账户</Text>
+        </Button>
       </ScrollView>
     </View>
   );

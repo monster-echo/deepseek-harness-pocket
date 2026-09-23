@@ -1,19 +1,28 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Image, Pressable, View } from 'react-native';
 import * as ExpoSplashScreen from 'expo-splash-screen';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { AppButton } from '../design-system/components';
+import { useCSSVariable } from 'uniwind';
+import { Button } from '@/components/ui/button';
+import { Text } from '@/components/ui/text';
 import { PromoIllustration } from '../design-system/PromoIllustration';
 import { useApp } from '../state/AppStore';
-import { usePreferences } from '../preferences/PreferencesProvider';
 import { RuntimeConfig } from '../domain/models';
-import { colors, radii, spacing } from '../theme/tokens';
-import { styles } from '../theme/styles';
+import { telemetry } from '../telemetry/Telemetry';
 
-const LogoImage = require('../../assets/splash-icon.png');
+const LogoImage = require('../../assets/splash-icon.png'); // eslint-disable-line @typescript-eslint/no-require-imports
 
 // 品牌闪屏阶段常量
 const MAX_SPLASH_WAIT_MS = 8000; // fetch 无显式超时，最长等待兜底防挂死
+
+// 绝对定位填充（Animated.View / VideoView / Image 不支持 uniwind className）
+const ABSOLUTE_FILL = {
+  position: 'absolute',
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+} as const;
 
 // ── 启动门（原品牌闪屏入口）──────────────────────────────────────────
 // 本屏只是 bootstrap 等待门：原生 logo → （极短 loading）→ 分流落地。
@@ -22,7 +31,7 @@ const MAX_SPLASH_WAIT_MS = 8000; // fetch 无显式超时，最长等待兜底�
 // 仅当服务端配置了 config.splash 且在线时才展示品牌闪屏活动（可选项）。
 export function SplashScreen() {
   const { replace, config, bootstrapped, online, signedIn } = useApp();
-  const { palette } = usePreferences();
+  const primary = useCSSVariable('--color-primary') as string;
   const [countdown, setCountdown] = useState<number | null>(null);
   const doneRef = useRef(false);
 
@@ -73,14 +82,17 @@ export function SplashScreen() {
     // 阶段 loading：logo + appName + 转圈。bootstrap 通常几百 ms，
     // 不设最短展示时间——配置未返回即分流，默认体验无闪屏。
     return (
-      <View accessibilityLabel="启动中" style={[styles.centered, { backgroundColor: palette.background }]}>
+      <View
+        accessibilityLabel="启动中"
+        className="bg-background flex-1 items-center justify-center gap-4 p-6"
+      >
         <Image
           source={LogoImage}
-          style={launchStyles.logoMark}
+          className="h-12 w-12"
           accessibilityLabel="品牌图标"
         />
-        <Text style={styles.title}>{config.brand.appName}</Text>
-        <ActivityIndicator color={colors.brand} style={launchStyles.loadingSpinner} />
+        <Text className="text-foreground text-[28px] font-bold">{config.brand.appName}</Text>
+        <ActivityIndicator color={primary} className="mt-4" />
       </View>
     );
   }
@@ -90,10 +102,10 @@ export function SplashScreen() {
   if (!splash) return null;
   const canSkip = splash.skippable !== false;
   return (
-    <View style={[launchStyles.splashRoot, { backgroundColor: palette.background }]}>
-      <SplashMedia splash={splash} background={palette.background} />
-      <View pointerEvents="box-none" style={launchStyles.overlay}>
-        <View style={launchStyles.topBar}>
+    <View className="bg-background flex-1">
+      <SplashMedia splash={splash} />
+      <View pointerEvents="box-none" className="absolute inset-0 justify-between p-3">
+        <View className="items-end">
           <SkipCapsule canSkip={canSkip} countdown={Math.max(countdown, 0)} onSkip={enterApp} />
         </View>
       </View>
@@ -112,9 +124,9 @@ function SkipCapsule({
       accessibilityLabel={`跳过闪屏，剩余 ${countdown} 秒`}
       accessibilityRole="button"
       onPress={onSkip}
-      style={launchStyles.skipCapsule}
+      className="bg-black/40 min-h-9 min-w-[72px] items-center justify-center rounded-full px-3"
     >
-      <Text style={launchStyles.skipCapsuleText}>
+      <Text className="text-sm font-semibold text-white">
         {canSkip ? `${countdown}s 跳过` : `${countdown}s`}
       </Text>
     </Pressable>
@@ -126,8 +138,7 @@ function SkipCapsule({
 // 媒体加载期间显示白底 logo 占位，加载完成后淡入，避免等待期黑屏。
 function SplashMedia({
   splash,
-  background,
-}: Readonly<{ splash: NonNullable<RuntimeConfig['splash']>; background: string }>) {
+}: Readonly<{ splash: NonNullable<RuntimeConfig['splash']> }>) {
   const [failed, setFailed] = useState(false);
   const [mediaReady, setMediaReady] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
@@ -159,19 +170,19 @@ function SplashMedia({
   const hasMedia = (splash.videoUrl || splash.imageUrl) && !failed;
 
   return (
-    <View style={[launchStyles.splashMediaRoot, { backgroundColor: background }]}>
+    <View className="bg-background flex-1">
       {/* 媒体加载占位：app 背景色 + 品牌 logo，避免等待期黑屏/色差 */}
-      <View style={[launchStyles.mediaPlaceholder, { backgroundColor: background }]}>
-        <Image source={LogoImage} style={launchStyles.placeholderLogo} accessibilityLabel="品牌图标" />
+      <View className="bg-background absolute inset-0 items-center justify-center">
+        <Image source={LogoImage} className="h-12 w-12 opacity-60" accessibilityLabel="品牌图标" />
       </View>
       {hasMedia ? (
-        <Animated.View style={[StyleSheet.absoluteFill, { opacity: fade }]}>
+        <Animated.View style={[ABSOLUTE_FILL, { opacity: fade }]}>
           {splash.videoUrl ? (
             <VideoView
               contentFit="cover"
               nativeControls={false}
               player={player}
-              style={StyleSheet.absoluteFill}
+              style={ABSOLUTE_FILL}
             />
           ) : (
             <Image
@@ -180,17 +191,17 @@ function SplashMedia({
               onLoad={() => setMediaReady(true)}
               resizeMode="cover"
               source={{ uri: splash.imageUrl ?? undefined }}
-              style={StyleSheet.absoluteFill}
+              style={ABSOLUTE_FILL}
             />
           )}
         </Animated.View>
       ) : (
         // 无媒体或加载失败 → 品牌 fallback（内置插画 + 活动文案）
-        <View style={[StyleSheet.absoluteFill, launchStyles.fallback, { backgroundColor: background }]}>
+        <View className="bg-background absolute inset-0 flex-1 items-center justify-center gap-2 p-6">
           <PromoIllustration />
-          <Text style={launchStyles.badge}>{splash.badge}</Text>
-          <Text style={styles.title}>{splash.title}</Text>
-          <Text style={styles.secondary}>{splash.description}</Text>
+          <Text className="text-primary text-[13px] font-bold">{splash.badge}</Text>
+          <Text className="text-foreground text-[28px] font-bold">{splash.title}</Text>
+          <Text className="text-muted-foreground text-sm">{splash.description}</Text>
         </View>
       )}
     </View>
@@ -200,59 +211,21 @@ function SplashMedia({
 export function OnboardingScreen() {
   const { replace } = useApp();
   return (
-    <View style={styles.centered}>
+    <View className="flex-1 items-center justify-center gap-4 p-6">
       <PromoIllustration />
-      <Text style={styles.title}>三步了解核心功能</Text>
-      <Text style={styles.secondary}>首次安装展示，完成后不会重复出现。</Text>
-      <View style={launchStyles.fullWidth}>
-        <AppButton label="完成引导" onPress={() => replace('home')} />
+      <Text className="text-foreground text-[28px] font-bold">三步了解核心功能</Text>
+      <Text className="text-muted-foreground text-sm">首次安装展示，完成后不会重复出现。</Text>
+      <View className="w-full">
+        <Button
+          className="min-h-[52px] w-full"
+          onPress={() => {
+            telemetry.track('ui_action', { action_id: 'button.完成引导' });
+            replace('home');
+          }}
+        >
+          <Text>完成引导</Text>
+        </Button>
       </View>
     </View>
   );
 }
-
-const launchStyles = StyleSheet.create({
-  splashRoot: { flex: 1 },
-  splashMediaRoot: { flex: 1 },
-  mediaPlaceholder: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  placeholderLogo: { width: 48, height: 48, opacity: 0.6 },
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    justifyContent: 'space-between',
-    padding: spacing.x3,
-  },
-  topBar: { alignItems: 'flex-end' },
-  skipCapsule: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 36,
-    minWidth: 72,
-    paddingHorizontal: spacing.x3,
-    borderRadius: radii.round,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  skipCapsuleText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
-  fallback: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.x2,
-    padding: spacing.x6,
-  },
-  logoMark: { width: 48, height: 48 },
-  badge: { color: colors.brand, fontSize: 13, fontWeight: '700' },
-  fullWidth: { width: '100%' },
-  loadingSpinner: { marginTop: spacing.x4 },
-});

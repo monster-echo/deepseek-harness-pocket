@@ -1,0 +1,173 @@
+@import "tailwindcss";
+@import "uniwind";
+
+@import "tw-animate-css";
+
+/*
+ * 设计令牌：**shadcn/ui 默认主题**（neutral）
+ *
+ * 约定（与 RNR / shadcn 官方一致）：
+ *   1. primary = 近黑（浅色）/ 近白（深色），配合 `bg-primary text-primary-foreground`；
+ *      蓝色只作为可选强调色 `--color-accent-soft` / `--color-hue-blue` 使用，
+ *      不参与 primary，保证「shadcn 味」不被品牌色带偏。
+ *   2. 面与线：`--color-background`（页面）/ `--color-card`（卡片，靠 border + shadow 浮起）/
+ *      `--color-border`（1px 描边；hairline 是它的别名）。
+ *   3. 状态色语义化：destructive / success / warning / info，
+ *      界面里禁止再写 amber / emerald 等调色板类。
+ *   4. 图标彩块：--color-tint-*（底）+ --color-hue-*（字形）。
+ *
+ * 兼容：RNR 现有变量名（background / foreground / card / muted / border / primary …）保持不变，
+ * 因此老页面的 className 不需要重命名即可继承新视觉。
+ */
+
+@theme {
+  --radius: 0.625rem;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+
+  --spacing-hairline: hairlineWidth();
+}
+
+@layer theme {
+  :root {
+    @variant light {
+      --color-background: oklch(1 0 0);
+      --color-foreground: oklch(0.145 0 0);
+      --color-card: oklch(1 0 0);
+      --color-card-foreground: oklch(0.145 0 0);
+      --color-popover: oklch(1 0 0);
+      --color-popover-foreground: oklch(0.145 0 0);
+
+      --color-primary: oklch(0.205 0 0);
+      --color-primary-foreground: oklch(0.985 0 0);
+      --color-secondary: oklch(0.97 0 0);
+      --color-secondary-foreground: oklch(0.205 0 0);
+      --color-muted: oklch(0.97 0 0);
+      --color-muted-foreground: oklch(0.556 0 0);
+      --color-accent: oklch(0.97 0 0);
+      --color-accent-foreground: oklch(0.205 0 0);
+
+      --color-border: oklch(0.922 0 0);
+      --color-input: oklch(0.922 0 0);
+      --color-ring: oklch(0.708 0 0);
+      /* 分组内容区的浅底（shadcn 里通常是 muted） */
+      --color-canvas: oklch(0.97 0 0);
+      --color-hairline: oklch(0.922 0 0);
+
+      /* 可选强调色（链接 / 选中 / 高亮），不参与 primary */
+      --color-accent-soft: oklch(0.9555 0.0212 259.1907);
+      --color-accent-soft-foreground: oklch(0.488 0.217 262);
+
+      --color-destructive: oklch(0.577 0.245 27.325);
+      --color-destructive-foreground: oklch(0.985 0 0);
+      --color-destructive-soft: oklch(0.96 0.02 20);
+      --color-success: oklch(0.6 0.14 150);
+      --color-success-foreground: oklch(0.985 0 0);
+      --color-success-soft: oklch(0.96 0.03 150);
+      --color-warning: oklch(0.68 0.16 60);
+      --color-warning-foreground: oklch(0.985 0 0);
+      --color-warning-soft: oklch(0.96 0.03 70);
+      --color-info: oklch(0.55 0.2 260);
+      --color-info-foreground: oklch(0.985 0 0);
+      --color-info-soft: oklch(0.9555 0.0212 259.1907);
+
+      /* 图标彩块（底 tint + 字形 hue） */
+      --color-tint-blue: oklch(0.9555 0.0212 259.1907);
+      --color-tint-violet: oklch(0.95 0.03 300);
+      --color-tint-orange: oklch(0.96 0.03 70);
+      --color-tint-green: oklch(0.96 0.03 150);
+      --color-tint-teal: oklch(0.955 0.023 205);
+      --color-tint-red: oklch(0.96 0.02 20);
+      --color-hue-blue: oklch(0.55 0.2 260);
+      --color-hue-violet: oklch(0.55 0.22 288);
+      --color-hue-orange: oklch(0.68 0.16 60);
+      --color-hue-green: oklch(0.6 0.14 150);
+      --color-hue-teal: oklch(0.62 0.11 205);
+      --color-hue-red: oklch(0.577 0.245 27.325);
+
+      --color-chart-1: oklch(0.646 0.222 41.116);
+      --color-chart-2: oklch(0.6 0.118 184.704);
+      --color-chart-3: oklch(0.398 0.07 227.392);
+      --color-chart-4: oklch(0.828 0.189 84.429);
+      --color-chart-5: oklch(0.769 0.188 70.08);
+      --color-sidebar: oklch(0.985 0 0);
+      --color-sidebar-foreground: oklch(0.145 0 0);
+      --color-sidebar-primary: oklch(0.205 0 0);
+      --color-sidebar-primary-foreground: oklch(0.985 0 0);
+      --color-sidebar-accent: oklch(0.97 0 0);
+      --color-sidebar-accent-foreground: oklch(0.205 0 0);
+      --color-sidebar-border: oklch(0.922 0 0);
+      --color-sidebar-ring: oklch(0.708 0 0);
+    }
+
+    @variant dark {
+      --color-background: oklch(0.145 0 0);
+      --color-foreground: oklch(0.985 0 0);
+      --color-card: oklch(0.205 0 0);
+      --color-card-foreground: oklch(0.985 0 0);
+      --color-popover: oklch(0.205 0 0);
+      --color-popover-foreground: oklch(0.985 0 0);
+
+      --color-primary: oklch(0.922 0 0);
+      --color-primary-foreground: oklch(0.205 0 0);
+      --color-secondary: oklch(0.269 0 0);
+      --color-secondary-foreground: oklch(0.985 0 0);
+      --color-muted: oklch(0.269 0 0);
+      --color-muted-foreground: oklch(0.708 0 0);
+      --color-accent: oklch(0.269 0 0);
+      --color-accent-foreground: oklch(0.985 0 0);
+
+      --color-border: oklch(1 0 0 / 10%);
+      --color-input: oklch(1 0 0 / 15%);
+      --color-ring: oklch(0.556 0 0);
+      --color-canvas: oklch(0.205 0 0);
+      --color-hairline: oklch(1 0 0 / 10%);
+
+      --color-accent-soft: oklch(0.2816 0.0676 257.6421);
+      --color-accent-soft-foreground: oklch(0.72 0.15 258);
+
+      --color-destructive: oklch(0.704 0.191 22.216);
+      --color-destructive-foreground: oklch(0.985 0 0);
+      --color-destructive-soft: oklch(0.3 0.05 25);
+      --color-success: oklch(0.7 0.14 150);
+      --color-success-foreground: oklch(0.145 0 0);
+      --color-success-soft: oklch(0.28 0.05 150);
+      --color-warning: oklch(0.78 0.15 65);
+      --color-warning-foreground: oklch(0.145 0 0);
+      --color-warning-soft: oklch(0.3 0.05 70);
+      --color-info: oklch(0.65 0.18 260);
+      --color-info-foreground: oklch(0.145 0 0);
+      --color-info-soft: oklch(0.2816 0.0676 257.6421);
+
+      --color-tint-blue: oklch(0.2816 0.0676 257.6421);
+      --color-tint-violet: oklch(0.29 0.06 296);
+      --color-tint-orange: oklch(0.3 0.05 70);
+      --color-tint-green: oklch(0.28 0.05 150);
+      --color-tint-teal: oklch(0.29 0.035 207);
+      --color-tint-red: oklch(0.29 0.05 25);
+      --color-hue-blue: oklch(0.72 0.15 258);
+      --color-hue-violet: oklch(0.72 0.17 294);
+      --color-hue-orange: oklch(0.8 0.15 70);
+      --color-hue-green: oklch(0.75 0.16 151);
+      --color-hue-teal: oklch(0.77 0.115 205);
+      --color-hue-red: oklch(0.7 0.19 25);
+
+      --color-chart-1: oklch(0.488 0.243 264.376);
+      --color-chart-2: oklch(0.696 0.17 162.48);
+      --color-chart-3: oklch(0.769 0.188 70.08);
+      --color-chart-4: oklch(0.627 0.265 303.9);
+      --color-chart-5: oklch(0.645 0.246 16.439);
+      --color-sidebar: oklch(0.205 0 0);
+      --color-sidebar-foreground: oklch(0.985 0 0);
+      --color-sidebar-primary: oklch(0.488 0.243 264.376);
+      --color-sidebar-primary-foreground: oklch(0.985 0 0);
+      --color-sidebar-accent: oklch(0.269 0 0);
+      --color-sidebar-accent-foreground: oklch(0.985 0 0);
+      --color-sidebar-border: oklch(1 0 0 / 10%);
+      --color-sidebar-ring: oklch(0.556 0 0);
+    }
+  }
+}

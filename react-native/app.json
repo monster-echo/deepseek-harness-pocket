@@ -33,6 +33,12 @@
           "cameraPermission": "允许拍照并发送给电脑上的 dsh 会话。"
         }
       ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "扫描电脑上的配对二维码，把 Worker 绑定到你的账号（也用于拍照发送给会话）。"
+        }
+      ],
       "./plugins/with-localized-display-name",
       "./plugins/with-splash-watchdog"
     ],

@@ -8,10 +8,29 @@
 import {
   makeRpcId,
   parseGatewayToPhoneFrame,
+  parseFeedbackItem,
+  parseFeedbackItems,
+  parseJobs,
+  parseCredentialRecords,
+  parsePresets,
+  parseSessionSearchHits,
+  parseSettingsSections,
+  parseSettingsUpdateOutcome,
+  parseSkills,
   parseWorkerFrameSafe,
   PROTOCOL_VERSION,
   type BridgeCapabilities,
   type DshSessionEvent,
+  type FeedbackCategory,
+  type FeedbackItem,
+  type FeedbackRating,
+  type JobSnapshot,
+  type CredentialRecordInfo,
+  type AgentPresetInfo,
+  type SessionSearchHit,
+  type SettingsSectionInfo,
+  type SettingsUpdateOutcome,
+  type SkillInfo,
   type PhoneToWorkerFrame,
   type ServerRequest,
   type SessionSnapshot,
@@ -24,6 +43,8 @@ export interface DshClientHandlers {
   onEvent(sessionId: string, event: DshSessionEvent): void
   onSnapshot(snapshot: SessionSnapshot): void
   onServerRequest(request: ServerRequest): void
+  /** 后台任务快照（dsh ctx.jobs，随会话订阅推送） */
+  onJobs(sessionId: string, jobs: readonly JobSnapshot[]): void
   onAuthResult(ok: boolean, reason?: string): void
   onDisconnect(): void
 }
@@ -117,6 +138,9 @@ export class DshClient {
         return
       case 'server-request':
         this.handlers.onServerRequest(frame.request)
+        return
+      case 'jobs':
+        this.handlers.onJobs(frame.sessionId, frame.jobs)
         return
       case 'resync-needed':
         // 序列有洞：由上层发起 sessions.resync
@@ -296,10 +320,11 @@ export class DshClient {
     return response.result as { providers: readonly { id: string; name?: string; models: readonly { id: string; name?: string; inputModalities?: readonly ('text' | 'image')[] }[] }[]; current: { provider: string; model: string } | null }
   }
 
-  async listPresets(): Promise<readonly { id: string; name?: string; description?: string; isDefault: boolean }[]> {
+  async listPresets(): Promise<readonly AgentPresetInfo[]> {
     const response = await this.rpc('presets', 'list', {})
     if (!response.ok) throw new Error(response.error.message)
-    return (response.result as { presets: { id: string; name?: string; description?: string; isDefault: boolean }[] }).presets
+    const result = response.result as { presets?: unknown } | null
+    return parsePresets(result?.presets) ?? []
   }
 
   async sendMessage(sessionId: string, text: string, images?: readonly unknown[]): Promise<void> {
@@ -331,8 +356,115 @@ export class DshClient {
     if (!response.ok) throw new Error(response.error.message)
   }
 
-  async respondQuestion(requestId: string, answer: string): Promise<void> {
-    const response = await this.rpc('questions', 'respond', { requestId, answer })
+  /** 结构化回答（多选 / 计划评审）；`answers` 为 dsh 的 AskUserQuestionAnswerItem[]。 */
+  /** 主动拉取某会话的后台任务（打开面板时用；推送帧是主路径）。 */
+  async listJobs(sessionId: string): Promise<readonly JobSnapshot[]> {
+    const response = await this.rpc('jobs', 'list', { sessionId })
+    if (!response.ok) throw new Error(response.error.message)
+    const result = response.result as { jobs?: unknown } | null
+    return parseJobs(result?.jobs) ?? []
+  }
+
+  /** 跨会话内容搜索（Worker 侧 sessionQuery；未启用时返回空数组）。 */
+  async searchSessions(query: string, limit?: number): Promise<readonly SessionSearchHit[]> {
+    const response = await this.rpc('sessions', 'search', {
+      query,
+      ...(limit !== undefined ? { limit } : {}),
+    })
+    if (!response.ok) throw new Error(response.error.message)
+    const result = response.result as { hits?: unknown } | null
+    return parseSessionSearchHits(result?.hits) ?? []
+  }
+
+  /** 技能目录（cwd 决定分层解析）。 */
+  async listSkills(cwd?: string): Promise<readonly SkillInfo[]> {
+    const response = await this.rpc('skills', 'list', {
+      ...(cwd !== undefined ? { cwd } : {}),
+    })
+    if (!response.ok) throw new Error(response.error.message)
+    const result = response.result as { skills?: unknown } | null
+    return parseSkills(result?.skills) ?? []
+  }
+
+  /** Worker 配置（设置命名空间 + 凭据元信息；秘密值由宿主打码/不下发）。 */
+  async workerConfig(): Promise<{
+    sections: readonly SettingsSectionInfo[]
+    credentials: readonly CredentialRecordInfo[]
+  }> {
+    const response = await this.rpc('settings', 'describe', {})
+    if (!response.ok) throw new Error(response.error.message)
+    const result = response.result as { sections?: unknown; credentials?: unknown } | null
+    return {
+      sections: parseSettingsSections(result?.sections) ?? [],
+      credentials: parseCredentialRecords(result?.credentials) ?? [],
+    }
+  }
+
+  /** 写入一条凭据（值只在本次请求中存在，客户端不留存）。 */
+  async setCredential(ref: string, value: string): Promise<void> {
+    const response = await this.rpc('credentials', 'set', { ref, value })
+    if (!response.ok) throw new Error(response.error.message)
+  }
+
+  /** 删除一条凭据。 */
+  async unsetCredential(ref: string): Promise<void> {
+    const response = await this.rpc('credentials', 'unset', { ref })
+    if (!response.ok) throw new Error(response.error.message)
+  }
+
+  /** 写回一个设置命名空间（CAS：修订号不匹配返回冲突）。 */
+  async updateSetting(
+    ns: string,
+    patch: Record<string, unknown>,
+    expectedRevision?: number,
+  ): Promise<SettingsUpdateOutcome> {
+    const response = await this.rpc('settings', 'update', {
+      ns,
+      patch,
+      ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+    })
+    if (!response.ok) throw new Error(response.error.message)
+    const outcome = parseSettingsUpdateOutcome(response.result)
+    if (outcome === null) throw new Error('设置写入返回了无法识别的结果')
+    return outcome
+  }
+
+  async listFeedback(sessionId: string): Promise<readonly FeedbackItem[]> {
+    const response = await this.rpc('feedback', 'list', { sessionId })
+    if (!response.ok) throw new Error(response.error.message)
+    const result = response.result as { items?: unknown } | null
+    return parseFeedbackItems(result?.items) ?? []
+  }
+
+  async putFeedback(
+    sessionId: string,
+    messageId: string,
+    rating: FeedbackRating,
+    note?: string,
+    category?: FeedbackCategory,
+  ): Promise<FeedbackItem | null> {
+    const response = await this.rpc('feedback', 'put', {
+      sessionId,
+      messageId,
+      rating,
+      ...(note !== undefined && note.length > 0 ? { note } : {}),
+      ...(category !== undefined ? { category } : {}),
+    })
+    if (!response.ok) throw new Error(response.error.message)
+    const result = response.result as { item?: unknown } | null
+    return parseFeedbackItem(result?.item)
+  }
+
+  async deleteFeedback(sessionId: string, messageId: string, version: string): Promise<boolean> {
+    const response = await this.rpc('feedback', 'delete', { sessionId, messageId, version })
+    return response.ok
+  }
+
+  async respondQuestion(
+    requestId: string,
+    answers: readonly { id: string; selected: readonly string[]; custom?: string }[],
+  ): Promise<void> {
+    const response = await this.rpc('questions', 'respond', { requestId, answers })
     if (!response.ok) throw new Error(response.error.message)
   }
 

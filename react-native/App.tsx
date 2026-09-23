@@ -1,7 +1,12 @@
+import './src/global.css';
+
 import React, { useCallback } from 'react';
 import { Platform } from 'react-native';
 import * as ExpoSplashScreen from 'expo-splash-screen';
 import { NavigationContainer } from '@react-navigation/native';
+import { PortalHost } from '@rn-primitives/portal';
+import { useCSSVariable, useUniwind } from 'uniwind';
+import { NAV_THEME } from './src/lib/nav-theme';
 // 注意：必须用 safe-area-context 的 SafeAreaView（RN 内置的在 Android 上是 no-op，
 // 且 SDK 57 edge-to-edge 下内容会画进状态栏/手势条）。
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -9,17 +14,15 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { RootNavigator } from './src/navigation/RootNavigator';
-import { navigationRef } from './src/navigation/navigationRef';
+import { drainPendingNavigation, navigationRef } from './src/navigation/navigationRef';
 import { AppRoute } from './src/navigation/routes';
 import { AppProvider } from './src/state/AppStore';
 import { FeedbackHost } from './src/design-system/FeedbackHost';
-import { styles } from './src/theme/styles';
 import { telemetry } from './src/telemetry/Telemetry';
 import { AppErrorBoundary } from './src/telemetry/AppErrorBoundary';
 import { SupportProvider } from './src/support/SupportStore';
 import { AuthRecoveryProvider } from './src/auth/AuthRecoveryStore';
 import { PreferencesProvider } from './src/preferences/PreferencesProvider';
-import { usePreferences } from './src/preferences/PreferencesProvider';
 import { useApp } from './src/state/AppStore';
 import { useEntryIntents } from './src/navigation/useEntryIntents';
 import { setPlatformHeader } from './src/data/runtimePlatform';
@@ -49,7 +52,8 @@ export default function App() {
 }
 
 function AppSurface() {
-  const { palette } = usePreferences();
+  const { theme } = useUniwind();
+  const backgroundColor = useCSSVariable('--color-background') as string | undefined;
   const { openEntryRoute, refreshBootstrap } = useApp();
   const resume = useCallback(() => { void refreshBootstrap(); }, [refreshBootstrap]);
   useEntryIntents(openEntryRoute, resume);
@@ -59,11 +63,16 @@ function AppSurface() {
     <SafeAreaProvider>
       <BottomSheetModalProvider>
       <SafeAreaView
-        style={[styles.safeArea, { backgroundColor: palette.background }]}
+        style={{ flex: 1, backgroundColor }}
         edges={['top', 'bottom']}
       >
         <NavigationContainer
           ref={navigationRef}
+          theme={NAV_THEME[theme === 'dark' ? 'dark' : 'light']}
+          onReady={() => {
+            // 补发容器就绪前排队/被丢弃的导航命令（冷启动分流）
+            drainPendingNavigation();
+          }}
           onStateChange={() => {
             // Screen-view telemetry fires on every navigation state change
             // (push/pop/replace/tab switch). Replaces the old
@@ -75,6 +84,7 @@ function AppSurface() {
           <RootNavigator />
         </NavigationContainer>
         <FeedbackHost />
+        <PortalHost />
       </SafeAreaView>
       </BottomSheetModalProvider>
     </SafeAreaProvider>

@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
-import { Text, TextInput } from 'react-native';
-import { AppButton } from '../design-system/components';
+import { Check } from 'lucide-react-native';
+import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
+import { Input } from '@/components/ui/input';
+import { Text } from '@/components/ui/text';
+import { Textarea } from '@/components/ui/textarea';
 import { SelectField } from '../design-system/SelectField';
 import { useApp } from '../state/AppStore';
 import { FeedbackScreenshots } from '../support/FeedbackScreenshots';
 import type { FeedbackScreenshot } from '../support/FeedbackScreenshots';
 import { useSupport } from '../support/SupportStore';
-import { styles } from '../theme/styles';
+import { telemetry } from '../telemetry/Telemetry';
 import { SupportPage } from './SupportScreens';
 
 export function NewTicketScreen() {
@@ -19,27 +23,23 @@ export function NewTicketScreen() {
   const valid = subject.trim().length >= 4 && message.trim().length >= 4;
   return (
     <SupportPage title="联系客服">
-      <Text style={styles.heading}>告诉我们遇到了什么</Text>
-      <Text style={styles.secondary}>请先填写问题内容，我们会根据描述安排处理。</Text>
-      <TextInput
+      <Text className="text-foreground text-xl font-bold">告诉我们遇到了什么</Text>
+      <Text className="text-muted-foreground text-sm">请先填写问题内容，我们会根据描述安排处理。</Text>
+      <Input
         accessibilityLabel="问题标题"
         maxLength={100}
         onChangeText={setSubject}
         placeholder="简要说明问题"
-        style={styles.input}
         value={subject}
       />
-      <TextInput
+      <Textarea
         accessibilityLabel="问题详情"
         maxLength={2000}
-        multiline
         onChangeText={setMessage}
         placeholder="描述发生步骤、预期结果与实际结果，请勿填写密码或验证码"
-        style={styles.input}
-        textAlignVertical="top"
         value={message}
       />
-      <Text style={styles.sectionLabel}>补充信息（可选）</Text>
+      <Text className="text-muted-foreground ml-1 text-xs font-bold tracking-[0.6px]">补充信息（可选）</Text>
       <SelectField
         label="问题分类"
         onChange={setCategory}
@@ -59,12 +59,17 @@ export function NewTicketScreen() {
         ]}
         value={severity}
       />
-      <AppButton
+      <Button
+        className="min-h-[52px] w-full"
         disabled={!valid || busy}
-        icon="check"
-        label={busy ? '提交中…' : '提交工单'}
-        onPress={() => void createTicket({ category, severity, subject, message })}
-      />
+        onPress={() => {
+          telemetry.track('ui_action', { action_id: `button.${busy ? '提交中…' : '提交工单'}` });
+          void createTicket({ category, severity, subject, message });
+        }}
+      >
+        <Icon as={Check} className="size-5" />
+        <Text>{busy ? '提交中…' : '提交工单'}</Text>
+      </Button>
     </SupportPage>
   );
 }
@@ -88,28 +93,24 @@ export function ProductFeedbackScreen() {
   ] as const;
   return (
     <SupportPage title="产品反馈">
-      <Text style={styles.heading}>你的意见很重要</Text>
-      <Text style={styles.secondary}>先写下想法或遇到的问题，分类与评分可以稍后选择。</Text>
-      <TextInput
+      <Text className="text-foreground text-xl font-bold">你的意见很重要</Text>
+      <Text className="text-muted-foreground text-sm">先写下想法或遇到的问题，分类与评分可以稍后选择。</Text>
+      <Input
         accessibilityLabel="反馈标题"
         maxLength={100}
         onChangeText={setTitle}
         placeholder="反馈标题"
-        style={styles.input}
         value={title}
       />
-      <TextInput
+      <Textarea
         accessibilityLabel="反馈详情"
         maxLength={3000}
-        multiline
         onChangeText={setBody}
         placeholder="告诉我们哪里可以做得更好"
-        style={styles.input}
-        textAlignVertical="top"
         value={body}
       />
       <FeedbackScreenshots value={screenshots} onChange={setScreenshots} />
-      <Text style={styles.sectionLabel}>补充信息（可选）</Text>
+      <Text className="text-muted-foreground ml-1 text-xs font-bold tracking-[0.6px]">补充信息（可选）</Text>
       <SelectField
         label="反馈类型"
         onChange={setCategory}
@@ -125,12 +126,17 @@ export function ProductFeedbackScreen() {
         }))}
         value={rating}
       />
-      <AppButton
+      <Button
+        className="min-h-[52px] w-full"
         disabled={busy || title.trim().length < 4 || body.trim().length < 4}
-        icon="check"
-        label={busy ? '提交中…' : '提交反馈'}
-        onPress={() => void submit()}
-      />
+        onPress={() => {
+          telemetry.track('ui_action', { action_id: `button.${busy ? '提交中…' : '提交反馈'}` });
+          void submit();
+        }}
+      >
+        <Icon as={Check} className="size-5" />
+        <Text>{busy ? '提交中…' : '提交反馈'}</Text>
+      </Button>
     </SupportPage>
   );
 }

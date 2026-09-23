@@ -3,6 +3,7 @@ export type AppRoute =
   | 'launch.onboarding'
   | 'home'
   | 'dsh.pair'
+  | 'dsh.scanPair'
   | 'auth.signIn'
   | 'auth.signUp'
   | 'auth.phone'
@@ -40,6 +41,8 @@ export type AppRoute =
   | 'settings.about'
   | 'settings.deleteAccount'
   | 'notifications.center'
+  | 'session.trajectory'
+  | 'settings.workerConfig'
   | 'states.gallery';
 
 export type RouteEntry = Readonly<{

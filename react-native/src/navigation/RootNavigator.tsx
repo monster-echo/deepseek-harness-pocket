@@ -6,6 +6,7 @@ import type { RootParamList } from './navigationRef';
 import { AuthScreen, AuthMode } from '../screens/AuthScreens';
 import { HomeShellScreen } from '../features/workers/HomeShellScreen';
 import { PairWorkerScreen } from '../features/onboarding/PairWorkerScreen';
+import { QrPairScreen } from '../features/workers/QrPairScreen';
 import { OnboardingScreen, SplashScreen } from '../screens/LaunchScreens';
 import { EditProfileScreen, ProfileScreen } from '../screens/ProfileScreens';
 import { MembershipScreen } from '../screens/MembershipScreen';
@@ -24,6 +25,8 @@ import {
   TermsOfServiceScreen,
 } from '../screens/LegalScreens';
 import { StateGalleryScreen } from '../screens/StateGalleryScreen';
+import { TrajectoryScreen } from '../screens/TrajectoryScreen';
+import { WorkerConfigScreen } from '../screens/WorkerConfigScreen';
 import { AboutScreen, NotificationsScreen, OrdersScreen } from '../screens/DataScreens';
 import { SupportHomeScreen, TicketDetailScreen } from '../screens/SupportScreens';
 import { NewTicketScreen, ProductFeedbackScreen } from '../screens/SupportFormScreens';
@@ -76,6 +79,7 @@ export function RootNavigator() {
       <Stack.Screen name="launch.onboarding" component={OnboardingScreen} />
       <Stack.Screen name="home" component={HomeShellScreen} />
       <Stack.Screen name="dsh.pair" component={PairWorkerScreen} />
+      <Stack.Screen name="dsh.scanPair" component={QrPairScreen} />
 
       <Stack.Screen name="auth.signIn" component={AuthRoute} />
       <Stack.Screen name="auth.signUp" component={AuthRoute} />
@@ -119,6 +123,8 @@ export function RootNavigator() {
       <Stack.Screen name="settings.about" component={AboutScreen} />
       <Stack.Screen name="settings.deleteAccount" component={DeleteAccountScreen} />
       <Stack.Screen name="states.gallery" component={StateGalleryScreen} />
+      <Stack.Screen name="session.trajectory" component={TrajectoryScreen} />
+      <Stack.Screen name="settings.workerConfig" component={WorkerConfigScreen} />
     </Stack.Navigator>
   );
 }

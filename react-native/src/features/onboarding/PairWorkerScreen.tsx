@@ -1,18 +1,23 @@
 /**
  * 我的电脑（Worker 管理）：worker 列表（可选/切换）+ 右上角「+」添加（配对）。
  * 侧边栏点「选择电脑」进入本页，选择后返回；「+」进入安装指引 + 配对码表单。
+ * 视觉：shadcn 风格（DeviceRow + ListGroup + 默认按钮圆角）。
  */
 
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { AppIcon } from '../../design-system/AppIcon';
-import { Sheet } from '../../design-system/Sheet';
-import { usePreferences } from '../../preferences/PreferencesProvider';
-import { useApp } from '../../state/AppStore';
-import { useDshStore } from '../../state/dshStore';
-import { bindWorkerByCode } from '../../dsh/connection';
-import { spacing, radii } from '../../theme/tokens';
+import { ArrowLeft, Check, Copy, Plus, ScanLine } from 'lucide-react-native';
+import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
+import { Input } from '@/components/ui/input';
+import { Text } from '@/components/ui/text';
+import { DeviceRow, ListGroup } from '@/components/app';
+import { Sheet } from '@/design-system/Sheet';
+import { useApp } from '@/state/AppStore';
+import { useDshStore } from '@/state/dshStore';
+import { bindWorkerByCode } from '@/dsh/connection';
+import type { WorkerPresence } from '@deepseek-harness-pocket/bridge-protocol';
 
 const INSTALL_STEPS: readonly { title: string; command: string }[] = [
   { title: '1. 安装（电脑端，需 Node.js）', command: 'npm i -g @deepseek-harness-pocket/bridge' },
@@ -20,52 +25,70 @@ const INSTALL_STEPS: readonly { title: string; command: string }[] = [
   { title: '3. 开机自启（推荐）', command: 'dshc install' },
 ]
 
+/** 机器信息摘要：`macOS 14.6 · 8 核 16GB`（host 由 bridge 注册帧上送）。 */
+function hostLine(worker: WorkerPresence): string {
+  const host = worker.host
+  const parts: string[] = []
+  if (host?.osVersion !== undefined) parts.push(host.osVersion)
+  if (host?.cpuCores !== undefined) parts.push(`${host.cpuCores} 核`)
+  if (host?.memoryBytes !== undefined) parts.push(`${Math.round(host.memoryBytes / 1024 ** 3)}GB`)
+  return parts.length > 0 ? parts.join(' · ') : worker.online ? '在线' : '离线'
+}
+
 export function PairWorkerScreen() {
-  const { palette } = usePreferences();
-  const { back } = useApp();
+  const { back, navigate } = useApp();
   const [showAdd, setShowAdd] = useState(false);
   const workers = useDshStore((s) => s.workers);
   const activeWorkerId = useDshStore((s) => s.activeWorkerId);
   const openWorker = useDshStore((s) => s.openWorker);
 
   return (
-    <View style={[styles.container, { backgroundColor: palette.background }]}>
-      <View style={[styles.header, { borderBottomColor: palette.border }]}>
+    <View className="bg-background flex-1">
+      <View className="border-border flex-row items-center justify-between border-b px-3 pb-2 pt-6">
         <Pressable onPress={() => back()} hitSlop={12}>
-          <AppIcon name="arrow-left" color={palette.text} size={22} />
+          <Icon as={ArrowLeft} className="text-foreground size-[22px]" />
         </Pressable>
-        <Text style={[styles.title, { color: palette.text }]}>我的电脑</Text>
-        {/* 右上角 +：进入添加/配对 */}
-        <Pressable onPress={() => setShowAdd(true)} hitSlop={12} accessibilityLabel="添加电脑">
-          <AppIcon name="plus" color={palette.brand} size={22} />
-        </Pressable>
+        <Text className="text-foreground text-[17px] font-semibold">我的电脑</Text>
+        <View className="flex-row items-center gap-3">
+          {/* 扫码配对：扫电脑上 dshc qr 打印的二维码 */}
+          <Pressable onPress={() => navigate('dsh.scanPair')} hitSlop={12} accessibilityLabel="扫码配对">
+            <Icon as={ScanLine} className="text-foreground size-[22px]" />
+          </Pressable>
+          {/* 右上角 +：进入添加/配对 */}
+          <Pressable onPress={() => setShowAdd(true)} hitSlop={12} accessibilityLabel="添加电脑">
+            <Icon as={Plus} className="text-foreground size-[22px]" />
+          </Pressable>
+        </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView contentContainerClassName="p-4">
         {workers.length === 0 && (
-          <View style={styles.empty}>
-            <Text style={[styles.emptyText, { color: palette.textSecondary }]}>
+          <View className="items-center py-8">
+            <Text className="text-muted-foreground text-center text-sm leading-[21px]">
               还没有电脑。点右上角「+」安装并配对一台电脑。
             </Text>
           </View>
         )}
-        {workers.map((worker) => {
-          const active = worker.workerId === activeWorkerId
-          return (
-            <Pressable
-              key={worker.workerId}
-              style={[styles.workerRow, { borderColor: palette.border, backgroundColor: palette.surface }, active && { borderColor: palette.brand, backgroundColor: palette.brandSoft }]}
-              onPress={() => { openWorker(worker.workerId); back(); }}
-            >
-              <View style={[styles.dot, { backgroundColor: worker.online ? palette.success : palette.textSecondary }]} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.workerName, { color: palette.text }]} numberOfLines={1}>{worker.name}</Text>
-                <Text style={[styles.workerStatus, { color: palette.textSecondary }]}>{worker.online ? '在线' : '离线'}</Text>
-              </View>
-              {active && <AppIcon name="check" color={palette.brand} size={18} />}
-            </Pressable>
-          )
-        })}
+        {workers.length > 0 && (
+          <ListGroup header="已关联的电脑">
+            {workers.map((worker, index) => (
+              <React.Fragment key={worker.workerId}>
+                {index > 0 && <View className="bg-border h-px w-full" />}
+                <DeviceRow
+                  className="rounded-none border-0 shadow-none"
+                  selected={worker.workerId === activeWorkerId}
+                  status={{ label: worker.online ? '在线' : '离线', tone: worker.online ? 'online' : 'offline' }}
+                  subtitle={hostLine(worker)}
+                  title={worker.name}
+                  onPress={() => {
+                    openWorker(worker.workerId);
+                    back();
+                  }}
+                />
+              </React.Fragment>
+            ))}
+          </ListGroup>
+        )}
       </ScrollView>
 
       {/* 添加电脑：2/3 底部弹层；scrollable 保证键盘弹出后表单可滚动到可视区 */}
@@ -77,8 +100,7 @@ export function PairWorkerScreen() {
 }
 
 function AddWorkerForm({ onDone }: Readonly<{ onDone: () => void }>) {
-  const { palette } = usePreferences();
-  const { showToast } = useApp();
+  const { showToast, navigate } = useApp();
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -113,79 +135,61 @@ function AddWorkerForm({ onDone }: Readonly<{ onDone: () => void }>) {
   }
 
   return (
-    <View style={styles.formBody}>
-      {INSTALL_STEPS.map((step) => (
-        <Pressable
-          key={step.command}
-          style={({ pressed }) => [styles.step, { borderColor: palette.border, backgroundColor: palette.surface }, pressed && { opacity: 0.7 }]}
-          onPress={() => copyCommand(step.command)}
-        >
-          <Text style={[styles.stepTitle, { color: palette.text }]}>{step.title}</Text>
-          <View style={styles.stepCommandRow}>
-            <Text style={[styles.stepCommand, { color: palette.brand }]} selectable>{step.command}</Text>
-            <AppIcon name={copied === step.command ? 'check' : 'copy'} color={palette.brand} size={13} />
-          </View>
-        </Pressable>
-      ))}
-      <Text style={[styles.hint, { color: palette.textSecondary }]}>
-        电脑终端会打印二维码与 6 位配对码；此处先手输配对码完成绑定（扫码即将上线）。
-      </Text>
+    <View>
+      <ListGroup header="电脑端安装步骤" footer="电脑终端会打印二维码与 6 位配对码；此处先手输配对码完成绑定（扫码即将上线）。">
+        {INSTALL_STEPS.map((step, index) => (
+          <React.Fragment key={step.command}>
+            {index > 0 && <View className="bg-border h-px w-full" />}
+            <Pressable
+              className="active:bg-accent gap-2 px-4 py-3"
+              onPress={() => copyCommand(step.command)}
+            >
+              <Text className="text-foreground text-sm font-medium">{step.title}</Text>
+              <View className="flex-row items-center gap-2">
+                <Text className="text-muted-foreground flex-1 font-mono text-[13px]" selectable>
+                  {step.command}
+                </Text>
+                <Icon as={copied === step.command ? Check : Copy} className="text-muted-foreground size-[15px]" />
+              </View>
+            </Pressable>
+          </React.Fragment>
+        ))}
+      </ListGroup>
 
-      <View style={[styles.formCard, { borderColor: palette.border, backgroundColor: palette.surface }]}>
-        <TextInput
-          style={[styles.codeInput, { color: palette.text, borderColor: palette.border }]}
-          placeholder="6 位配对码"
-          placeholderTextColor={palette.textSecondary}
-          keyboardType="number-pad"
-          maxLength={6}
-          value={code}
-          onChangeText={setCode}
-        />
-        <TextInput
-          style={[styles.nameInput, { color: palette.text, borderColor: palette.border }]}
-          placeholder="给这台电脑起个名字（可选）"
-          placeholderTextColor={palette.textSecondary}
-          value={name}
-          onChangeText={setName}
-        />
-        {error !== null && <Text style={[styles.error, { color: palette.error }]}>{error}</Text>}
-        <Pressable
-          style={[styles.bindButton, { backgroundColor: busy ? palette.surfaceMuted : palette.brand }]}
-          disabled={busy}
-          onPress={() => void bind()}
-        >
-          <Text style={styles.bindText}>{busy ? '绑定中…' : '绑定到我的账号'}</Text>
-        </Pressable>
-      </View>
+      <Button
+        className="mb-1 py-3"
+        variant="outline"
+        onPress={() => {
+          onDone();
+          navigate('dsh.scanPair');
+        }}
+      >
+        <Icon as={ScanLine} className="text-foreground size-[18px]" />
+        <Text>扫码配对（推荐）</Text>
+      </Button>
+
+      <ListGroup header="或用配对码手动绑定">
+        <View className="gap-3 p-4">
+          <Input
+            className="h-auto py-3 text-center text-[22px] tracking-[8px]"
+            placeholder="6 位配对码"
+            keyboardType="number-pad"
+            maxLength={6}
+            value={code}
+            onChangeText={setCode}
+          />
+          <Input
+            className="h-auto px-3 py-2 text-sm"
+            placeholder="给这台电脑起个名字（可选）"
+            value={name}
+            onChangeText={setName}
+          />
+          {error !== null && <Text className="text-destructive text-[13px]">{error}</Text>}
+          <Button className="py-3" disabled={busy} onPress={() => void bind()}>
+            <Text>{busy ? '绑定中…' : '绑定到我的账号'}</Text>
+          </Button>
+        </View>
+      </ListGroup>
     </View>
   )
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing.x3, paddingTop: spacing.x6, paddingBottom: spacing.x2,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  title: { fontSize: 17 },
-  body: { padding: spacing.x4, gap: spacing.x3 },
-  formBody: { gap: spacing.x3 },
-  empty: { alignItems: 'center', paddingVertical: spacing.x8 },
-  emptyText: { fontSize: 14, textAlign: 'center', lineHeight: 21 },
-  workerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x3, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.card, padding: spacing.x3 },
-  dot: { width: 8, height: 8, borderRadius: 4 },
-  workerName: { fontSize: 15, fontWeight: '600' },
-  workerStatus: { fontSize: 12, marginTop: 2 },
-  step: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.card, padding: spacing.x3, gap: spacing.x2 },
-  stepTitle: { fontSize: 14 },
-  stepCommandRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.x2 },
-  stepCommand: { fontSize: 13, fontFamily: 'Menlo', flex: 1 },
-  hint: { fontSize: 13, lineHeight: 20 },
-  formCard: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.card, padding: spacing.x3, gap: spacing.x2, marginTop: spacing.x2 },
-  codeInput: { borderWidth: 1, borderRadius: radii.control, padding: spacing.x3, fontSize: 22, letterSpacing: 8, textAlign: 'center' },
-  nameInput: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.control, padding: spacing.x2, fontSize: 14 },
-  error: { fontSize: 13 },
-  bindButton: { borderRadius: radii.round, paddingVertical: spacing.x3, alignItems: 'center' },
-  bindText: { color: '#FFFFFF', fontSize: 15 },
-});

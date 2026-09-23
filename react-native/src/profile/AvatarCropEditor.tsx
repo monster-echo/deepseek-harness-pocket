@@ -1,13 +1,13 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Image, Modal, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Modal, PanResponder, Pressable, View } from 'react-native';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import type { ImagePickerAsset } from 'expo-image-picker';
-import { AppButton } from '../design-system/components';
+import { useCSSVariable } from 'uniwind';
+import { Button } from '@/components/ui/button';
+import { Text } from '@/components/ui/text';
 import { AppIcon, IconName } from '../design-system/AppIcon';
 import { useApp } from '../state/AppStore';
-import { usePreferences } from '../preferences/PreferencesProvider';
-import { colors, radii, spacing } from '../theme/tokens';
-import { styles } from '../theme/styles';
+import { telemetry } from '../telemetry/Telemetry';
 
 const cropSize = 280;
 const zoomStep = 0.25;
@@ -15,6 +15,50 @@ const initialZoom = 1.25;
 const nudgeStep = 12;
 
 type Point = Readonly<{ x: number; y: number }>;
+
+type ActionButtonVariant = 'primary' | 'secondary' | 'danger';
+
+function AppButton({
+  label,
+  onPress,
+  icon,
+  variant = 'primary',
+  disabled = false,
+  analyticsId,
+  testID,
+}: Readonly<{
+  label: string;
+  onPress: () => void;
+  icon?: IconName;
+  variant?: ActionButtonVariant;
+  disabled?: boolean;
+  analyticsId?: string;
+  testID?: string;
+}>) {
+  const foreground = useCSSVariable([
+    '--color-primary-foreground',
+    '--color-foreground',
+    '--color-destructive-foreground',
+  ]) as [string, string, string];
+  const iconColor =
+    variant === 'secondary' ? foreground[1] : variant === 'danger' ? foreground[2] : foreground[0];
+  return (
+    <Button
+      accessibilityRole="button"
+      className="min-h-[52px] w-full"
+      disabled={disabled}
+      testID={testID}
+      variant={variant === 'primary' ? 'default' : variant === 'danger' ? 'destructive' : 'outline'}
+      onPress={() => {
+        telemetry.track('ui_action', { action_id: analyticsId ?? `button.${label}` });
+        onPress();
+      }}
+    >
+      {icon ? <AppIcon name={icon} color={iconColor} size={20} /> : null}
+      <Text>{label}</Text>
+    </Button>
+  );
+}
 
 export function AvatarCropEditor({
   asset,
@@ -25,7 +69,6 @@ export function AvatarCropEditor({
   onCancel: () => void;
   onConfirm: (avatarUrl: string) => void;
 }>) {
-  const { palette } = usePreferences();
   const { user, showToast } = useApp();
   const [zoom, setZoom] = useState(initialZoom);
   const [offset, setOffset] = useState<Point>({ x: 0, y: 0 });
@@ -92,41 +135,39 @@ export function AvatarCropEditor({
 
   return (
     <Modal animationType="fade" transparent visible>
-      <View style={editorStyles.backdrop}>
-        <View style={[editorStyles.sheet, { backgroundColor: palette.surface }]}>
-          <Text style={styles.heading}>移动和裁剪头像</Text>
-          <Text style={styles.secondary}>拖动图片调整位置，使用下方按钮缩放。</Text>
+      <View className="flex-1 items-center justify-center bg-black/50 p-5">
+        <View className="bg-card w-full max-w-[420px] gap-4 rounded-3xl p-5">
+          <Text className="text-foreground text-xl font-bold">移动和裁剪头像</Text>
+          <Text className="text-muted-foreground text-sm">拖动图片调整位置，使用下方按钮缩放。</Text>
           <View
-            style={[editorStyles.cropFrame, { backgroundColor: palette.surfaceMuted }]}
+            className="bg-muted h-[280px] w-[280px] self-center overflow-hidden rounded-full"
             {...panResponder.panHandlers}
           >
-            <View style={editorStyles.nonInteractive}>
+            <View pointerEvents="none">
               <Image
                 accessibilityLabel="待裁剪头像"
                 source={{ uri: asset.uri }}
-                style={[
-                  editorStyles.image,
-                  {
-                    width: geometry.width,
-                    height: geometry.height,
-                    transform: [{ translateX: offset.x }, { translateY: offset.y }],
-                  },
-                ]}
+                className="self-center"
+                style={{
+                  width: geometry.width,
+                  height: geometry.height,
+                  transform: [{ translateX: offset.x }, { translateY: offset.y }],
+                }}
               />
             </View>
           </View>
-          <View style={editorStyles.zoomControls}>
+          <View className="flex-row items-center justify-center gap-5">
             <ZoomButton label="缩小头像" icon="minus" onPress={() => changeZoom(zoom - zoomStep)} />
-            <Text style={styles.caption}>{Math.round(zoom * 100)}%</Text>
+            <Text className="text-muted-foreground text-xs">{Math.round(zoom * 100)}%</Text>
             <ZoomButton label="放大头像" icon="plus" onPress={() => changeZoom(zoom + zoomStep)} />
           </View>
-          <View style={editorStyles.moveControls}>
+          <View className="flex-row justify-center gap-2">
             <NudgeButton label="上移" onPress={() => moveBy(0, -nudgeStep)} />
             <NudgeButton label="下移" onPress={() => moveBy(0, nudgeStep)} />
             <NudgeButton label="左移" onPress={() => moveBy(-nudgeStep, 0)} />
             <NudgeButton label="右移" onPress={() => moveBy(nudgeStep, 0)} />
           </View>
-          <View style={editorStyles.actions}>
+          <View className="gap-3">
             <AppButton label="取消" onPress={onCancel} variant="secondary" />
             <AppButton
               disabled={processing}
@@ -144,14 +185,13 @@ function NudgeButton({
   label,
   onPress,
 }: Readonly<{ label: string; onPress: () => void }>) {
-  const { palette } = usePreferences();
   return (
     <Pressable
       accessibilityRole="button"
+      className="bg-muted min-h-[44px] min-w-[56px] items-center justify-center rounded-xl"
       onPress={onPress}
-      style={[editorStyles.nudgeButton, { backgroundColor: palette.surfaceMuted }]}
     >
-      <Text style={styles.caption}>{label}</Text>
+      <Text className="text-muted-foreground text-xs">{label}</Text>
     </Pressable>
   );
 }
@@ -161,15 +201,15 @@ function ZoomButton({
   icon,
   onPress,
 }: Readonly<{ label: string; icon: IconName; onPress: () => void }>) {
-  const { palette } = usePreferences();
+  const foreground = useCSSVariable('--color-foreground') as string;
   return (
     <Pressable
       accessibilityLabel={label}
       accessibilityRole="button"
+      className="bg-muted size-12 items-center justify-center rounded-full"
       onPress={onPress}
-      style={[editorStyles.zoomButton, { backgroundColor: palette.surfaceMuted }]}
     >
-      <AppIcon color={palette.text} name={icon} size={22} />
+      <AppIcon color={foreground} name={icon} size={22} />
     </Pressable>
   );
 }
@@ -204,50 +244,3 @@ function sourceCrop(asset: ImagePickerAsset, zoom: number, offset: Point) {
     height: Math.round(size),
   };
 }
-
-const editorStyles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: spacing.x5,
-    backgroundColor: colors.scrim,
-  },
-  sheet: {
-    width: '100%',
-    maxWidth: 420,
-    padding: spacing.x5,
-    gap: spacing.x4,
-    borderRadius: radii.sheet,
-    backgroundColor: colors.surface,
-  },
-  cropFrame: {
-    width: cropSize,
-    height: cropSize,
-    alignSelf: 'center',
-    overflow: 'hidden',
-    borderRadius: radii.round,
-    backgroundColor: colors.surfaceMuted,
-  },
-  image: { alignSelf: 'center' },
-  nonInteractive: { pointerEvents: 'none' },
-  zoomControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.x5 },
-  moveControls: { flexDirection: 'row', justifyContent: 'center', gap: spacing.x2 },
-  nudgeButton: {
-    minWidth: 56,
-    minHeight: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radii.control,
-    backgroundColor: colors.surfaceMuted,
-  },
-  zoomButton: {
-    width: 48,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radii.round,
-    backgroundColor: colors.surfaceMuted,
-  },
-  actions: { gap: spacing.x3 },
-});

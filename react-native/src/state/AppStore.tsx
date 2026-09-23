@@ -23,7 +23,7 @@ import {
   Credentials, SocialCredentials, useAccountActions,
 } from './useAccountActions';
 import { ConfirmState, ToastState, useFeedbackState } from './useAppShellState';
-import { navigationRef, navigateRoute } from '../navigation/navigationRef';
+import { navigateRoute, navigationRef, resetRoute } from '../navigation/navigationRef';
 type ToastTone = 'success' | 'info' | 'error';
 export type { ToastState } from './useAppShellState';
 
@@ -165,7 +165,8 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   const replace = useCallback((route: AppRoute) => {
     const decision = guardRoute(route, { signedIn: user !== null, features: config.features });
     if (decision.pending) setPendingRoute(decision.pending);
-    if (navigationRef.isReady()) navigationRef.reset({ routes: [{ name: decision.route }] });
+    // resetRoute 在容器未就绪时排队补发，不再静默丢弃
+    resetRoute(decision.route);
   }, [config.features, user]);
   const back = useCallback(() => {
     if (navigationRef.isReady() && navigationRef.canGoBack()) navigationRef.goBack();
@@ -177,10 +178,9 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   ) => {
     const decision = guardRoute(route, { signedIn: user !== null, features: config.features });
     if (decision.pending) setPendingRoute(decision.pending);
-    if (!navigationRef.isReady()) return;
     if (decision.unavailable) {
       feedback.showToast('目标内容不可用，已返回首页', 'info');
-      navigationRef.reset({ routes: [{ name: 'home' }] });
+      resetRoute('home');
       return;
     }
     if (cold) {
@@ -205,7 +205,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
       setPurchaseState({ kind: 'idle' });
       const target = pendingRoute ?? 'home';
       setPendingRoute(null);
-      if (navigationRef.isReady()) navigationRef.reset({ routes: [{ name: target }] });
+      resetRoute(target);
     },
     onSignedOut: () => {
       setPurchaseState({ kind: 'idle' });
@@ -218,9 +218,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
       console.log('[AUTH-DEBUG] sessionExpiredHandler: clearing user + storage');
       setUser(null);
       void clearAuthStorage();
-      if (navigationRef.isReady()) {
-        navigationRef.reset({ routes: [{ name: 'auth.signIn' }] });
-      }
+      resetRoute('auth.signIn');
     });
     return () => registerSessionExpiredHandler(null);
   }, []);

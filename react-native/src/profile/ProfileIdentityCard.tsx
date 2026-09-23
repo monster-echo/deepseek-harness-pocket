@@ -1,9 +1,15 @@
 import React from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { AppCard } from '../design-system/components';
-import { usePreferences } from '../preferences/PreferencesProvider';
-import { colors, radii, spacing } from '../theme/tokens';
-import { styles } from '../theme/styles';
+import { Image, Pressable, View } from 'react-native';
+import { Card, CardContent } from '@/components/ui/card';
+import { Text } from '@/components/ui/text';
+
+function AppCard({ children }: Readonly<{ children: React.ReactNode }>) {
+  return (
+    <Card className="gap-0 py-0">
+      <CardContent className="gap-3 py-4">{children}</CardContent>
+    </Card>
+  );
+}
 
 export function ProfileIdentityCard({
   displayName,
@@ -20,7 +26,6 @@ export function ProfileIdentityCard({
   avatarUrl?: string | null;
   onAvatarPress?: () => void;
 }>) {
-  const { palette } = usePreferences();
   const avatar = (
     <ProfileAvatar
       avatarUrl={avatarUrl}
@@ -29,29 +34,24 @@ export function ProfileIdentityCard({
   );
   return (
     <AppCard>
-      <View style={identityStyles.container}>
+      <View className="items-center gap-3 py-3">
         {onAvatarPress ? (
           <Pressable
             accessibilityLabel="更换头像"
             accessibilityRole="button"
+            className="items-center gap-2"
             onPress={onAvatarPress}
-            style={identityStyles.avatarAction}
           >
             {avatar}
-            <Text style={identityStyles.avatarHint}>点击更换</Text>
+            <Text className="text-primary font-bold">点击更换</Text>
           </Pressable>
         ) : avatar}
-        <View style={identityStyles.copy}>
-          <Text style={styles.heading}>{displayName}</Text>
-          <Text style={styles.caption}>@{username}</Text>
-          <Text style={styles.secondary}>{email}</Text>
+        <View className="items-center gap-1">
+          <Text className="text-foreground text-xl font-bold">{displayName}</Text>
+          <Text className="text-muted-foreground text-xs">@{username}</Text>
+          <Text className="text-muted-foreground text-sm">{email}</Text>
         </View>
-        <Text
-          style={[
-            identityStyles.bio,
-            { backgroundColor: palette.surfaceMuted, color: palette.textSecondary },
-          ]}
-        >
+        <Text className="bg-muted text-muted-foreground w-full rounded-xl p-3 text-center">
           {bio || '这个人还没有填写简介。'}
         </Text>
       </View>
@@ -63,43 +63,18 @@ function ProfileAvatar({
   avatarUrl,
   label,
 }: Readonly<{ avatarUrl?: string | null; label: string }>) {
-  const { palette } = usePreferences();
   if (avatarUrl) {
     return (
       <Image
         accessibilityLabel="用户头像"
         source={{ uri: avatarUrl }}
-        style={identityStyles.avatar}
+        className="size-24 rounded-full"
       />
     );
   }
   return (
-    <View style={[identityStyles.avatar, { backgroundColor: palette.brandSoft }]}>
-      <Text style={identityStyles.avatarText}>{label}</Text>
+    <View className="bg-primary/10 size-24 items-center justify-center rounded-full">
+      <Text className="text-primary text-xl font-bold">{label}</Text>
     </View>
   );
 }
-
-const identityStyles = StyleSheet.create({
-  container: { alignItems: 'center', gap: spacing.x3, paddingVertical: spacing.x3 },
-  copy: { alignItems: 'center', gap: spacing.x1 },
-  bio: {
-    color: colors.textSecondary,
-    textAlign: 'center',
-    width: '100%',
-    padding: spacing.x3,
-    borderRadius: radii.control,
-    backgroundColor: colors.surfaceMuted,
-  },
-  avatarAction: { alignItems: 'center', gap: spacing.x2 },
-  avatarHint: { color: colors.brand, fontWeight: '700' },
-  avatar: {
-    width: 96,
-    height: 96,
-    borderRadius: radii.round,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.brandSoft,
-  },
-  avatarText: { color: colors.brand, fontSize: 20, fontWeight: '700' },
-});

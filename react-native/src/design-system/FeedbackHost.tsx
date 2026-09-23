@@ -1,117 +1,70 @@
-import React from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect } from 'react';
+import { View } from 'react-native';
+import { TriangleAlert } from 'lucide-react-native';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Icon } from '@/components/ui/icon';
+import { Text } from '@/components/ui/text';
+import { showSystemToast } from '../lib/system-toast';
 import { useApp } from '../state/AppStore';
-import { usePreferences } from '../preferences/PreferencesProvider';
-import { colors, radii, spacing } from '../theme/tokens';
-import { styles } from '../theme/styles';
-import { AppIcon } from './AppIcon';
-import { AppButton } from './components';
 
 export function FeedbackHost() {
   const { toast, confirm, closeConfirm } = useApp();
-  const { palette } = usePreferences();
-  const toastColor = toast?.tone === 'success'
-    ? colors.success
-    : toast?.tone === 'error'
-      ? colors.error
-      : colors.info;
+
+  // 提示改用系统呈现（Android ToastAndroid / iOS Alert）：
+  // 自绘浮层无法感知灵动岛，必然压住状态栏区域。
+  const toastId = toast?.id;
+  useEffect(() => {
+    if (!toast) return;
+    showSystemToast(toast.message, toast.tone);
+    // 同一 id 只提示一次；toast 对象 2.4s 后由 store 置空
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toastId]);
+
   return (
     <>
-      {toast ? (
-        <View
-          accessibilityLiveRegion="polite"
-          style={[feedbackStyles.toast, { backgroundColor: palette.surface, borderColor: palette.border }]}
-        >
-          <AppIcon name={toast.tone === 'error' ? 'alert' : 'check'} color={toastColor} size={20} />
-          <Text style={[feedbackStyles.toastText, { color: palette.brand }]}>{toast.message}</Text>
-        </View>
-      ) : null}
-      <Modal visible={Boolean(confirm)} transparent animationType="fade">
-        <Pressable style={feedbackStyles.scrim} onPress={closeConfirm}>
-          <Pressable
-            style={[feedbackStyles.dialog, { backgroundColor: palette.surface }]}
-            onPress={() => undefined}
-          >
-            <View style={[feedbackStyles.alertIcon, { backgroundColor: palette.brandSoft }]}>
-              <AppIcon name="alert" color={colors.warning} size={28} />
+      <AlertDialog
+        open={Boolean(confirm)}
+        onOpenChange={(open) => {
+          if (!open) closeConfirm();
+        }}
+      >
+        <AlertDialogContent>
+          <View className="items-center gap-3">
+            <View className="bg-muted h-[52px] w-[52px] items-center justify-center rounded-full">
+              <Icon as={TriangleAlert} className="text-destructive size-7" />
             </View>
-            <Text style={styles.heading}>{confirm?.title}</Text>
-            <Text style={[styles.secondary, feedbackStyles.center]}>{confirm?.message}</Text>
-            <View style={feedbackStyles.actions}>
-              <View style={feedbackStyles.action}>
-                <AppButton label="取消" variant="secondary" onPress={closeConfirm} />
-              </View>
-              <View style={feedbackStyles.action}>
-                <AppButton
-                  label={confirm?.confirmLabel ?? '确认'}
-                  variant="danger"
-                  onPress={() => {
-                    confirm?.onConfirm();
-                    closeConfirm();
-                  }}
-                />
-              </View>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+            <AlertDialogHeader className="items-center gap-2">
+              <AlertDialogTitle>{confirm?.title}</AlertDialogTitle>
+              <AlertDialogDescription className="text-center">
+                {confirm?.message}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+          </View>
+          <AlertDialogFooter className="flex-row gap-3">
+            <AlertDialogCancel className="flex-1" onPress={closeConfirm}>
+              <Text>取消</Text>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive flex-1"
+              onPress={() => {
+                confirm?.onConfirm();
+                closeConfirm();
+              }}
+            >
+              <Text>{confirm?.confirmLabel ?? '确认'}</Text>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
-
-const feedbackStyles = StyleSheet.create({
-  toast: {
-    position: 'absolute',
-    left: spacing.x4,
-    right: spacing.x4,
-    top: spacing.x8,
-    minHeight: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.x3,
-    borderRadius: radii.round,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.x5,
-    paddingVertical: spacing.x2,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOpacity: 0.12,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 6 },
-      },
-      android: { elevation: 8 },
-    }),
-  },
-  toastText: { fontSize: 13, fontWeight: '500' },
-  scrim: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.scrim,
-    padding: spacing.x6,
-  },
-  dialog: {
-    width: '100%',
-    maxWidth: 360,
-    alignItems: 'center',
-    gap: spacing.x3,
-    padding: spacing.x5,
-    borderRadius: radii.sheet,
-    backgroundColor: colors.surface,
-  },
-  alertIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: radii.round,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.brandSoft,
-  },
-  center: { textAlign: 'center' },
-  actions: { width: '100%', flexDirection: 'row', gap: spacing.x3 },
-  action: { flex: 1 },
-});

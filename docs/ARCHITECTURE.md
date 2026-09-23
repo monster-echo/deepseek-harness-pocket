@@ -10,20 +10,26 @@
          │
 Gateway (gateway/, Next.js + 自定义 server 承载 WS, 自有 PG)
   ├─ 验票：auth.zhongbei.tech 内部校验端点
-  ├─ Worker 注册/presence、配对绑定（worker↔user）
-  │   └─ 账号自动绑定：worker-register 带 accountToken（验签通过即绑）；
-  │       手机端解绑留墓碑不复活；POST /api/v1/workers/bind 按 hostKey 主动绑
+  ├─ Worker 注册/presence、绑定（worker↔user）
+  │   ├─ 账号自动绑定：worker-register 带 accountToken（验签通过即绑）；
+  │   │    手机端解绑留墓碑不复活；POST /api/v1/workers/bind 按 hostKey 主动绑
+  │   └─ 扫码登录 /api/v1/devices/link/*：手机授权 → 绑定该电脑，
+  │        并给桌面端签发设备凭据（dshl_<code>.<secret>；authUser 同时认 JWT 与它）
   ├─ 帧转发隧道（不理解 /mobile 会话协议）
   └─ 通知 → Expo Push；用量记录（计费预留）
          ▲ outbound wss uplink（断线重连）
 电脑 ×N = Worker (packages/bridge/)
   ├─ dshc CLI：install(开机自启)/start(拉起守护 dsh)/stop/status/token/qr（--json 供 GUI）
-  ├─ 桌面 GUI（desktop/，Flutter macOS/Windows，双窗口）：
-  │    主窗口 = harness 网页壳（webview）；控制台 = desktop_multi_window 独立引擎
-  │    （shadcn_ui：状态/账号/配对/版本/日志；托盘跨窗口导航 + 自启 checkbox）；
-  │    账号登录（与手机同账号体系）写 account-session.json → uplink 自动绑定，免扫码；
-  │    spawn 内置 node sidecar → dshc；托管 dsh 多版本（runtimes/dsh/<版本>）；
-  │    开机自启（登录项）+ 托盘常驻 + auto_updater（GitHub Releases appcast）
+  ├─ 桌面端（desktop-tauri/，Tauri 2 + React/TS，双窗口）：
+  │    主窗口 = harness 网页壳（WebView，仅放行 loopback；跨平台回退 URL 启动时捕获）；
+  │    控制台 = 独立窗口（React + Tailwind v4 + shadcn 令牌，与手机端同源；
+  │      5 页：状态/配对/账号/版本/日志；托盘跨窗口导航；配置缺窗口定义时
+  │      由 Rust WebviewWindowBuilder 动态建窗）；
+  │    登录：浏览器 loopback OAuth → account-session.json（已实现，含续期）；
+  │      扫码设备授权（device-link 主路径 → device-link.json）待接入；
+  │    内置 node sidecar → dshc；托管 dsh 多版本（runtimes/dsh/<版本>：列/装/删/切）；
+  │    开机自启（tauri-plugin-autostart：macOS LaunchAgent / Windows 注册表 Run 键）
+  │      + 托盘常驻 + tauri-plugin-updater（latest.json + minisign 签名）
   └─ cordis 插件（dsh 内运行）：/mobile 协议服务端
        ├─ 直连模式 node:http :3780（或 shareWebServer 挂 ctx.webServer）
        ├─ uplink 模式反连 gateway（连接时读 account-session.json 上送 accountToken）
@@ -37,7 +43,7 @@ Gateway (gateway/, Next.js + 自定义 server 承载 WS, 自有 PG)
 - `packages/bridge`：peer 依赖 cordis；导出插件 + `dshc` bin
 - `gateway`：Next.js 16 自定义 server（WS upgrade），PostgreSQL
 - `react-native/`：npm 单独管理（Expo 工具链约定），只依赖协议包
-- `desktop/`：Flutter 单独管理（不进 pnpm workspace）；worker 逻辑仍唯一收敛在 dshc，GUI 只是壳
+- `desktop-tauri/`：Tauri 2（Rust 壳 + React/TS 前端），纳入 pnpm workspace；worker 逻辑仍唯一收敛在 dshc，壳只负责托盘/窗口/进程托管
 
 ## 协议要点
 

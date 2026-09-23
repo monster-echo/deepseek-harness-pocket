@@ -59,8 +59,8 @@ Real scenarios:
 
 Grab the latest build from [Releases](https://github.com/monster-echo/deepseek-harness-pocket/releases/latest):
 
-- macOS: download `DSH-Pocket-<version>-macos-arm64.dmg`, drag into Applications, open
-- Windows: download `DSH-Pocket-Setup-<version>.exe`, double-click
+- macOS: download `DSH Pocket_<version>_aarch64.dmg`, drag into Applications, open
+- Windows: download `DSH Pocket_<version>_x64-setup.exe`, double-click
 
 It boots the Harness by itself (first run spends a few minutes preparing the environment). From then on it comes online at every login; closing the window tucks it into the **tray** — everything is managed from the tray menu.
 
@@ -109,7 +109,7 @@ Phone and computer never talk directly — both only speak encrypted to the Gate
 | `packages/bridge` | dsh plugin (protocol server: direct server + gateway uplink) + `dshc` Worker CLI (daemonizes dsh, autostart, pairing codes) | ✅ M1/M2 |
 | `gateway/` | Relay service (Next.js + custom WS server; auth, pairing, presence, push, usage) | ✅ M2 |
 | `react-native/` | Mobile app (Expo; sidebar layout, maximized chat, pairing flow) | ✅ M1/M2 |
-| `desktop/` | Desktop GUI (Flutter macOS/Windows: embedded console, Worker control, dsh version manager, autostart, self-update) | ✅ |
+| `desktop-tauri/` | Desktop app (Tauri 2 + React/TS, macOS/Windows: tray-resident, embeds the dsh Web GUI, console, Worker & dsh multi-version management, autostart, notifications, self-update) | ✅ |
 | `e2e/` | End-to-end smoke tests (fake phone → gateway → uplink → hub → fake dsh, plus real-dsh smoke scripts) | ✅ |
 
 ### Quick start
@@ -130,11 +130,11 @@ dshc install                                   # login autostart
 cd react-native && cp .env.example .env && npm install && npx expo start
 
 # desktop GUI (macOS / Windows)
-desktop/tool/build-sidecar.sh current && cd desktop && flutter run -d macos
+cd desktop-tauri && ./tool/build-sidecar.sh && pnpm install && pnpm tauri dev
 ```
 
 ### More docs
 
 - 🏗️ [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture
-- 🖥️ [desktop/README.md](desktop/README.md) — desktop development & release (CI builds on tag)
+- 🖥️ [desktop-tauri/README.md](desktop-tauri/README.md) — desktop development & release (CI builds on tag)
 - 🧪 `e2e/` — end-to-end smoke tests

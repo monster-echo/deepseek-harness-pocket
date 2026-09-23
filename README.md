@@ -59,8 +59,8 @@ AI agent 在家里/办公室的电脑上干活，你在沙发上、地铁上、�
 
 从 [Releases](https://github.com/monster-echo/deepseek-harness-pocket/releases/latest) 下载安装：
 
-- macOS：下载 `DSH-Pocket-<版本>-macos-arm64.dmg`，拖进「应用程序」，打开
-- Windows：下载 `DSH-Pocket-Setup-<版本>.exe`，双击安装
+- macOS：下载 `DSH Pocket_<版本>_aarch64.dmg`，拖进「应用程序」，打开
+- Windows：下载 `DSH Pocket_<版本>_x64-setup.exe`，双击安装
 
 打开后它会自己把 Harness 跑起来（第一次会花几分钟准备环境）。之后每次开机都自动在线，窗口关了会收进**托盘**——管理入口都在托盘右键菜单里。
 
@@ -109,7 +109,7 @@ AI agent 在家里/办公室的电脑上干活，你在沙发上、地铁上、�
 | `packages/bridge` | dsh 插件（协议服务端：直连 server + gateway uplink）+ `dshc` Worker CLI（拉起守护 dsh、开机自启、配对码） | ✅ M1/M2 |
 | `gateway/` | 中转服务（Next.js + 自定义 server 承载 WS；掌鲸 DSH Pocket 认证、配对、presence、推送、用量） | ✅ M2 |
 | `react-native/` | 手机 App（Expo；侧边栏布局、会话聊天最大化、配对引导） | ✅ M1/M2 |
-| `desktop/` | 电脑端 GUI（Flutter macOS/Windows：控制台内嵌、Worker 控制、dsh 版本管理、开机自启、自更新） | ✅ |
+| `desktop-tauri/` | 电脑端（Tauri 2 + React/TS，macOS/Windows：托盘常驻、主窗口内嵌 dsh Web GUI、控制台、Worker 与 dsh 多版本管理、开机自启、通知、自更新） | ✅ |
 | `e2e/` | 全链路冒烟（假手机→gateway→uplink→hub→假 dsh + 真实 dsh 冒烟脚本） | ✅ |
 
 ### 快速开始
@@ -129,12 +129,12 @@ dshc install                                   # 开机自启
 # 手机 App
 cd react-native && cp .env.example .env && npm install && npx expo start
 
-# 桌面端 GUI（macOS / Windows）
-desktop/tool/build-sidecar.sh current && cd desktop && flutter run -d macos
+# 电脑端（macOS / Windows）
+cd desktop-tauri && ./tool/build-sidecar.sh && pnpm install && pnpm tauri dev
 ```
 
 ### 更多文档
 
 - 🏗️ [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) —— 系统架构
-- 🖥️ [desktop/README.md](desktop/README.md) —— 桌面端开发与发布（CI 打 tag 自动出包）
+- ️ [desktop-tauri/README.md](desktop-tauri/README.md) —— 电脑端开发与发布（CI 打 tag 自动出包）
 - 🧪 `e2e/` —— 全链路冒烟测试

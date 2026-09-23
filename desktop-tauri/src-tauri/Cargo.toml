@@ -1,6 +1,6 @@
 [package]
 name = "dsh-pocket"
-version = "0.2.12"
+version = "0.2.13"
 description = "DSH Pocket — DeepSeek Harness 桌面 Worker"
 authors = ["掌鲸 DSH Pocket"]
 edition = "2021"

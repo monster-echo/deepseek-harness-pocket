@@ -37,3 +37,6 @@ docs/store-assets/play/tooling/
 docs/store-assets/ios/tooling/
 docs/store-assets/play/metadata/
 docs/store-assets/ios/metadata/
+
+# Tauri 桌面端的内置 node sidecar（本地产物，由 tool/build-sidecar.sh 生成）
+desktop-tauri/node-sidecar

@@ -386,6 +386,37 @@ fn dist_platform() -> Result<&'static str, String> {
     }
 }
 
+/// 是否本机地址（127.0.0.1 / localhost / [::1]）。手写解析即可，不引 URL 依赖。
+fn is_loopback_url(url: &str) -> bool {
+    let rest = url.split("://").nth(1).unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let hostport = authority.rsplit('@').next().unwrap_or(authority); // 去 userinfo
+    let host = if let Some(rest6) = hostport.strip_prefix('[') {
+        rest6.split(']').next().unwrap_or("") // IPv6 带方括号
+    } else {
+        hostport.split(':').next().unwrap_or("")
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
+/// 统一的阻塞 HTTP 客户端。
+///
+/// **loopback 一律直连**（`.no_proxy()`）：本机开着系统 HTTP 代理时（本机实测
+/// `scutil --proxy` → 127.0.0.1:7897），代理会把 loopback 也代理出去——代理自身
+/// 超时/拒连就变成 `502 Bad Gateway`，或把请求行改成"绝对形式"打乱路由匹配，
+/// 让下载（本机镜像 / e2e mock）偶发失败。本机地址不走代理本身也是正确语义。
+/// 其余地址保持默认（含系统代理），真实镜像/网关照旧走代理。
+fn http_client(url: &str, timeout_secs: u64) -> Result<reqwest::blocking::Client, String> {
+    crate::ensure_tls_provider();
+    let mut builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(timeout_secs));
+    if is_loopback_url(url) {
+        builder = builder.no_proxy();
+    }
+    builder
+        .build()
+        .map_err(|e| format!("HTTP 客户端创建失败: {e}"))
+}
+
 fn version_for_major(major: u8) -> Result<&'static str, String> {
     NODE_CHOICES
         .iter()
@@ -523,11 +554,7 @@ fn download_with_progress<R: Runtime>(
     dest: &Path,
     step: &str,
 ) -> Result<(), String> {
-    crate::ensure_tls_provider();
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(600))
-        .build()
-        .map_err(|e| format!("HTTP 客户端创建失败: {e}"))?;
+    let client = http_client(url, 600)?;
     let mut resp = client
         .get(url)
         .timeout(Duration::from_secs(600))
@@ -700,8 +727,9 @@ pub fn node_install_impl_with<R: Runtime>(
 
     emit_progress(app, serde_json::json!({ "step": step, "phase": "verify" }));
     let shasums_url = format!("{mirror}/{version}/SHASUMS256.txt");
-    crate::ensure_tls_provider();
-    let shasums = reqwest::blocking::get(&shasums_url)
+    let shasums = http_client(&shasums_url, 60)?
+        .get(&shasums_url)
+        .send()
         .and_then(|r| r.error_for_status())
         .and_then(|r| r.text())
         .map_err(|e| format!("下载 SHASUMS256.txt 失败: {e}"))?;
@@ -953,6 +981,19 @@ fn spawn_line_reader<R: std::io::Read + Send + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loopback_url_detection_covers_forms_we_use() {
+        // 测试用的 mock mirror 与本机镜像都长这样 → 必须直连、不走系统代理
+        assert!(is_loopback_url("http://127.0.0.1:5555/v24.21.0/x.tar.gz"));
+        assert!(is_loopback_url("http://localhost:8080/mirror"));
+        assert!(is_loopback_url("http://[::1]:8080/x"));
+        assert!(is_loopback_url("http://user:pw@127.0.0.1:8080/x"));
+        // 真实镜像要走系统代理（不返回 true）
+        assert!(!is_loopback_url("https://registry.npmmirror.com/x"));
+        assert!(!is_loopback_url("http://127.0.0.1.evil.com/x"));
+        assert!(!is_loopback_url(""));
+    }
 
     fn temp_file(name: &str, content: &[u8]) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("dsh-pocket-test-{}", std::process::id()));
@@ -1350,7 +1391,20 @@ mod bootstrap_e2e_tests {
     use std::io::{Read as _, Write as _};
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+
+    /// 这一组用例各自起一个本地 HTTP mock 并真下载压缩包，是**竞态敏感**的：
+    /// 43 个测试并行跑时（约 10 核）曾出现 1% 量级的偶发失败（实测抓到过
+    /// 「189 字节全零」「502 Bad Gateway」「tar 头非法」三种表象）。
+    /// 并发本身对被测逻辑没有价值，因此这里显式串行化：谁拿到锁谁跑，
+    /// 保证 mock 与客户端之间不与其他 e2e 用例争 CPU。
+    fn e2e_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        match LOCK.get_or_init(|| Mutex::new(())).lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        }
+    }
 
     /// 极简测试镜像：单线程应答器，路由 → 字节体；未注册路由回 404；drop 即停。
     struct MockMirror {
@@ -1369,23 +1423,86 @@ mod bootstrap_e2e_tests {
                 while !stop2.load(Ordering::Relaxed) {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
-                            let mut buf = [0u8; 2048];
-                            let _ = stream.read(&mut buf);
-                            let req = String::from_utf8_lossy(&buf);
-                            let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
-                            let mut resp = match routes.get(&path) {
-                                Some(body) => {
-                                    let mut r = format!(
-                                        "HTTP/1.0 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                                        body.len()
-                                    )
-                                    .into_bytes();
-                                    r.extend_from_slice(body);
-                                    r
+                            // 每条连接单独一个线程 + 读超时：客户端可能只建立连接不发请求
+                            // （预连接/连接池），而 accepted stream 是阻塞的——在 accept 循环里
+                            // 直接 read 会把它整个卡死，后续请求超时 → 测试偶发失败
+                            // （本机实测复现过 1 次：`install_end_to_end_from_mirror`）。
+                            let routes = routes.clone();
+                            std::thread::spawn(move || {
+                                // 读请求头：单次 500ms 超时、最多 120 次（合计 ~60s 空闲容忍）。
+                                //
+                                // 为什么必须这么宽容（实测三次迭代才定位到）：
+                                // 本机开了系统 HTTP 代理（`scutil --proxy` → 127.0.0.1:7897），
+                                // reqwest 的 system-proxy 特性会把这些请求交给代理，而**代理会
+                                // 复用与上游的连接**。早先"读超时后立刻关连接/回 404"的写法会让
+                                // 代理手里攥着一条已死的上游连接 → 下一次真实请求写成
+                                // `502 Bad Gateway`，或直接读到我们预先写好的 404，
+                                // 表现为 e2e 用例偶发红（`install_*`、`tar 头非法`）。
+                                // 所以：只要没读到完整请求行，就继续等，**不要主动关**。
+                                let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                                let mut buf: Vec<u8> = Vec::new();
+                                let mut chunk = [0u8; 512];
+                                for _ in 0..120 {
+                                    match stream.read(&mut chunk) {
+                                        Ok(0) => break, // 对端真的关了
+                                        Ok(n) => {
+                                            buf.extend_from_slice(&chunk[..n]);
+                                            if buf.contains(&b'\n') {
+                                                break;
+                                            }
+                                        }
+                                        Err(e)
+                                            if matches!(
+                                                e.kind(),
+                                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                                            ) =>
+                                        {
+                                            continue
+                                        }
+                                        Err(_) => break,
+                                    }
                                 }
-                                None => b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
-                            };
-                            let _ = stream.write_all(&mut resp);
+                                // 始终没收到请求：直接关（不回 404）——回一个 404 会被
+                                // 当成这条连接上后续请求的响应。
+                                if buf.is_empty() {
+                                    return;
+                                }
+                                let req = String::from_utf8_lossy(&buf);
+                                // 兼容"绝对形式"请求行：经过 HTTP 代理时请求行是
+                                // `GET http://127.0.0.1:port/path HTTP/1.1`，直接
+                                // `nth(1)` 会拿到整条 URL → 路由匹配失败 → 404。
+                                // 本机系统代理（README 记为 127.0.0.1:7897）对 loopback
+                                // 也生效（reqwest 的 system-proxy 特性），因此这不是
+                                // 假想情况：实测就是它把 e2e 用例变成偶发红的。
+                                let target = req.split_whitespace().nth(1).unwrap_or("/");
+                                let path = match target.find("://") {
+                                    Some(i) => {
+                                        let after = &target[i + 3..];
+                                        match after.find('/') {
+                                            Some(j) => after[j..].to_string(),
+                                            None => "/".to_string(),
+                                        }
+                                    }
+                                    None => target.to_string(),
+                                };
+                                let path = path.split('?').next().unwrap_or("/").to_string();
+                                if routes.get(&path).is_none() {
+                                    eprintln!("[mock] 404 path={path:?} raw={req:?}");
+                                }
+                                let mut resp = match routes.get(&path) {
+                                    Some(body) => {
+                                        let mut r = format!(
+                                            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                            body.len()
+                                        )
+                                        .into_bytes();
+                                        r.extend_from_slice(body);
+                                        r
+                                    }
+                                    None => b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                                };
+                                let _ = stream.write_all(&mut resp);
+                            });
                         }
                         Err(_) => std::thread::sleep(Duration::from_millis(10)),
                     }
@@ -1454,6 +1571,7 @@ mod bootstrap_e2e_tests {
 
     #[test]
     fn install_end_to_end_from_mirror() {
+        let _serial = e2e_lock(); // 串行化：见 e2e_lock 注释
         let app = tauri::test::mock_app();
         let home = temp_home("ok");
         let version = version_for_major(24).unwrap();
@@ -1489,6 +1607,7 @@ mod bootstrap_e2e_tests {
 
     #[test]
     fn install_fails_closed_on_tampered_artifact() {
+        let _serial = e2e_lock(); // 串行化：见 e2e_lock 注释
         let app = tauri::test::mock_app();
         let home = temp_home("tamper");
         let version = version_for_major(24).unwrap();
@@ -1515,6 +1634,7 @@ mod bootstrap_e2e_tests {
 
     #[test]
     fn install_fails_when_shasums_missing() {
+        let _serial = e2e_lock(); // 串行化：见 e2e_lock 注释
         let app = tauri::test::mock_app();
         let home = temp_home("nosh");
         let version = version_for_major(24).unwrap();
@@ -1532,6 +1652,7 @@ mod bootstrap_e2e_tests {
 
     #[test]
     fn install_fails_when_mirror_unreachable() {
+        let _serial = e2e_lock(); // 串行化：见 e2e_lock 注释
         let app = tauri::test::mock_app();
         let home = temp_home("down");
         // 占一个端口立刻松手：连接必然被拒

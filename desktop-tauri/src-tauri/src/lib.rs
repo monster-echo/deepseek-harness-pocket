@@ -13,12 +13,13 @@ mod toolchain;
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
+use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
 
 /// 状态轮询间隔（与 Flutter 端一致量级）
@@ -26,8 +27,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(3);
 /// 轮询连续失败时的退避上限（3→6→…→60s；避免环境坏掉时每 3s 冷启动一个 node 空转）
 const POLL_MAX_INTERVAL: Duration = Duration::from_secs(60);
 
-/// 上一次已加载的 dsh Web URL —— 变了才导航（dsh 重启后 token 必变）
-static LAST_WEB_URL: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
+// 主窗口"当前应在哪个页面"由 NAV 状态机唯一持有（原 LAST_WEB_URL 水位已并入，见导航状态机一节）。
 
 /// 主窗口最近一次成功导航（含整页刷新）的时间（epoch ms；0 = 尚未导航过）。
 static LAST_NAVIGATED_AT: AtomicU64 = AtomicU64::new(0);
@@ -218,74 +218,574 @@ fn read_status<R: Runtime>(app: &AppHandle<R>) -> serde_json::Value {
     }
 }
 
-// ───────────────────────── 导航 ─────────────────────────
+// ─────────────── 主窗口导航状态机（启动逻辑的唯一所有者）───────────────
+//
+// 为什么需要它：原实现是"每 tick 盲导航 + 一个 URL 水位去重"。navigate() 的 Ok 只代表
+// **发起**了导航，而 wry 的 macOS 委托只上报成功（didCommit/didFinish，没有
+// didFailProvisionalNavigation）——加载失败既收不到事件，水位又已经置位，于是**永不重试**，
+// 用户被永久留在 WKWebView 的错误页上（详见 docs/desktop-boot-and-console-redesign.md §3）。
+//
+// 现在的规则：
+//   1. 只有"前端握手"或"用户显式动作"才打开导航闸门（向导不会被导航打断）；
+//   2. 导航前先 TCP 探活（毫秒级、零副作用），不通就退避等待，不进错误页；
+//   3. 导航后起看门狗：8s 内没等到 Finished 就判定失败 → 自动回退到本应用 SPA + 通知前端；
+//   4. 失败自动退避重试（1s→2s→…→30s）最多 NAV_AUTO_RETRY_LIMIT 次，之后交给用户点「重新连接」。
 
-/// 把主窗口导航到 dsh Web GUI；URL 为空则回到引导面（本应用前端）。
-fn navigate_main<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
-    let mut last = match LAST_WEB_URL.lock() {
+/// 导航阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavPhase {
+    /// 无目标：应停在本应用 SPA
+    Idle,
+    /// 已发起导航，等 on_page_load 的 Finished（看门狗计时中）
+    Pending,
+    /// 已证实加载成功（Finished 且同源）
+    Live,
+    /// 上次尝试失败（探活不过 / 看门狗超时），等待退避
+    Failed,
+}
+
+impl NavPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            NavPhase::Idle => "idle",
+            NavPhase::Pending => "connecting",
+            NavPhase::Live => "live",
+            NavPhase::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct NavState {
+    /// 当前"应在"的 dsh Web GUI 地址（None = 应在应用 SPA）
+    target: Option<String>,
+    phase: NavPhase,
+    /// 本次目标累计失败次数（目标变化时清零）
+    attempts: u32,
+    /// Pending 起点（看门狗基准）
+    armed_at: Option<Instant>,
+    /// Failed 时的下次可尝试时刻
+    retry_at: Option<Instant>,
+    /// 最近一次失败原因（给前端恢复卡）
+    reason: Option<String>,
+}
+
+impl Default for NavState {
+    fn default() -> Self {
+        Self { target: None, phase: NavPhase::Idle, attempts: 0, armed_at: None, retry_at: None, reason: None }
+    }
+}
+
+static NAV: LazyLock<Mutex<NavState>> = LazyLock::new(|| Mutex::new(NavState::default()));
+
+/// 导航闸门：前端"我已准备好让出窗口"（enter_web_surface）或用户显式动作时打开。
+/// 关着的时候轮询器绝不导航——这是"向导不会被导航打断"的实现。
+static WEB_SURFACE_WANTED: AtomicBool = AtomicBool::new(false);
+
+/// 看门狗时长：发起导航后多久没等到 Finished 就判定失败。
+/// 8s 的依据：本机 loopback 的 dsh Web GUI 首屏在秒级；超过 8s 基本可判定端口没起来。
+const NAV_LOAD_TIMEOUT: Duration = Duration::from_secs(8);
+/// 导航前 TCP 探活超时。
+const NAV_PROBE_TIMEOUT_MS: u64 = 1500;
+/// 导航失败后的自动重试上限（超过后只保留手动「重新连接」）。
+const NAV_AUTO_RETRY_LIMIT: u32 = 3;
+/// 探活连续失败多少次才把原因交给用户。
+/// 比 [`NAV_AUTO_RETRY_LIMIT`] 宽：探活失败发生在"还没离开 SPA"时，安静重试不打扰人；
+/// 而 dsh web 打印出 URL 后端口通常立刻可用，所以连续失败基本等于真有问题。
+/// 退避 2→4→8→16→30→30s，约 90s 后亮卡（不变量 I3：失败必须给原因和出口）。
+const NAV_PROBE_FAIL_LIMIT: u32 = 6;
+/// 自动重试退避上限。
+const NAV_RETRY_MAX_SECS: u64 = 30;
+
+const NAV_REASON_TIMEOUT: &str = "本机控制台加载超时";
+const NAV_REASON_UNREACHABLE: &str = "本机控制台暂时没有响应";
+
+fn nav_lock() -> MutexGuard<'static, NavState> {
+    match NAV.lock() {
         Ok(g) => g,
         Err(p) => p.into_inner(),
-    };
-    let target = if web_url.is_empty() { None } else { Some(web_url.to_string()) };
-    if *last == target {
-        return; // 未变化，不打扰当前页面
     }
-    let Some(win) = app.get_webview_window("main") else { return };
+}
 
-    match &target {
+fn app_url() -> Option<String> {
+    APP_URL.lock().ok().and_then(|g| g.clone())
+}
+
+/// 当前"应在"的 Web GUI 地址（给刷新/自愈判定用）。
+fn current_web_target() -> Option<String> {
+    nav_lock().target.clone()
+}
+
+/// 失败退避（纯逻辑，便于单测）。调用方传入的是**自增后**的失败次数，所以实际节奏是
+/// 首次失败 2s → 4s → 8s → 16s → 30s（封顶）。
+fn nav_retry_interval(attempts: u32) -> Duration {
+    Duration::from_secs(1u64 << attempts.min(5)).min(Duration::from_secs(NAV_RETRY_MAX_SECS))
+}
+
+/// 是否允许"现在尝试导航"（纯逻辑）：必须有目标、闸门已开、且当前阶段允许。
+/// Idle 首次放行；Failed 只有退避到点才放行；Pending/Live 不重复导航。
+fn nav_may_attempt(phase: NavPhase, target_present: bool, gate_open: bool, retry_due: bool) -> bool {
+    if !target_present || !gate_open {
+        return false;
+    }
+    match phase {
+        NavPhase::Idle => true,
+        NavPhase::Failed => retry_due,
+        NavPhase::Pending | NavPhase::Live => false,
+    }
+}
+
+/// 看门狗判定（纯逻辑）：Pending 且已超过 NAV_LOAD_TIMEOUT。
+fn nav_load_timed_out(phase: NavPhase, armed: Option<Instant>, now: Instant) -> bool {
+    phase == NavPhase::Pending
+        && armed
+            .map(|t| now.duration_since(t) >= NAV_LOAD_TIMEOUT)
+            .unwrap_or(false)
+}
+
+/// 从 loopback http URL 取可连接的 socket 地址；非 loopback/非 http 返回 None。
+/// 既是 navigate 的白名单（token 不出本机），也是探活的目标地址。
+fn loopback_socket_addr(url: &str) -> Option<std::net::SocketAddr> {
+    let u = tauri::Url::parse(url).ok()?;
+    if u.scheme() != "http" {
+        return None;
+    }
+    let host = u.host_str()?;
+    // url crate 对 IPv6 是否带方括号因版本而异，两侧都兼容
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let ip = match host {
+        "127.0.0.1" | "localhost" => "127.0.0.1".to_string(),
+        "::1" => "::1".to_string(),
+        _ => return None,
+    };
+    let port = u.port_or_known_default()?;
+    if ip.contains(':') {
+        format!("[{ip}]:{port}").parse().ok()
+    } else {
+        format!("{ip}:{port}").parse().ok()
+    }
+}
+
+/// loopback 白名单（导航与探活共用同一判定）。
+fn is_loopback_web_url(url: &str) -> bool {
+    loopback_socket_addr(url).is_some()
+}
+
+/// loopback 探活：只做 TCP 连接——毫秒级、**零副作用**（不发 HTTP 请求，
+/// 避免任何"探测本身消耗 URL 里一次性 token"的可能）。
+fn web_url_reachable(url: &str) -> bool {
+    let Some(addr) = loopback_socket_addr(url) else { return false };
+    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(NAV_PROBE_TIMEOUT_MS)).is_ok()
+}
+
+/// 导航状态快照（前端恢复卡用；不含 URL，token 不额外扩散）。
+///
+/// `autoRetry` 直接取闸门状态：它就是"系统还会不会自己重试"的唯一真相，
+/// 用 attempts 与某个阈值比会出现"卡上写已用尽、Rust 还在重试"的不一致
+/// （探活上限 6 与看门狗上限 3 本就不同，复核 B-6）。
+fn nav_state_json() -> serde_json::Value {
+    let s = nav_lock();
+    serde_json::json!({
+        "phase": s.phase.as_str(),
+        "attempts": s.attempts,
+        "reason": s.reason,
+        "autoRetry": WEB_SURFACE_WANTED.load(Ordering::Relaxed),
+    })
+}
+
+/// 是否正等页面加载完成（看门狗计时中）——轮询器据此缩短 tick 周期，
+/// 否则轮询退避到 60s 会把"8 秒看门狗"拖成 60s+（不变量 I1 失效，复核 B-3）。
+fn nav_is_pending() -> bool {
+    nav_lock().phase == NavPhase::Pending
+}
+
+/// 广播导航相位（跨线程 emit；调用点必须保证不持有 NAV 锁）。
+fn emit_nav_state<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.emit("nav-state", nav_state_json());
+}
+
+/// 发起导航并置位 Pending。返回是否真的发起了导航。
+///
+/// **先置位、再导航**：`on_page_load` 回调在主线程上跑，可能在 `navigate()` 返回后
+/// 立刻到达；若先导航后写状态，目标页会被 on_main_page_loaded 当成"不是目标"，
+/// 从而被误记成应用自身 URL（回退时就会把用户送回 Web GUI，形成死循环）。
+fn navigate_and_arm<R: Runtime>(app: &AppHandle<R>, url: &str) -> bool {
+    let Some(win) = app.get_webview_window("main") else { return false };
+    let Ok(parsed) = tauri::Url::parse(url) else { return false };
+    {
+        let mut s = nav_lock();
+        s.target = Some(url.to_string());
+        s.phase = NavPhase::Pending;
+        s.armed_at = Some(Instant::now());
+        s.retry_at = None;
+        s.reason = None;
+    }
+    if win.navigate(parsed).is_err() {
+        // 导航没发出去：退回 Failed，走退避（不能让看门狗空等到超时）
+        let mut s = nav_lock();
+        let next = s.attempts.saturating_add(1);
+        s.phase = NavPhase::Failed;
+        s.armed_at = None;
+        s.attempts = next;
+        s.retry_at = Some(Instant::now() + nav_retry_interval(next));
+        drop(s);
+        emit_nav_state(app);
+        return false;
+    }
+    mark_navigated_now();
+    emit_nav_state(app);
+    true
+}
+
+/// 失败回退：把主窗口拉回本应用 SPA，并把原因交给前端渲染恢复卡（而不是留在错误页）。
+/// `keep_gate` 为 false 时同时关闭闸门——自动重试已用尽，改由用户点「重新连接」。
+fn fallback_to_app<R: Runtime>(app: &AppHandle<R>, reason: &str, keep_gate: bool) {
+    match app_url() {
         Some(url) => {
-            // 只放行 loopback：token 不出本机
-            let is_loopback = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
-            if !is_loopback {
-                return;
-            }
-            if let Ok(parsed) = tauri::Url::parse(url) {
-                if win.navigate(parsed).is_ok() {
-                    *last = target;
-                    mark_navigated_now();
-                }
-            }
-        }
-        None => {
-            let app_url = APP_URL.lock().ok().and_then(|g| g.clone());
-            if let Some(url) = app_url {
+            if let Some(win) = app.get_webview_window("main") {
                 if let Ok(parsed) = tauri::Url::parse(&url) {
                     if win.navigate(parsed).is_ok() {
-                        *last = target;
                         mark_navigated_now();
                     }
                 }
             }
         }
+        // 不再静默：APP_URL 缺失时回退是 no-op，用户会留在错误页——必须留痕（复核 B-7）
+        None => eprintln!("[nav] 回退失败：APP_URL 尚未捕获（{reason}）"),
+    }
+    if !keep_gate {
+        WEB_SURFACE_WANTED.store(false, Ordering::Relaxed);
+    }
+    let _ = app.emit("web-surface-failed", reason);
+    notify(app, "DSH Pocket", &format!("{reason}，已回到引导界面"));
+}
+
+/// 轮询 tick 的导航推进（**唯一**的导航决策入口，替代原先每 tick 盲调 navigate_main）。
+///
+/// `onboarded`：引导是否完成。未完成时只有显式握手（闸门开）才允许导航。
+fn nav_tick<R: Runtime>(app: &AppHandle<R>, web_url: &str, onboarded: bool) {
+    let now = Instant::now();
+
+    // ① 看门狗优先：已经导航出去但迟迟不成功 → 判定失败、回退、退避
+    let (phase, armed) = {
+        let s = nav_lock();
+        (s.phase, s.armed_at)
+    };
+    if nav_load_timed_out(phase, armed, now) {
+        // 复核一次再判失败：快照与判定之间，主线程可能刚好把相位推到 Live
+        // （页面在第 8 秒边界上加载完）——不复核就会把一个刚可用的页面导航走。
+        let still_pending = {
+            let s = nav_lock();
+            nav_load_timed_out(s.phase, s.armed_at, now)
+        };
+        if !still_pending {
+            return;
+        }
+        // 就地从状态里取 attempts：tick 开头的快照可能已被"目标变化重置"作废，
+        // 用旧值会把退避算成 16s（用户白等一截）
+        let next = {
+            let mut s = nav_lock();
+            s.phase = NavPhase::Failed;
+            s.armed_at = None;
+            s.attempts = s.attempts.saturating_add(1);
+            s.retry_at = Some(now + nav_retry_interval(s.attempts));
+            s.reason = Some(NAV_REASON_TIMEOUT.to_string());
+            s.attempts
+        };
+        fallback_to_app(app, NAV_REASON_TIMEOUT, next < NAV_AUTO_RETRY_LIMIT);
+        emit_nav_state(app);
+        return;
+    }
+
+    // ② 目标合法性 + 变化重置
+    let target_present = !web_url.is_empty() && is_loopback_web_url(web_url);
+    let prev_target = current_web_target();
+    let target_changed = {
+        let s = nav_lock();
+        s.target.as_deref() != if target_present { Some(web_url) } else { None }
+    };
+    if target_changed {
+        let mut s = nav_lock();
+        s.target = if target_present { Some(web_url.to_string()) } else { None };
+        s.phase = NavPhase::Idle;
+        s.attempts = 0;
+        s.armed_at = None;
+        s.retry_at = None;
+        s.reason = None;
+    }
+    if !target_present {
+        // 目标消失（worker 被停 / run.json 被清）：若人还停在 Web 界面上，拉回引导面，
+        // 让用户看到「Worker 未运行 + 启动」而不是一个已经断了的页面。
+        //
+        // 判定必须是"当前页面 == 刚才那个目标"，**不能**用 is_loopback 判：
+        // 开发态 SPA 自己就是 localhost:1420（loopback），会被误判成人还在 Web 界面，
+        // 于是每 3s 把引导面整页重载一次（复核 B-5-1；原来是 LAST_WEB_URL 水位挡住的）。
+        if let (Some(prev), Some(win)) = (prev_target.as_deref(), app.get_webview_window("main")) {
+            let still_on_target = win
+                .url()
+                .ok()
+                .map(|u| url_origin(u.as_str()).is_some() && url_origin(u.as_str()) == url_origin(prev))
+                .unwrap_or(false);
+            if still_on_target {
+                if let Some(url) = app_url() {
+                    if let Ok(parsed) = tauri::Url::parse(&url) {
+                        if win.navigate(parsed).is_ok() {
+                            mark_navigated_now();
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    let gate_open = WEB_SURFACE_WANTED.load(Ordering::Relaxed);
+    // 环境不齐（向导是硬门槛）且用户没显式要求：绝不导航
+    if !onboarded && !gate_open {
+        return;
+    }
+
+    // 窗口不可见（开机自启 --minimized）：不导航。闸门保持开着，
+    // 用户从托盘打开窗口后的第一个 tick 自然接上（避免自启时白跑一次导航）。
+    if let Some(win) = app.get_webview_window("main") {
+        if !win.is_visible().unwrap_or(true) {
+            return;
+        }
+    } else {
+        return;
+    }
+
+    let (phase, retry_at) = {
+        let s = nav_lock();
+        (s.phase, s.retry_at)
+    };
+    let retry_due = retry_at.map(|t| now >= t).unwrap_or(true);
+    if !nav_may_attempt(phase, target_present, gate_open, retry_due) {
+        return;
+    }
+
+    // ③ 探活：不通就退避等待（此时还没离开 SPA，用户无感，不必打扰）
+    if !web_url_reachable(web_url) {
+        let next = {
+            let mut s = nav_lock();
+            s.phase = NavPhase::Failed;
+            s.armed_at = None;
+            s.attempts = s.attempts.saturating_add(1); // 就地取：见看门狗分支注释
+            s.retry_at = Some(now + nav_retry_interval(s.attempts));
+            s.reason = Some(NAV_REASON_UNREACHABLE.to_string());
+            s.attempts
+        };
+        // 连续多次不可达：把原因交给用户并关闸（不变量 I3）。
+        // 不这样做的话，用户会一直停在"Harness 正在启动…"上，永远等不到解释。
+        if next >= NAV_PROBE_FAIL_LIMIT {
+            WEB_SURFACE_WANTED.store(false, Ordering::Relaxed);
+            let _ = app.emit("web-surface-failed", NAV_REASON_UNREACHABLE);
+            notify(app, "DSH Pocket", &format!("{NAV_REASON_UNREACHABLE}，请打开控制台查看"));
+        }
+        emit_nav_state(app);
+        return;
+    }
+
+    // ④ 探活通过才导航（navigate_and_arm 内部起看门狗）
+    navigate_and_arm(app, web_url);
+}
+
+/// 前端握手 / 菜单请求进入 Web 界面：开闸 + 立即推进一次。
+///
+/// **不清 attempts、不重置失败水位**：握手在每次页面重载后都会发一次（回退也是整页
+/// 导航 → 新页面又握手），如果这里清零，"自动重试 3 次"就永远到不了上限，闸门永不关，
+/// 用户会被无限弹回（复核 B-4）。需要立即重试的是**用户显式动作**，走
+/// [`nav_retry_now`]（恢复卡上的「重新连接」/菜单）。
+fn nav_request<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
+    WEB_SURFACE_WANTED.store(true, Ordering::Relaxed);
+    {
+        let mut s = nav_lock();
+        // 目标变了（worker 重启换 token）才重置水位；同目标失败过则保持退避节奏
+        if s.target.as_deref() != Some(web_url) {
+            s.phase = NavPhase::Idle;
+            s.attempts = 0;
+            s.armed_at = None;
+            s.retry_at = None;
+            s.reason = None;
+        }
+    }
+    let onboarded = pocket_home(app)
+        .map(|h| h.join("onboarding-done.json").exists())
+        .unwrap_or(false);
+    nav_tick(app, web_url, onboarded);
+}
+
+/// 用户显式重试：开闸 + 清失败水位 + 立即推进（恢复卡「重新连接」/菜单动作）。
+fn nav_retry_now<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
+    WEB_SURFACE_WANTED.store(true, Ordering::Relaxed);
+    {
+        let mut s = nav_lock();
+        s.phase = NavPhase::Idle;
+        s.attempts = 0;
+        s.armed_at = None;
+        s.retry_at = None;
+        s.reason = None;
+    }
+    let onboarded = pocket_home(app)
+        .map(|h| h.join("onboarding-done.json").exists())
+        .unwrap_or(false);
+    nav_tick(app, web_url, onboarded);
+}
+
+/// 只开关"让出窗口"的意图（不导航）。前端进入向导/离开引导面时调用，
+/// 否则闸门一次打开就再也关不上——向导会被后台导航打断（不变量 I2）。
+fn nav_set_intent<R: Runtime>(app: &AppHandle<R>, enabled: bool) {
+    WEB_SURFACE_WANTED.store(enabled, Ordering::Relaxed);
+    if !enabled {
+        // 关闸同时作废"在飞"的导航判定，免得向导里还挂着看门狗，8s 后把人弹走
+        let mut s = nav_lock();
+        if s.phase == NavPhase::Pending {
+            s.phase = NavPhase::Idle;
+            s.armed_at = None;
+        }
+    }
+    emit_nav_state(app);
+}
+
+/// 轻推一下导航（单实例聚焦 / 托盘「打开主界面」）：按当前状态与退避节奏推进一次。
+/// 不强行导航——闸门没开（用户没让出窗口）就不动。
+fn nav_nudge<R: Runtime>(app: &AppHandle<R>) {
+    let web_url = run_web_url(app);
+    if web_url.is_empty() {
+        return;
+    }
+    let onboarded = pocket_home(app)
+        .map(|h| h.join("onboarding-done.json").exists())
+        .unwrap_or(false);
+    nav_tick(app, &web_url, onboarded);
+}
+
+/// 强制重连（401 自愈 / 页面自报不可达 / ⌘R）：页面已被证实可达或需要立刻重来，
+/// 跳过探活直接重新导航，并重开看门狗。
+fn nav_force_reconnect<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
+    WEB_SURFACE_WANTED.store(true, Ordering::Relaxed);
+    {
+        let mut s = nav_lock();
+        s.phase = NavPhase::Idle;
+        s.attempts = 0;
+        s.armed_at = None;
+        s.retry_at = None;
+        s.target = None;
+    }
+    navigate_and_arm(app, web_url);
+}
+
+/// 离开 Web 界面：关闸 + 清目标 + 回到本应用 SPA。
+fn nav_leave_web_surface<R: Runtime>(app: &AppHandle<R>) {
+    WEB_SURFACE_WANTED.store(false, Ordering::Relaxed);
+    {
+        let mut s = nav_lock();
+        s.target = None;
+        s.phase = NavPhase::Idle;
+        s.attempts = 0;
+        s.armed_at = None;
+        s.retry_at = None;
+        s.reason = None;
+    }
+    match app_url() {
+        Some(url) => {
+            if let Some(win) = app.get_webview_window("main") {
+                if let Ok(parsed) = tauri::Url::parse(&url) {
+                    if win.navigate(parsed).is_ok() {
+                        mark_navigated_now();
+                    }
+                }
+            }
+        }
+        // 不再静默：APP_URL 缺失时"回引导面"是 no-op，必须留痕（复核 B-7）
+        None => eprintln!("[nav] 无法回到本应用前端：APP_URL 尚未捕获"),
+    }
+    emit_nav_state(app);
+}
+
+/// 主窗口页面加载完成：目标页同源 → Live；其它本地壳地址 → 记住为 APP_URL。
+/// 由 `run()` 里的全局 on_page_load 钩子调用（wry 只上报成功，失败靠看门狗兜）。
+fn on_main_page_loaded<R: Runtime>(app: &AppHandle<R>, url: &str) {
+    if url.is_empty() || url.starts_with("about:") {
+        return;
+    }
+    let target = current_web_target();
+    let same_as_target = target
+        .as_deref()
+        .map(|t| url_origin(t).is_some() && url_origin(t) == url_origin(url))
+        .unwrap_or(false);
+    if same_as_target {
+        let phase = { nav_lock().phase };
+        if phase != NavPhase::Live {
+            {
+                let mut s = nav_lock();
+                s.phase = NavPhase::Live;
+                s.armed_at = None;
+                s.attempts = 0;
+                s.retry_at = None;
+                s.reason = None;
+            }
+            emit_nav_state(app);
+        }
+        return;
+    }
+    // 不是目标 Web GUI → 认为这是本应用 SPA（打包态 tauri://localhost / Windows
+    // http://tauri.localhost / 开发态 localhost:1420）并记住它。
+    //
+    // ① 相位纠正：人已经回到 SPA，就绝不能再停在 Live——Live 会永久禁止自动导航
+    //    （复核 B-5 死角：看门狗写完 Failed 后、回退导航前，主线程若投递目标页的
+    //    Finished，就会 Live 落在 SPA 上，之后只能靠菜单手动救）。
+    {
+        let mut s = nav_lock();
+        if s.phase == NavPhase::Live {
+            s.phase = NavPhase::Failed;
+            s.armed_at = None;
+        }
+    }
+    // ② 记录 APP_URL。**这里不能再按 loopback 排除**：开发态 SPA 就是
+    //    localhost:1420（loopback），排除掉的话 APP_URL 只剩 setup 那一搏，
+    //    而那时 WKWebView 常常还是 about:blank——两条加固一叠加，dev 下
+    //    APP_URL 恒为 None，"回引导面/恢复卡"全部变 no-op（复核 A-③）。
+    //    "别把 dsh Web GUI 记成应用自身"由上面的同源分支保证（目标页走不到这里），
+    //    加上 navigate_and_arm 的"先置位再导航"，不再需要这层排除。
+    if let Ok(mut g) = APP_URL.lock() {
+        if g.as_deref() != Some(url) {
+            *g = Some(url.to_string());
+        }
     }
 }
 
-/// 「刷新界面」：整页重载主窗口当前页。dsh web 是长驻页面，事件流在 webview
-/// 长时间后台后可能不再恢复（模型胶囊等停在过去，用户以为切换没生效），
-/// 手动刷新是最直接的自愈入口。只刷新 dsh web 页：引导面向导状态在前端内存里。
+// ───────────────────────── 导航 ─────────────────────────
+//
+// 原 `navigate_main(app, web_url)` 已被状态机取代：
+//   进 Web GUI → nav_request（握手 + 探活 + 看门狗）
+//   回引导面   → nav_leave_web_surface
+
+/// 「刷新界面」：dsh web 是长驻页面，事件流在 webview 长时间后台后可能不再恢复
+/// （模型胶囊等停在过去，用户以为切换没生效），手动刷新是最直接的自愈入口。
+///
+/// 在 Web 界面上时走「重新导航到带 token 的目标地址」而不是 `location.reload()`：
+/// dsh 认证后会把 token 从地址栏剥离，裸 reload 会打到 401 页；重新导航顺带把看门狗
+/// 重新上表（reload 不经过导航状态机，失败将无人兜底）。
+/// 在本应用 SPA 上时也整页重载——⌘R 在两个页面都必须有效（向导状态在前端内存里，刷新即重置）。
 fn reload_main_webview<R: Runtime>(app: &AppHandle<R>) {
     let Some(win) = app.get_webview_window("main") else { return };
-    let on_web = match LAST_WEB_URL.lock() {
-        Ok(g) => g.clone(),
-        Err(p) => p.into_inner().clone(),
-    };
-    let Some(web_url) = on_web else { return };
     let Ok(cur) = win.url() else { return };
-    if url_origin(cur.as_str()).as_deref() != url_origin(&web_url).as_deref() {
-        return;
+    let cur = cur.as_str().to_string();
+    if let Some(target) = current_web_target() {
+        if url_origin(&cur).is_some() && url_origin(&cur) == url_origin(&target) {
+            nav_force_reconnect(app, &target);
+            return;
+        }
     }
     mark_navigated_now();
     let _ = win.eval("location.reload()");
 }
 
 /// 聚焦自愈：主窗口重新聚焦时，若页面在 dsh web 上且距上次导航/刷新超过
-/// [`WEBVIEW_STALE_RELOAD_MS`]，整页重载一次——后台挂起后事件流不恢复的兜底。
-fn selfheal_stale_webview<R: Runtime>(_app: &AppHandle<R>, win: &tauri::WebviewWindow<R>) {
-    let on_web = match LAST_WEB_URL.lock() {
-        Ok(g) => g.clone(),
-        Err(p) => p.into_inner().clone(),
-    };
-    let Some(web_url) = on_web else { return };
+/// [`WEBVIEW_STALE_RELOAD_MS`]，重新导航一次——后台挂起后事件流不恢复的兜底。
+fn selfheal_stale_webview<R: Runtime>(app: &AppHandle<R>, win: &tauri::WebviewWindow<R>) {
+    let Some(web_url) = current_web_target() else { return };
     let Ok(cur) = win.url() else { return };
     if url_origin(cur.as_str()).as_deref() != url_origin(&web_url).as_deref() {
         return;
@@ -298,8 +798,7 @@ fn selfheal_stale_webview<R: Runtime>(_app: &AppHandle<R>, win: &tauri::WebviewW
     if last == 0 || now.saturating_sub(last) < WEBVIEW_STALE_RELOAD_MS {
         return;
     }
-    mark_navigated_now();
-    let _ = win.eval("location.reload()");
+    nav_force_reconnect(app, &web_url);
 }
 
 /// URL 的 origin（scheme://host:port）；解析失败为 None。自愈探测的「同源」判定用。
@@ -307,20 +806,28 @@ fn url_origin(url: &str) -> Option<String> {
     tauri::Url::parse(url).ok().map(|u| u.origin().ascii_serialization())
 }
 
-/// 强制导航：清掉去重水位，无视「未变化」判断（自愈路径专用）。
-fn navigate_main_force<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
-    if let Ok(mut last) = LAST_WEB_URL.lock() {
-        *last = None;
-    }
-    navigate_main(app, web_url);
-}
-
 /// 401 页面打标标题（webview eval 注入，无需远程 IPC 白名单）
 const REAUTH_FLAG_TITLE: &str = "DSH_POCKET_REAUTH";
+
+/// 「页面自己报告连不上」打标标题。
+///
+/// 为什么需要它（复核 A-①）：**Windows 的 wry/webview2 把加载失败也报成 `Finished`**
+/// （wry-0.55.1/src/webview2/mod.rs:654-668 的 `add_NavigationCompleted` 丢掉了成功标志），
+/// 而 macOS 的 WKWebView 根本不报失败。也就是说"看门狗"只在 macOS 成立；Windows 上
+/// 失败页会走 Finished → 被判 Live → 永不重试。
+/// 所以再加一条**页面内容自证**：浏览器错误页（WebView2/Chromium 的错误页）正文里有
+/// 稳定的错误码/文案，命中就改标题，Rust 侧读标题后按失败处理——这条在两个平台都有效，
+/// 并且能顺带兜住"HTTP 响应成功但内容就是错误页"的情况。
+const UNREACHABLE_FLAG_TITLE: &str = "DSH_POCKET_UNREACHABLE";
+
+/// 错误页自证脚本：只认浏览器错误页专有的错误码/文案，避免误伤 dsh 自己的界面。
+const UNREACHABLE_PROBE_JS: &str = "if (/ERR_CONNECTION_REFUSED|ERR_EMPTY_RESPONSE|ERR_TIMED_OUT|ERR_ADDRESS_UNREACHABLE|ERR_CONNECTION_RESET|ERR_SOCKET_NOT_CONNECTED|ERR_NAME_NOT_RESOLVED|无法访问此网站|找不到服务器|This site can.t be reached|can.t be reached/.test(((document.body&&document.body.innerText)||'')+' '+(document.title||''))) document.title='DSH_POCKET_UNREACHABLE';";
 
 /// 自愈：主窗口若停在旧 token 的 dsh web 401 页（worker 重启换 token / 手动刷新 / 会话过期），
 /// 自动用最新 webUrl 重新导航。dsh web 认证后会把 token 从 URL 剥离，无法靠 URL 对比，
 /// 因此向页面注入一行 JS 检测认证失效文案，命中则改标题，Rust 侧读标题发现后强制重导航。
+///
+/// 同一处还承担"页面自证不可达"的检测（见 [`UNREACHABLE_FLAG_TITLE`]）。
 fn selfheal_auth_probe<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
     if web_url.is_empty() {
         return;
@@ -337,11 +844,14 @@ fn selfheal_auth_probe<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
     let _ = win.eval(&format!(
         "if (/authentication required/i.test(document.body ? document.body.innerText : '')) document.title = '{REAUTH_FLAG_TITLE}';"
     ));
+    let _ = win.eval(UNREACHABLE_PROBE_JS);
     // 主窗口常驻态是 dsh web 页（外部页面加不了 drag-region）：
     // 注入顶部拖拽条，配合 Tauri 拖拽脚本的 document 级委托实现拖动/双击最大化。
+    // 32px = macOS 原生标题栏带高度（本机实测 frame-content=32，红绿灯 14×14 上内边距 9，
+    // 视觉中心 y=16）——与系统带同轴，红绿灯才会落在"正常"位置。
     // tick 每 3s 重跑一次，按 id 幂等。
     let _ = win.eval(
-        "(function(){if(document.getElementById('dsh-drag-strip'))return;var d=document.createElement('div');d.id='dsh-drag-strip';d.setAttribute('data-tauri-drag-region','');d.style.cssText='position:fixed;top:0;left:0;right:0;height:28px;z-index:2147483646;user-select:none;-webkit-user-select:none;cursor:default';(document.body||document.documentElement).appendChild(d)})();",
+        "(function(){if(document.getElementById('dsh-drag-strip'))return;var d=document.createElement('div');d.id='dsh-drag-strip';d.setAttribute('data-tauri-drag-region','');d.style.cssText='position:fixed;top:0;left:0;right:0;height:32px;z-index:2147483646;user-select:none;-webkit-user-select:none;cursor:default';(document.body||document.documentElement).appendChild(d)})();",
     );
     // 后台唤醒自愈：页面重新可见且隐藏够久时，触发一次 dsh 客户端重连，刷新推送投影
     //（模型胶囊「选了不生效」的正面修复，见 RESUME_STALE_RESYNC_MS 注释）。
@@ -351,8 +861,22 @@ fn selfheal_auth_probe<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
     if let Ok(title) = win.title() {
         if title == REAUTH_FLAG_TITLE {
             let _ = win.eval("document.title = document.title.replace('DSH_POCKET_REAUTH', '');");
-            navigate_main_force(app, web_url);
+            nav_force_reconnect(app, web_url);
             notify(app, "DSH Pocket", "控制台已自动重新认证");
+        } else if title == UNREACHABLE_FLAG_TITLE {
+            let _ = win.eval("document.title = document.title.replace('DSH_POCKET_UNREACHABLE', '');");
+            // 与看门狗同一条失败路径：计数 → 回退到引导面 + 恢复卡（退避仍由状态机管）
+            let next = {
+                let mut s = nav_lock();
+                s.phase = NavPhase::Failed;
+                s.armed_at = None;
+                s.attempts = s.attempts.saturating_add(1);
+                s.retry_at = Some(Instant::now() + nav_retry_interval(s.attempts));
+                s.reason = Some(NAV_REASON_UNREACHABLE.to_string());
+                s.attempts
+            };
+            fallback_to_app(app, NAV_REASON_UNREACHABLE, next < NAV_AUTO_RETRY_LIMIT);
+            emit_nav_state(app);
         }
     }
 }
@@ -395,18 +919,13 @@ fn load_tray_icon<R: Runtime>(app: &AppHandle<R>) -> Result<tauri::image::Image<
 }
 
 /// 构建托盘菜单；独立成函数是为了「开机自启」状态变化后能重建菜单。
+///
+/// 控制台从"4 项深链"收敛为 1 个入口（评分卡 §3.2 #13）：那 4 项与控制台内左侧导航
+/// 完全重复，而托盘菜单越短越像"常驻工具"。旧 id（`console:status` 等）仍由
+/// `handle_menu_action` 与前端别名表兼容，不会失效。
 fn tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
     let open_main = MenuItemBuilder::with_id("open-main", "打开主界面").build(app)?;
-    let console_status = MenuItemBuilder::with_id("console:status", "运行状态").build(app)?;
-    let console_account = MenuItemBuilder::with_id("console:account", "账号").build(app)?;
-    let console_versions = MenuItemBuilder::with_id("console:versions", "版本").build(app)?;
-    let console_logs = MenuItemBuilder::with_id("console:logs", "日志").build(app)?;
-    let console = SubmenuBuilder::new(app, "控制台")
-        .item(&console_status)
-        .item(&console_account)
-        .item(&console_versions)
-        .item(&console_logs)
-        .build()?;
+    let open_console = MenuItemBuilder::with_id("console:run", "打开控制台").build(app)?;
     let worker_start = MenuItemBuilder::with_id("worker:start", "启动 Worker").build(app)?;
     let worker_stop = MenuItemBuilder::with_id("worker:stop", "停止 Worker").build(app)?;
     let autostart = CheckMenuItemBuilder::with_id("autostart", "开机自启")
@@ -416,8 +935,7 @@ fn tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
 
     MenuBuilder::new(app)
         .item(&open_main)
-        .separator()
-        .item(&console)
+        .item(&open_console)
         .separator()
         .item(&worker_start)
         .item(&worker_stop)
@@ -457,16 +975,26 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-/// 打开（或聚焦）控制台窗口，并把面板名发给前端
-fn open_console<R: Runtime>(app: &AppHandle<R>, panel: &str) {
+/// 打开（或聚焦）控制台窗口，并把面板名（+ 可选聚焦区）发给前端。
+///
+/// `focus` 只为"合并后仍要落在原处"服务：例如引导面修复卡点的「打开控制台·日志」，
+/// 原先是独立面板 `logs`，现在需要落在运行页并**直接展开**日志折叠区，
+/// 否则合并就成了能力缩水（用户还要自己找）。取值由前端约定，未知值前端忽略。
+fn open_console<R: Runtime>(app: &AppHandle<R>, panel: &str, focus: Option<&str>) {
     if let Some(win) = app.get_webview_window("console") {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
         let _ = win.emit("console-panel", panel);
+        if let Some(f) = focus {
+            let _ = win.emit("console-focus", f);
+        }
         return;
     }
-    let url = format!("index.html?window=console&panel={panel}");
+    let url = match focus {
+        Some(f) => format!("index.html?window=console&panel={panel}&focus={f}"),
+        None => format!("index.html?window=console&panel={panel}"),
+    };
     // 按平台建窗口（静态配置无法分平台）：Windows 无边框走前端自绘标题栏
     //（TitleBar.tsx Windows 分支）；macOS 用原生 Overlay 标题栏（红绿灯 + 原生拖拽），
     // 与主窗口同款配置——自绘 Windows 风格在 macOS 是错位的。
@@ -578,17 +1106,36 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
         #[cfg(debug_assertions)]
         {
             let err = status.get("error").and_then(|v| v.as_str()).unwrap_or("");
+            // 导航状态一并打出来：真机排查"卡在错误页/没自动进入"时，光看 running 猜不出来。
+            // 复核建议（D）：phase / attempts / 是否已捕获 APP_URL / 当前窗口 URL 缺一不可。
+            let (nav_phase, nav_attempts) = {
+                let s = nav_lock();
+                (s.phase.as_str(), s.attempts)
+            };
+            let cur = app
+                .get_webview_window("main")
+                .and_then(|w| w.url().ok())
+                .map(|u| redact_secrets(u.as_str()))
+                .unwrap_or_else(|| "(none)".to_string());
             eprintln!(
-                "[poll] running={running} webUrl={} failures={consecutive_failures} {}",
-                if web_url.is_empty() { "(none)" } else { &web_url },
+                "[poll] running={running} webUrl={} failures={consecutive_failures} nav={nav_phase}/{nav_attempts} appUrl={} cur={} gate={} {}",
+                if web_url.is_empty() { "(none)".to_string() } else { redact_secrets(&web_url) },
+                app_url().map(|u| redact_secrets(&u)).unwrap_or_else(|| "(none)".to_string()),
+                cur,
+                WEB_SURFACE_WANTED.load(Ordering::Relaxed),
                 if err.is_empty() { String::new() } else { format!("err={err}") }
             );
         }
-        navigate_main(&app, &web_url);
+        // 导航推进（闸门 + 探活 + 看门狗；替代原先的每 tick 盲导航）
+        nav_tick(&app, &web_url, onboarded);
         selfheal_auth_probe(&app, &web_url);
         let _ = app.emit("worker-status", &status);
-        // 失败时指数退避（1<<1 … 1<<5），成功即回 3s
-        let interval = if consecutive_failures == 0 {
+        // 失败时指数退避（1<<1 … 1<<5），成功即回 3s。
+        // 但"正等页面加载完成"期间必须短周期推进：否则连续状态失败时轮询退避到 60s，
+        // 8s 看门狗会被拖成 60s+，"8 秒内纠正"的承诺失效（复核 B-3）。
+        let interval = if nav_is_pending() {
+            Duration::from_secs(1)
+        } else if consecutive_failures == 0 {
             POLL_INTERVAL
         } else {
             (POLL_INTERVAL * (1u32 << consecutive_failures.min(5))).min(POLL_MAX_INTERVAL)
@@ -598,8 +1145,11 @@ fn start_poller<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
-/// 「控制台」子菜单：状态/账号/版本/日志 + 启动/停止 Worker + 自启勾选。
+/// 「控制台」子菜单：打开控制台 + 启动/停止 Worker + 自启勾选。
 /// macOS 菜单栏与 Windows 窗口菜单共用一份。
+///
+/// 原先这里列了 4 个面板深链（运行状态/账号/版本/日志），与打开之后左侧导航完全重复
+/// （评分卡 §3.2 #13）→ 现在只留一个「打开控制台」，面板选择交给控制台自己。
 fn console_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Submenu<R>> {
     use tauri::menu::{MenuItem, SubmenuBuilder};
 
@@ -607,11 +1157,7 @@ fn console_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu:
         .checked(autostart_enabled(app))
         .build(app)?;
     SubmenuBuilder::new(app, "控制台")
-        .item(&MenuItem::with_id(app, "console:status", "运行状态", true, None::<&str>)?)
-        // 「扫码登录」并入「账号」：账号页未登录时本就显示扫码二维码，无需两个入口
-        .item(&MenuItem::with_id(app, "console:account", "账号", true, None::<&str>)?)
-        .item(&MenuItem::with_id(app, "console:versions", "版本", true, None::<&str>)?)
-        .item(&MenuItem::with_id(app, "console:logs", "日志", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "console:run", "打开控制台", true, Some("CmdOrCtrl+0"))?)
         .separator()
         .item(&MenuItem::with_id(app, "worker:start", "启动 Worker", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "worker:stop", "停止 Worker", true, None::<&str>)?)
@@ -637,6 +1183,9 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R
         .item(&MenuItem::with_id(app, "menu:update", "检查更新…", true, None::<&str>)?)
         .separator()
         .item(&MenuItem::with_id(app, "menu:settings", "设置…", true, Some("CmdOrCtrl+,"))?)
+        // 逃生入口：主窗口停在 dsh Web GUI（含 401 / 加载失败）时，菜单必须有路回到引导面。
+        // 原先只有 Windows/Linux 分支有「引导页」，macOS 一旦导航失败就只剩退出应用。
+        .item(&MenuItem::with_id(app, "menu:guide", "回到引导页", true, Some("CmdOrCtrl+Shift+G"))?)
         .item(&MenuItem::with_id(app, "menu:reload", "刷新界面", true, Some("CmdOrCtrl+R"))?)
         .item(&PredefinedMenuItem::hide(app, Some("隐藏 DSH Pocket"))?)
         .separator()
@@ -688,8 +1237,12 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
         "open-main" | "menu:open-main" => {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
+                let _ = win.unminimize();
                 let _ = win.set_focus();
             }
+            // 顺带推进一次导航：窗口不可见期间闸门若已开（自启 --minimized），
+            // 这里就是"用户回来"的那一刻，别干等下一个 tick。
+            nav_nudge(app);
         }
         // 回到引导页：主窗口导航回本应用前端，并让前端进入引导向导。
         // 事件与标志双通道：窗口已在本前端时导航是 no-op，事件直达监听器；
@@ -697,15 +1250,17 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
         "menu:guide" => {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
+                let _ = win.unminimize();
                 let _ = win.set_focus();
             }
             if let Ok(mut g) = ONBOARDING_REQUESTED.lock() {
                 *g = true;
             }
-            navigate_main(app, "");
+            // 关闸 + 清导航目标：否则轮询器下一 tick 会立刻把用户又送回 Web GUI
+            nav_leave_web_surface(app);
             let _ = app.emit("open-onboarding", ());
         }
-        "menu:settings" => open_console(app, "settings"),
+        "menu:settings" => open_console(app, "run", Some("params")),
         "menu:about" => {
             use tauri_plugin_dialog::DialogExt;
             let info = app.package_info();
@@ -754,9 +1309,10 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 match r {
                     Ok(v) if !v.is_empty() => {
                         notify(&app, "DSH Pocket", &format!("新版本 {v} 可用"));
-                        // 打开控制台「运行状态」页并直推版本号——那里有「立即更新」按钮
+                        // 打开控制台的「运行」页并直推版本号——更新卡就在那一页
+                        // （评分卡 §3.2 #14：不再单独维护一套"检查更新入口"）
                         let _ = app.emit("update-available", &v);
-                        open_console(&app, "status");
+                        open_console(&app, "run", None);
                     }
                     Ok(_) => notify(&app, "DSH Pocket", "已是最新版本"),
                     Err(e) => notify(&app, "检查更新失败", &e.to_string()),
@@ -766,7 +1322,7 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
         other => {
             // console:<panel> → 打开控制台窗口并定位到该页
             if let Some(panel) = other.strip_prefix("console:") {
-                open_console(app, panel);
+                open_console(app, panel, None);
             }
         }
     }
@@ -816,10 +1372,63 @@ fn port_cleanup<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     run_dshc(&app, &["free-port", "--port", &port.to_string(), "--json"])
 }
 
-/// 控制台内打开某个面板（前端主动调用）
+/// 控制台内打开某个面板（前端主动调用）；`focus` 用于落在合并后的具体分区
 #[tauri::command]
-fn show_console<R: Runtime>(app: AppHandle<R>, panel: String) {
-    open_console(&app, &panel);
+fn show_console<R: Runtime>(app: AppHandle<R>, panel: String, focus: Option<String>) {
+    open_console(&app, &panel, focus.as_deref());
+}
+
+/// 直接读 run.json 里的 webUrl（比 `dshc status` 便宜：不冷启动一个 node 进程）。
+fn run_web_url<R: Runtime>(app: &AppHandle<R>) -> String {
+    pocket_home(app)
+        .ok()
+        .map(|h| h.join("run.json"))
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(t.trim()).ok())
+        .and_then(|v| v.get("webUrl").and_then(|u| u.as_str()).map(String::from))
+        .unwrap_or_default()
+}
+
+/// 前端握手：本应用 SPA 已准备好让出窗口（引导面就绪、非向导态）→ 请求进入 dsh Web GUI。
+/// 导航权收归这里：轮询器只更新状态、不再盲导航（见 docs/desktop-boot-and-console-redesign.md §4.4）。
+#[tauri::command]
+fn enter_web_surface<R: Runtime>(app: AppHandle<R>) -> serde_json::Value {
+    let web_url = run_web_url(&app);
+    if web_url.is_empty() {
+        return nav_state_json();
+    }
+    nav_request(&app, &web_url);
+    nav_state_json()
+}
+
+/// 导航状态快照（前端恢复卡/调试用；带 token 的 URL 不外泄）。
+#[tauri::command]
+fn web_surface_state() -> serde_json::Value {
+    nav_state_json()
+}
+
+/// 用户显式重试（恢复卡「重新连接」）：清失败水位、开闸并立即推进。
+#[tauri::command]
+fn retry_web_surface<R: Runtime>(app: AppHandle<R>) -> serde_json::Value {
+    let web_url = run_web_url(&app);
+    if web_url.is_empty() {
+        return nav_state_json();
+    }
+    nav_retry_now(&app, &web_url);
+    nav_state_json()
+}
+
+/// 前端声明"还要不要让出窗口"（进入向导/离开引导面时必须置 false）：
+/// 只动闸门，不导航。缺了它，闸门一次打开就再也关不上，向导会被后台导航打断（不变量 I2）。
+#[tauri::command]
+fn set_web_surface_intent<R: Runtime>(app: AppHandle<R>, enabled: bool) {
+    nav_set_intent(&app, enabled);
+}
+
+/// 恢复卡上的「回到引导页」：关闸并回本应用前端。
+#[tauri::command]
+fn leave_web_surface<R: Runtime>(app: AppHandle<R>) {
+    nav_leave_web_surface(&app);
 }
 
 /// 在系统浏览器打开外部链接（token 不出本机：仅放行 loopback 之外的显式调用）
@@ -930,7 +1539,7 @@ fn repair_impl<R: Runtime>(app: &AppHandle<R>) -> serde_json::Value {
         .unwrap_or("")
         .to_string();
     if !web_url.is_empty() {
-        navigate_main_force(app, &web_url);
+        nav_force_reconnect(app, &web_url);
     }
     serde_json::json!({ "steps": steps, "webUrl": web_url })
 }
@@ -2442,6 +3051,15 @@ pub fn run() {
         .on_menu_event(|app, event| {
             handle_menu_action(app, event.id().as_ref());
         })
+        // 页面加载成功钩子（**成功**才有回调：wry 的 macOS 委托只实现 didCommit/didFinish，
+        // 没有 didFailProvisionalNavigation → 失败必须靠导航看门狗兜，见 nav_tick）。
+        // 这是"导航是否真的成功"的唯一事实来源。
+        .on_page_load(|webview, payload| {
+            if payload.event() != PageLoadEvent::Finished || webview.label() != "main" {
+                return;
+            }
+            on_main_page_loaded(webview.app_handle(), payload.url().as_str());
+        })
         // 单实例必须最先注册：第二次启动只聚焦已有窗口
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
@@ -2449,6 +3067,8 @@ pub fn run() {
                 let _ = win.unminimize();
                 let _ = win.set_focus();
             }
+            // 第二次启动只聚焦；若窗口停在一个不该停的页面（恢复态），顺带推进一次
+            nav_nudge(app);
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -2478,6 +3098,11 @@ pub fn run() {
             bridge_update,
             bootstrap_complete,
             take_onboarding_request,
+            enter_web_surface,
+            web_surface_state,
+            retry_web_surface,
+            set_web_surface_intent,
+            leave_web_surface,
             show_console,
             open_external,
             runtime_info,
@@ -2540,11 +3165,16 @@ pub fn run() {
                     app.package_info().version
                 );
             }
-            // 捕获自身前端 URL（跨平台回退导航用）
+            // 捕获自身前端 URL（跨平台回退导航用）。
+            // 加固：setup 阶段窗口可能还停在 about:blank（竞态），记进去会让「回到引导页」
+            // 把用户导航到空白页——这正是"不可用界面"的一种成因（设计文档 §3.3 场景 5）。
             if let Some(win) = app.get_webview_window("main") {
                 if let Ok(u) = win.url() {
-                    if let Ok(mut g) = APP_URL.lock() {
-                        *g = Some(u.to_string());
+                    let s = u.to_string();
+                    if !s.is_empty() && !s.starts_with("about:") {
+                        if let Ok(mut g) = APP_URL.lock() {
+                            *g = Some(s);
+                        }
                     }
                 }
             }
@@ -2693,6 +3323,60 @@ mod recovery_logic_tests {
         assert!(!should_auto_restart(false, false, false));
         // 本来就在跑：无需重启
         assert!(!should_auto_restart(true, true, false));
+    }
+
+    #[test]
+    fn nav_retry_backoff_grows_then_caps() {
+        assert_eq!(nav_retry_interval(0), Duration::from_secs(1));
+        assert_eq!(nav_retry_interval(1), Duration::from_secs(2));
+        assert!(nav_retry_interval(3) > nav_retry_interval(2));
+        assert_eq!(nav_retry_interval(5), Duration::from_secs(NAV_RETRY_MAX_SECS));
+        assert_eq!(nav_retry_interval(9), Duration::from_secs(NAV_RETRY_MAX_SECS), "封顶后不再增长");
+    }
+
+    #[test]
+    fn nav_attempt_needs_target_open_gate_and_retry_due() {
+        // 正常起步：有目标 + 闸门开 + Idle → 允许
+        assert!(nav_may_attempt(NavPhase::Idle, true, true, true));
+        // 没目标 / 闸门没开（前端没握手）→ 绝不导航（向导不会被导航打断）
+        assert!(!nav_may_attempt(NavPhase::Idle, false, true, true));
+        assert!(!nav_may_attempt(NavPhase::Idle, true, false, true));
+        // 已在导航中 / 已在线 → 不重复导航
+        assert!(!nav_may_attempt(NavPhase::Pending, true, true, true));
+        assert!(!nav_may_attempt(NavPhase::Live, true, true, true));
+        // 失败态：只有退避到点才重试
+        assert!(nav_may_attempt(NavPhase::Failed, true, true, true));
+        assert!(!nav_may_attempt(NavPhase::Failed, true, true, false));
+    }
+
+    #[test]
+    fn nav_watchdog_only_fires_for_overdue_pending() {
+        let now = Instant::now();
+        // 刚发起：不判失败
+        assert!(!nav_load_timed_out(NavPhase::Pending, Some(now), now));
+        // 没上表（未导航）：不判失败
+        assert!(!nav_load_timed_out(NavPhase::Pending, None, now));
+        // 已在线：不判失败（哪怕时间很久）
+        assert!(!nav_load_timed_out(NavPhase::Live, now.checked_sub(Duration::from_secs(600)), now));
+        // 超时：Pending + 超过 NAV_LOAD_TIMEOUT → 判失败
+        let overdue = now.checked_sub(NAV_LOAD_TIMEOUT + Duration::from_secs(1)).unwrap();
+        assert!(nav_load_timed_out(NavPhase::Pending, Some(overdue), now));
+    }
+
+    #[test]
+    fn loopback_whitelist_rejects_lookalikes() {
+        assert!(is_loopback_web_url("http://127.0.0.1:3080/?token=x"));
+        assert!(is_loopback_web_url("http://localhost:3080/"));
+        assert!(is_loopback_web_url("http://[::1]:3080/"));
+        // 前缀伪装不能通过（原实现用 starts_with 判断，这里是收紧后的回归测试）
+        assert!(!is_loopback_web_url("http://127.0.0.1.evil.com:3080/"));
+        assert!(!is_loopback_web_url("http://localhost.evil.com/"));
+        // token 不出本机：https 与外部域一律拒绝
+        assert!(!is_loopback_web_url("https://127.0.0.1:3080/"));
+        assert!(!is_loopback_web_url("https://example.com"));
+        assert!(!is_loopback_web_url(""));
+        assert!(!is_loopback_web_url("not a url"));
+        assert_eq!(loopback_socket_addr("http://127.0.0.1:3080/x").unwrap().port(), 3080);
     }
 
     #[test]

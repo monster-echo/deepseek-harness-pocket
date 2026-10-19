@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
-  Loader2, LogOut, ShieldCheck, ShieldAlert, RefreshCw, RotateCw,
+  Loader2, LogOut, ShieldCheck, ShieldAlert, RotateCw,
   Smartphone, ScanLine,
 } from "lucide-react";
 import {
-  Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Dot, Field,
+  Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Dot, Field, Fold,
 } from "../../components/ui";
 import {
   accountRefresh, accountSignOut, deviceLinkRevoke,
@@ -30,6 +30,8 @@ export function AccountPage() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [autoTried, setAutoTried] = useState(false);
+  /** 自动续期失败过：这时才需要把「续期」按钮亮出来（评分卡 §3.2 #4） */
+  const [refreshFailed, setRefreshFailed] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -57,9 +59,11 @@ export function AccountPage() {
     setError(null);
     try {
       await accountRefresh();
+      setRefreshFailed(false);
       await load();
     } catch (e) {
       setError(String(e));
+      setRefreshFailed(true);
     } finally {
       setRefreshing(false);
     }
@@ -129,12 +133,6 @@ export function AccountPage() {
         <PageHeader
           title="账号"
           description="用手机 DSH Pocket 扫码授权登录——像 Telegram 那样扫一下就好。"
-          actions={
-            <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy}>
-              <RefreshCw />
-              刷新
-            </Button>
-          }
         />
 
         <Card>
@@ -237,12 +235,6 @@ export function AccountPage() {
             ? "这台电脑已通过手机扫码授权绑定到你的账号。"
             : "登录掌鲸账号后，同一账号的手机 App 会自动看到这台电脑，无需扫码。"
         }
-        actions={
-          <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy}>
-            <RefreshCw />
-            刷新
-          </Button>
-        }
       />
 
       {/* 焦点：登录态 + 主操作 */}
@@ -272,9 +264,11 @@ export function AccountPage() {
                   手机授权
                 </Badge>
               ) : null}
-              {signedIn && hasRefresh ? (
+              {/* 续期按钮只在"会话已过期或自动续期失败"时出现：进页已自动续期一次
+                  （见上面的 effect），平时不需要用户关心 token（评分卡 §3.2 #4） */}
+              {signedIn && hasRefresh && (expired || refreshFailed) ? (
                 <Button
-                  variant={expired ? "default" : "ghost"}
+                  variant="default"
                   size="sm"
                   disabled={refreshing || busy}
                   title="用 refresh token 换一个新的会话"
@@ -304,68 +298,65 @@ export function AccountPage() {
         </CardContent>
       </Card>
 
-      {viaPhone && !signedIn ? (
-        <Card className="mt-4">
-          <CardHeader>
-            <CardTitle>扫码授权</CardTitle>
-            <CardDescription>手机会话不复制到电脑；退出登录会同时解绑这台电脑</CardDescription>
-          </CardHeader>
-          <CardContent className="divide-y divide-border pt-0">
-            <Field label="邮箱">{link?.email || "—"}</Field>
-            <Field label="用户 ID" mono>{link?.userId || "—"}</Field>
-            <Field label="授权时间">
-              <span className="tabular">
-                {link?.linkedAt ? formatTime(Math.floor(link.linkedAt / 1000)) : "—"}
-              </span>
-            </Field>
-            <Field label="授权方式">
-              <Badge tone="success">
-                <ShieldCheck className="size-3" />
-                手机扫码
-              </Badge>
-            </Field>
-            <Field label="凭据文件" mono>~/.deepseek-harness-pocket/device-link.json</Field>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {signedIn ? (
-        <Card className="mt-4">
-          <CardHeader>
-            <CardTitle>会话</CardTitle>
-            <CardDescription>凭据只保存在本机，不上传会话内容</CardDescription>
-          </CardHeader>
-          <CardContent className="divide-y divide-border pt-0">
-            <Field label="用户 ID" mono>{info.userId || "—"}</Field>
-            <Field label="邮箱">{info.email || "—"}</Field>
-            <Field label="Token 状态">
-              {exp === null ? (
-                <Badge tone="neutral">无法解析 exp</Badge>
-              ) : expired ? (
-                <Badge tone="warning">
-                  <ShieldAlert className="size-3" />
-                  已过期
-                </Badge>
-              ) : (
-                <Badge tone="success">
-                  <ShieldCheck className="size-3" />
-                  有效
-                </Badge>
-              )}
-            </Field>
-            {exp !== null ? (
-              <Field label="到期时间">
-                <span className="tabular">{formatTime(Math.floor(exp / 1000))}</span>
-              </Field>
+      {/* 登录详情：合并原「扫码授权」「会话」两张卡（评分卡 §3.1/§3.2）。
+          焦点卡已经显示了身份与状态，这里只留不属于它的信息，且默认收起。
+          少掉的是纯重复字段（邮箱/用户 ID 已在上方），不是能力。 */}
+      {viaPhone || signedIn ? (
+        <Fold
+          title="登录详情"
+          hint={viaPhone ? "手机授权 · 凭据保存在本机" : "会话 · 凭据保存在本机"}
+        >
+          <div className="divide-y divide-border">
+            {viaPhone ? (
+              <>
+                <Field label="授权时间">
+                  <span className="tabular">
+                    {link?.linkedAt ? formatTime(Math.floor(link.linkedAt / 1000)) : "—"}
+                  </span>
+                </Field>
+                <Field label="授权方式">
+                  <Badge tone="success">
+                    <ShieldCheck className="size-3" />
+                    手机扫码
+                  </Badge>
+                </Field>
+                <Field label="凭据文件" mono>~/.deepseek-harness-pocket/device-link.json</Field>
+              </>
             ) : null}
-            <Field label="写入时间">
-              <span className="tabular">
-                {info.updatedAt ? formatTime(Math.floor(info.updatedAt / 1000)) : "—"}
-              </span>
-            </Field>
-            <Field label="会话文件" mono>{info.sessionFile || "—"}</Field>
-          </CardContent>
-        </Card>
+            {signedIn ? (
+              <>
+                <Field label="用户 ID" mono>{info.userId || "—"}</Field>
+                <Field label="邮箱">{info.email || "—"}</Field>
+                <Field label="Token 状态">
+                  {exp === null ? (
+                    <Badge tone="neutral">无法解析 exp</Badge>
+                  ) : expired ? (
+                    <Badge tone="warning">
+                      <ShieldAlert className="size-3" />
+                      已过期
+                    </Badge>
+                  ) : (
+                    <Badge tone="success">
+                      <ShieldCheck className="size-3" />
+                      有效
+                    </Badge>
+                  )}
+                </Field>
+                {exp !== null ? (
+                  <Field label="到期时间">
+                    <span className="tabular">{formatTime(Math.floor(exp / 1000))}</span>
+                  </Field>
+                ) : null}
+                <Field label="写入时间">
+                  <span className="tabular">
+                    {info.updatedAt ? formatTime(Math.floor(info.updatedAt / 1000)) : "—"}
+                  </span>
+                </Field>
+                <Field label="会话文件" mono>{info.sessionFile || "—"}</Field>
+              </>
+            ) : null}
+          </div>
+        </Fold>
       ) : null}
     </Page>
   );

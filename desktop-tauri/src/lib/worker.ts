@@ -99,6 +99,10 @@ export interface AccountSessionInfo {
 export const isTauri = (): boolean =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+/** 浏览器态调试开关（与 ?broken / ?loggedout / ?wizard=dialog 同一套约定） */
+const hasParam = (name: string): boolean =>
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has(name);
+
 /* ── 浏览器 mock：让视觉开发不被 Worker 阻塞 ─────────────── */
 const MOCK: WorkerStatus = {
   running: true,
@@ -120,7 +124,14 @@ const MOCK: WorkerStatus = {
 };
 
 export async function workerStatus(): Promise<WorkerStatus> {
-  if (!isTauri()) return MOCK;
+  if (!isTauri()) {
+    // ?workerdown：视觉调试/无人核验「故障态分区顺序」用（评分卡 §7
+    // 要求故障时故障恢复区置顶且日志尾展开）
+    if (hasParam("workerdown")) {
+      return { ...MOCK, running: false, pid: undefined, error: "[mock] Worker 未运行（?workerdown）" };
+    }
+    return MOCK;
+  }
   return invoke<WorkerStatus>("dshc_status");
 }
 
@@ -270,6 +281,23 @@ export interface BootstrapStatus {
 
 export async function bootstrapStatus(): Promise<BootstrapStatus> {
   if (!isTauri()) {
+    // ?onboarded：视觉调试「环境齐全 → 引导面」用（默认是未完成引导 → 向导）。
+    // 两种都是主窗口的合法形态，无 GUI 核验与视觉走查要分别能看到。
+    if (hasParam("onboarded")) {
+      return {
+        onboardingDone: true,
+        systemNode: { found: true, usable: true, version: "v22.18.0", probed: true },
+        node: { installed: true, version: "v22.18.0", pnpm: true, source: "system" },
+        nodeChoices: [
+          { major: 24, version: "v24.21.0" },
+          { major: 22, version: "v22.23.2" },
+        ],
+        bridge: { installed: true, version: "0.1.4", min: "0.1.1", satisfies: true },
+        dshInstalled: true,
+        dshVersions: ["0.1.5-rc.1"],
+        dshGlobal: { found: false },
+      };
+    }
     return {
       onboardingDone: false,
       systemNode: { found: true, usable: true, version: "v22.18.0", probed: true },
@@ -506,9 +534,13 @@ export async function deviceLinkRevoke(): Promise<void> {
   await invoke("device_link_revoke");
 }
 
-export async function showConsole(panel: string): Promise<void> {
+/**
+ * 打开控制台并定位到某个面板；`focus` 用于落在合并后的具体分区
+ * （如 `logs` → 运行页的日志折叠区直接展开，见评分卡 §3.2 的"能力不丢"）。
+ */
+export async function showConsole(panel: string, focus?: "logs" | "params"): Promise<void> {
   if (!isTauri()) return;
-  return invoke("show_console", { panel });
+  return invoke("show_console", { panel, focus: focus ?? null });
 }
 
 export async function openExternal(url: string): Promise<void> {
@@ -541,10 +573,94 @@ export async function onConsolePanel(cb: (panel: string) => void): Promise<Unlis
   return listen<string>("console-panel", (e) => cb(e.payload));
 }
 
+/** 控制台已开着时，Rust 侧再要求聚焦到某个分区（配合 `showConsole` 的 focus） */
+export async function onConsoleFocus(cb: (focus: string) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<string>("console-focus", (e) => cb(e.payload));
+}
+
 /** 菜单「文件 → 引导页」：重新打开引导向导 */
 export async function onOpenOnboarding(cb: () => void): Promise<UnlistenFn> {
   if (!isTauri()) return () => {};
   return listen("open-onboarding", () => cb());
+}
+
+/* ── 主窗口导航（启动逻辑；Rust 是唯一所有者）────────────────── */
+
+/**
+ * 导航相位。idle/connecting/live/failed 与 Rust `NavPhase` 一一对应。
+ * 见 docs/desktop-boot-and-console-redesign.md §4。
+ */
+export type NavPhase = "idle" | "connecting" | "live" | "failed";
+
+export interface NavState {
+  phase: NavPhase;
+  attempts: number;
+  /** 最近一次失败原因（人话，可直接上屏） */
+  reason?: string | null;
+  /** Rust 侧闸门是否还开着 = 系统还会不会自己重试（false 就必须由用户点「重新连接」） */
+  autoRetry: boolean;
+}
+
+/** 浏览器态：?navfail 直接摆出"上次进入 Web 界面失败"的状态（恢复卡走查/核验用） */
+const MOCK_NAV_FAILED: NavState = {
+  phase: "failed",
+  attempts: 3,
+  reason: "本机控制台加载超时",
+  autoRetry: false,
+};
+
+const MOCK_NAV_IDLE: NavState = { phase: "idle", attempts: 0, autoRetry: true };
+
+/**
+ * 前端握手：告诉 Rust「我已准备好让出窗口」。
+ *
+ * 只开闸 + 按当前退避节奏推进；**不重置失败计数**——回退也是整页导航，新页面
+ * 会再握手一次，若在这里清零，"自动重试上限"就永远到不了，窗口会被无限弹回
+ * （独立复核 B-4）。要立刻重试请用 [`retryWebSurface`]。
+ */
+export async function enterWebSurface(): Promise<NavState> {
+  if (!isTauri()) return hasParam("navfail") ? MOCK_NAV_FAILED : MOCK_NAV_IDLE;
+  return invoke<NavState>("enter_web_surface");
+}
+
+/** 读当前导航状态（恢复卡渲染用） */
+export async function webSurfaceState(): Promise<NavState> {
+  if (!isTauri()) return hasParam("navfail") ? MOCK_NAV_FAILED : MOCK_NAV_IDLE;
+  return invoke<NavState>("web_surface_state");
+}
+
+/** 用户显式重试（恢复卡「重新连接」）：清失败水位并立即重连 */
+export async function retryWebSurface(): Promise<NavState> {
+  if (!isTauri()) return hasParam("navfail") ? MOCK_NAV_FAILED : MOCK_NAV_IDLE;
+  return invoke<NavState>("retry_web_surface");
+}
+
+/**
+ * 声明"还要不要让出窗口"。进入向导/离开引导面时必须置 false，
+ * 否则闸门一次打开就再也关不上，向导会被后台导航打断。
+ */
+export async function setWebSurfaceIntent(enabled: boolean): Promise<void> {
+  if (!isTauri()) return;
+  return invoke("set_web_surface_intent", { enabled });
+}
+
+/** 恢复卡的「回到引导页」：关闸并回本应用前端 */
+export async function leaveWebSurface(): Promise<void> {
+  if (!isTauri()) return;
+  return invoke("leave_web_surface");
+}
+
+/** 订阅导航相位变化 */
+export async function onNavState(cb: (s: NavState) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<NavState>("nav-state", (e) => cb(e.payload));
+}
+
+/** 订阅「进入 Web 界面失败，已回退到引导面」事件（载荷是人话原因） */
+export async function onWebSurfaceFailed(cb: (reason: string) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<string>("web-surface-failed", (e) => cb(e.payload));
 }
 
 /** 在系统浏览器中登录掌鲸账号（Rust 侧起 loopback 回调服务等待，最长 180 秒） */

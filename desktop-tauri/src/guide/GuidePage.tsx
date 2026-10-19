@@ -222,7 +222,7 @@ export function GuidePage({ onOpenWizard }: { onOpenWizard?: () => void }) {
             ) : null}
 
             <div className="flex gap-2">
-              <Button variant="ghost" className="flex-1" onClick={() => void showConsole("status")}>
+              <Button variant="ghost" className="flex-1" onClick={() => void showConsole("run")}>
                 <Settings2 />
                 打开控制台
               </Button>

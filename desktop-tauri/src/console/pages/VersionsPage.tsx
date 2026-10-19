@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Loader2, Layers, Check, HardDrive, Download, Trash2, RefreshCw, AlertTriangle, X, Play,
+  Loader2, Layers, Check, HardDrive, Download, Trash2, AlertTriangle, X, Play,
 } from "lucide-react";
 import {
-  Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState,
+  Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Fold,
 } from "../../components/ui";
 import {
   installVersion, listVersions, removeVersion, switchVersion, versionsAvailable,
@@ -106,16 +106,10 @@ export function VersionsPage({ activeVersion }: { activeVersion?: string }) {
         title="版本"
         description="托管在本机的 DeepSeek Harness 运行时，Worker 启动时选用其中一个。"
         actions={
-          <>
-            <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy !== null}>
-              <RefreshCw />
-              刷新
-            </Button>
-            <Button size="sm" onClick={() => void onBrowse()} disabled={busy !== null}>
-              {busy === "__browse__" ? <Loader2 className="animate-spin" /> : <Download />}
-              浏览可用版本
-            </Button>
-          </>
+          <Button size="sm" onClick={() => void onBrowse()} disabled={busy !== null}>
+            {busy === "__browse__" ? <Loader2 className="animate-spin" /> : <Download />}
+            浏览可用版本
+          </Button>
         }
       />
 
@@ -243,48 +237,33 @@ export function VersionsPage({ activeVersion }: { activeVersion?: string }) {
       )}
 
       {remote ? (
-        <Card className="mt-4">
-          <CardHeader>
-            <CardTitle>可安装</CardTitle>
-            <CardDescription>来自 npm registry，显示最近 12 个版本</CardDescription>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <ul className="divide-y divide-border">
-              {remote.slice(0, 12).map((ver) => {
-                const has = installed.has(ver);
-                const isBusy = busy === ver;
-                return (
-                  <li key={ver} className="flex items-center justify-between gap-4 py-2">
-                    <span className="font-mono text-[13px]">{ver}</span>
-                    {has ? (
-                      <Badge tone="neutral">已安装</Badge>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy !== null}
-                        onClick={() => void onInstall(ver)}
-                      >
-                        {isBusy ? <Loader2 className="animate-spin" /> : <Download />}
-                        安装
-                      </Button>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </CardContent>
-        </Card>
+        <Fold title="可安装" hint={`来自 npm registry · 最近 ${Math.min(remote.length, 12)} 个版本`}>
+          <ul className="divide-y divide-border">
+            {remote.slice(0, 12).map((ver) => {
+              const has = installed.has(ver);
+              const isBusy = busy === ver;
+              return (
+                <li key={ver} className="flex items-center justify-between gap-4 py-2">
+                  <span className="font-mono text-[13px]">{ver}</span>
+                  {has ? (
+                    <Badge tone="neutral">已安装</Badge>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy !== null}
+                      onClick={() => void onInstall(ver)}
+                    >
+                      {isBusy ? <Loader2 className="animate-spin" /> : <Download />}
+                      安装
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </Fold>
       ) : null}
-
-      <div className="mt-4 rounded-lg border border-dashed border-border px-4 py-3">
-        <p className="text-[12px] leading-relaxed text-muted-foreground">
-          <span className="font-medium text-foreground">待接入：</span>
-          切换当前版本并重启 Worker（dshc 支持
-          <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-[11px]">--dsh &lt;bin&gt;</code>
-          ，需 stop → start 串起来）。
-        </p>
-      </div>
     </Page>
   );
 }

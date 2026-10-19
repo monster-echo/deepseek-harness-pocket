@@ -7,19 +7,33 @@ const isMac = typeof navigator !== "undefined" && navigator.userAgent.includes("
 
 /**
  * macOS 分支：窗口是原生 Overlay 标题栏（open_console builder 配置），
- * 红绿灯由系统绘制在左上，这里只画一条拖拽带（整条可拖拽 + 双击 Zoom）。
- * 左侧留红绿灯位（pl-20 ≈ 80px），不放任何自绘窗口按钮。
+ * 红绿灯由系统绘制在左上，这里只画拖拽带（整条可拖拽 + 双击 Zoom）。
+ *
+ * 高度按本机 AppKit 实测对齐（macOS 27，Swift/NSWindow 探针）：
+ *   - 系统保留的标题栏带 = 32pt（frame − contentLayoutRect），红绿灯 14×14、
+ *     上内边距 9pt、左内边距 9/32/55pt → 视觉中心 y = 16pt；
+ *   - macOS 带统一工具栏的窗口 = 52pt（用户心里的"正常顶栏"）。
+ * 因此整条 52px：上面 32px 与原生带**完全重合**（标题与红绿灯同轴心），
+ * 余下 20px 作为应用工具行。原来写 40px 是两头不靠——比原生带高 8pt、
+ * 又比 52pt 标准矮 12pt，红绿灯重心对不齐，看起来就"比正常小"。
+ * 左侧 pl-20（80px）留红绿灯位（zoom 右边缘 69pt），不放任何自绘窗口按钮。
  */
 function MacTitleBar({ title }: { title: string }) {
   return (
     <div
-      className="flex h-10 shrink-0 select-none items-center border-b border-border bg-background pl-20"
+      className="flex h-[52px] shrink-0 select-none flex-col border-b border-border bg-background"
       data-tauri-drag-region
     >
-      <span className="text-[12px] font-medium text-muted-foreground" data-tauri-drag-region>
-        {title}
-      </span>
-      <div className="h-full flex-1" data-tauri-drag-region />
+      {/* 32px 行：与原生标题栏带等高，标题与红绿灯同轴 */}
+      <div className="flex h-8 items-center pl-20" data-tauri-drag-region>
+        <span className="text-[12px] font-medium text-muted-foreground" data-tauri-drag-region>
+          {title}
+        </span>
+        <div className="h-full flex-1" data-tauri-drag-region />
+      </div>
+      {/* 20px 工具行：当前留白（保持原生 52pt 顶栏的呼吸感），
+          后续「回到引导页 / Worker 状态胶囊」等动作放这里；整行可拖拽 */}
+      <div className="flex-1" data-tauri-drag-region />
     </div>
   );
 }

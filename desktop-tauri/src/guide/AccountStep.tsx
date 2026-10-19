@@ -96,7 +96,7 @@ export function AccountStep({ onDone, onSkip }: { onDone: () => void; onSkip?: (
               <RotateCw />
               重新生成二维码
             </Button>
-            <Button variant="ghost" size="sm" className="mt-1 w-full" onClick={() => void showConsole("logs")}>
+            <Button variant="ghost" size="sm" className="mt-1 w-full" onClick={() => void showConsole("run", "logs")}>
               打开控制台·日志
             </Button>
           </div>

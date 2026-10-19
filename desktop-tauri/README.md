@@ -280,6 +280,46 @@ UI：Token 过期时按钮高亮；打开账号页若已过期但仍有 refreshT
 - **跨平台资源要按平台分别验证**：macOS 的 template 托盘图标是单色的，
   直接拿到 Windows 用会变成深色任务栏上的一个黑块。判据：数一下不透明像素里
   有多少是「带色」的（`max(r,g,b)-min(r,g,b) > 12`）。
+- **`navigate()` 返回 `Ok` 只代表"导航已发起"，不代表页面可用**；而且**两个平台"失败"的表现完全不同**：
+  - macOS/WKWebView：`wry-0.55.1/src/wkwebview/navigation.rs` 只实现 `didCommit`(Started) 与
+    `didFinish`(Finished)，**没有 `didFailProvisionalNavigation`** —— 端口没 listen 时连 `Started`
+    都收不到，"失败"完全不可观测；
+  - Windows/WebView2：`wry-0.55.1/src/webview2/mod.rs` 的 `add_NavigationCompleted` **丢掉了
+    `IsSuccess`**，失败也报 `Finished` —— 只看"Finished + 同源"就会判"在线"，看门狗永不触发。
+  所以必须两条腿走路：**发起导航时上表超时看门狗**（管 macOS）+ **页面内容自证**
+  （错误页专有错误码 `ERR_CONNECTION_REFUSED` 等打标标题，管 Windows 与"HTTP 成功但内容是错误页"）。
+  判据：`grep -rn "didFailProvisionalNavigation\|IsSuccess" wry/src/` —— 前者为空、后者被丢弃。
+- **URL 去重水位绝不能在"发起导航"时置位**：曾用 `LAST_WEB_URL` 做去重，导航发起即置位；
+  页面加载失败后同一个 URL 永远命中"未变化 → return"，用户被**永久**留在
+  WKWebView 错误页上（macOS 菜单当时又没有"回到引导页"，只能退出应用）。
+  现在去重与相位由 `NAV` 状态机持有，失败会退避重试、超限后交回用户。
+- **"失败后自动重试 N 次"必须守住计数，别被握手清零**：回退本身是整页导航，新页面会重新
+  "握手"一次；如果握手顺手把 `attempts` 清零，上限永远到不了、闸门永不关，窗口会被
+  **无限弹回**错误页（每 ~10s 一次）。握手只开闸，重试计数只由显式动作（用户点重连）重置。
+- **macOS Overlay 标题栏的尺寸要实测，别按记忆写**：`titleBarStyle: Overlay` 会
+  `titlebarAppearsTransparent + fullsizeContentView`，系统**不会**给 HTML 留位。
+  本机（macOS 27）实测：标题栏带 `frame − contentLayoutRect = 32pt`，红绿灯 14×14、
+  上内边距 9pt、左 9/32/55pt、视觉中心 y=16pt；带统一工具栏的窗口 = 52pt。
+  所以 App 顶栏取 52pt（内部 32pt 行与系统带重合），拖拽层取 32pt。量法见
+  `docs/desktop-boot-and-console-redesign.md` §1.1（一段 Swift/NSWindow 探针）。
+- **本应用 SPA 与 dsh Web GUI 都在"本机"上**：回退导航前的"记住应用自身 URL"
+  必须排除 loopback，否则 dsh Web GUI 会被记成应用自身，失败回退就把用户送回
+  刚失败的页面（死循环）。打包态是 `tauri://localhost` / `http://tauri.localhost`，
+  开发态是 `localhost:1420`——后者靠 setup 阶段捕获，不靠页面加载回调刷新。
+- **`verify:ui` 的主窗口断言曾长期误报**：它只认 `h1`，而浏览器态 mock 是"未完成引导"
+  → 落向导（无 h1），于是**改动前后都是 ❌**（不在 CI 里跑所以没人发现）。现在覆盖
+  两种合法形态，并新增「引导面 `?onboarded`」「恢复卡 `?onboarded&navfail`」两项检查。
+- **面板 id 迁移必须先立护栏**：`ConsoleApp` 以前对未知 `panel` 会 `?? "status"` **静默回退**，
+  漏改一处不报错、只悄悄打开错的页。控制台 5 页合并成 3 页（`run/account/versions`）时，
+  先在 `verify:ui` 里加"未知 panel 不得静默回退 + 旧 id 显式映射 + 每个 id 的深链断言"，
+  看着它变红再动代码。旧 id（`status/settings/logs`）由 `PANEL_ALIAS` 显式映射，**不要**用兜底。
+- **合并页面时"能力不丢"要靠深链落点**：引导面的「打开控制台·日志」按钮原本有独立面板，
+  合并后如果只跳到运行页，用户还得自己找折叠区——那是缩水不是合并。为此加了
+  `show_console(panel, focus)` → `?panel=run&focus=logs`（日志折叠区直接展开；`focus=params`
+  滚到运行参数），并加了断言。
+- **折叠用原生 `<details>` 时不要传受控 `open`**：本应用每 3 秒会因 worker 状态推送重渲染，
+  受控 `open` 会把用户手动收起的折叠区又弹开。`components/ui.tsx` 的 `Fold` 用
+  `useEffect` 只设**初始**状态。
 
 ## 本轮新增：手机扫码授权登录（Telegram 同款）
 

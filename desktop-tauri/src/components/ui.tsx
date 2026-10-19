@@ -158,3 +158,38 @@ export function EmptyState({
     </div>
   );
 }
+
+/**
+ * 折叠区：承载"能力保留但默认收起"的低频/排查内容（评分卡 §3.3 的 6 项）。
+ *
+ * 用原生 `<details>`（向导的「详细日志」已是同一先例），不引入额外状态。
+ * `defaultOpen` 只用来设**初始**状态：不能用受控 `open={...}`——本页每 3 秒会
+ * 因 worker 状态推送重渲染，受控会让用户手动收起后又被强行弹开。
+ */
+export function Fold({
+  title,
+  hint,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const ref = React.useRef<HTMLDetailsElement>(null);
+  React.useEffect(() => {
+    if (defaultOpen && ref.current) ref.current.open = true;
+  }, [defaultOpen]);
+  return (
+    <details ref={ref} className="mt-4 rounded-lg border border-border bg-card">
+      <summary className="cursor-pointer select-none px-4 py-2.5 text-[13px] font-medium hover:bg-accent/40">
+        {title}
+        {hint ? (
+          <span className="ml-2 text-[11px] font-normal text-muted-foreground">{hint}</span>
+        ) : null}
+      </summary>
+      <div className="border-t border-border px-4 py-3">{children}</div>
+    </details>
+  );
+}

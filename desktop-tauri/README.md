@@ -339,6 +339,13 @@ UI：Token 过期时按钮高亮；打开账号页若已过期但仍有 refreshT
 - **给向导加步骤要同时改自动推进**：`OnboardingWizard` 会在
   `indexOf(step) < indexOf(firstUnmet)` 时自动跳步，因此"可选步骤"（如 `env`）必须进
   `OPTIONAL_STEPS`，否则会被自动推进一闪而过；`canGoNext` 也要为它放行，否则「下一步」永远禁用。
+- **路径相关的单测不能硬编码分隔符**：`std::env::split_paths` 在 Windows 上按 `;` 切、POSIX 按 `:` 切。
+  0.2.15 的 CI **Windows 腿就挂在这上面**（`merge_paths_keeps_order_and_drops_duplicates` 把
+  `"/a:/b"` 当成一个路径）。构造输入要用 `std::env::join_paths`，断言用 `split_paths` 解析回来。
+  教训：**只在本机（macOS）跑绿不等于能发**——CI 的 windows 腿不是形式主义。
+- **Windows 上没有 `HOME`**：Explorer 启动的进程常常只有 `USERPROFILE`。解析"用户主目录"时要
+  按 `HOME → USERPROFILE` 回退（与 node `os.homedir()` 同序），否则会退化成"定位不到主目录"，
+  而 dsh 那边（node）是能正常找到 `~/.dsh` 的——两边不一致最难查。
 - **报告里永远不要带环境变量的"值"**：`workerEnv` 会进导出诊断外发。`inspect_env_file_*` 只回键名，
   单测 `inspect_env_file_flags_refused_and_shadowed` 断言过这一点。
 

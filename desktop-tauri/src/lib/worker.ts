@@ -600,6 +600,11 @@ export interface EnvScanReport {
   alreadyImported: string[];
   /** 尚未导入的候选数——决定"启动时要不要引导" */
   pendingCount: number;
+  /**
+   * 平台说明：Windows 上"没有登录 shell 可解析"是正常的（进程已继承用户环境），
+   * 有这句话时面板要显示说明，而不是"超时或没有 $SHELL"的误导文案。
+   */
+  platformNote?: string | null;
 }
 
 export interface EnvImportResult {
@@ -666,7 +671,19 @@ const MOCK_ENV_SCAN: EnvScanReport = {
  * `force` = 用户点了「重新扫描」：清掉 300s 缓存重取，否则改完 `.zshrc` 看不到变化。
  */
 export async function envScan(force = false): Promise<EnvScanReport> {
-  if (!isTauri()) return MOCK_ENV_SCAN;
+  if (!isTauri()) {
+    // ?winenv：无 GUI 核验"平台说明"这条渲染分支（真机上只在 Windows 出现）
+    if (hasParam("winenv")) {
+      return {
+        ...MOCK_ENV_SCAN,
+        loginShellOk: false,
+        groups: [],
+        pendingCount: 0,
+        platformNote: "Windows 不需要导入：进程已继承用户环境（本问题只存在于 macOS/Linux）",
+      };
+    }
+    return MOCK_ENV_SCAN;
+  }
   return invoke<EnvScanReport>("env_scan", { force });
 }
 

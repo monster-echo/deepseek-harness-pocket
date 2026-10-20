@@ -105,6 +105,14 @@ export function EnvImportPanel({
       </p>
     );
   }
+  // 平台说明优先：Windows 上"没解析到登录 shell"是正常的，不能报成超时
+  if (scan.platformNote) {
+    return (
+      <p className="rounded-md bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+        {scan.platformNote}
+      </p>
+    );
+  }
   if (!scan.loginShellOk) {
     return (
       <p className="text-xs leading-relaxed text-hue-orange">

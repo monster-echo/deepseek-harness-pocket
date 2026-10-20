@@ -587,14 +587,33 @@ pub const DSH_ENV_REFUSED_PREFIXES: &[&str] = &["DSH_", "XDG_", "DYLD_", "BASH_F
 /// CA/TLS 类名字不在例外里——"它们改变的是信任什么，而不是流量去哪"。
 pub const DSH_HOME_LAYER_PROXY_NAMES: &[&str] = &["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
 
-/// dsh 主目录：显式 > `$DSH_HOME` > `~/.dsh`（与 dsh-home-paths 同规则；本应用不传显式值）。
-pub fn dsh_home_dir() -> Option<PathBuf> {
-    if let Some(v) = std::env::var_os("DSH_HOME") {
-        if !v.is_empty() {
-            return Some(PathBuf::from(v));
-        }
+/// 解析 dsh 主目录（纯逻辑，便于单测）。
+///
+/// 顺序与上游 `dsh-home-paths`（显式 > `$DSH_HOME` > `~/.dsh`，**空白值忽略**）以及
+/// node 的 `os.homedir()`（HOME → Windows 的 USERPROFILE）对齐。
+/// 为什么必须有 USERPROFILE 回退：Windows 上 Explorer 启动的进程常常没有 `HOME`，
+/// 那样会退化成"定位不到主目录"，导入面板直接报错——而 dsh 那边是能正常找到 `~/.dsh` 的。
+pub fn resolve_dsh_home(
+    dsh_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+    userprofile: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let non_empty = |v: std::ffi::OsString| if v.is_empty() { None } else { Some(v) };
+    if let Some(v) = dsh_home.and_then(non_empty) {
+        return Some(PathBuf::from(v));
     }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".dsh"))
+    home.and_then(non_empty)
+        .or_else(|| userprofile.and_then(non_empty))
+        .map(|h| PathBuf::from(h).join(".dsh"))
+}
+
+/// dsh 主目录：显式 > `$DSH_HOME` > 家目录（`$HOME`，Windows 回退 `$USERPROFILE`）+ `/.dsh`。
+pub fn dsh_home_dir() -> Option<PathBuf> {
+    resolve_dsh_home(
+        std::env::var_os("DSH_HOME"),
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+    )
 }
 
 /// 该名字写进 `$DSH_HOME/.env` 会不会让 dsh 拒绝启动。
@@ -959,6 +978,13 @@ pub fn scan_env_entries(
         "envFile": env_file.display().to_string(),
         "envFileExists": env_file.is_file(),
         "loginShellOk": entries.is_some(),
+        // 平台说明：Windows 不需要导入（Explorer 启动的进程本来就继承用户环境），
+        // 否则面板会显示"没能读到登录 shell（超时或没有 $SHELL）"——那是误导。
+        "platformNote": if cfg!(windows) {
+            Some("Windows 不需要导入：进程已继承用户环境（本问题只存在于 macOS/Linux）")
+        } else {
+            None
+        },
         "discovered": all.len(),
         "groups": groups,
         "refusedKeys": refused,
@@ -1699,6 +1725,43 @@ trailing noise";
     }
 
     #[test]
+    fn dsh_home_resolution_prefers_explicit_then_home_then_userprofile() {
+        use std::ffi::OsString;
+        let o = |v: &str| Some(OsString::from(v));
+        // 显式 > $DSH_HOME
+        assert_eq!(
+            resolve_dsh_home(o("/explicit"), o("/home"), o("/profile")),
+            Some(PathBuf::from("/explicit"))
+        );
+        // $DSH_HOME 优先于家目录
+        assert_eq!(
+            resolve_dsh_home(o("/dshhome"), o("/home"), o("/profile")),
+            Some(PathBuf::from("/dshhome"))
+        );
+        // 没有 $DSH_HOME → 家目录
+        assert_eq!(
+            resolve_dsh_home(None, o("/home"), o("/profile")),
+            Some(PathBuf::from("/home/.dsh"))
+        );
+        // Windows 常见情形：没有 HOME，只有 USERPROFILE（否则会"定位不到主目录"）
+        assert_eq!(
+            resolve_dsh_home(None, None, o("C:/Users/x")),
+            Some(PathBuf::from("C:/Users/x/.dsh"))
+        );
+        // 空白值必须被忽略（与上游 dsh-home-paths 一致）
+        assert_eq!(
+            resolve_dsh_home(o(""), o(""), o("")),
+            None
+        );
+        assert_eq!(
+            resolve_dsh_home(o(""), o("/home"), None),
+            Some(PathBuf::from("/home/.dsh"))
+        );
+        // 什么都没有 → None（面板会明确报"无法定位 dsh 主目录"）
+        assert_eq!(resolve_dsh_home(None, None, None), None);
+    }
+
+    #[test]
     fn plan_env_import_skips_what_cannot_be_written_and_counts_honestly() {
         let env: Vec<(String, String)> = vec![
             ("ANDROID_HOME".into(), "/Users/x/Library/Android/sdk".into()),
@@ -1738,9 +1801,14 @@ trailing noise";
 
     #[test]
     fn merge_paths_keeps_order_and_drops_duplicates() {
+        // ⚠️ 必须用 `join_paths` 构造输入、不能硬编码分隔符：`split_paths` 在 Windows 上按
+        // `;` 切、POSIX 按 `:` 切。第一版这里硬编码了 `:`，直接把整串当成一个路径，
+        // 于是 0.2.15 的 CI 在 Windows 腿挂在这条测试上（产品代码没问题，是测试不可移植）。
+        let joined = |parts: &[&str]| std::env::join_paths(parts.iter()).unwrap();
+
         let merged = merge_paths(
-            std::ffi::OsStr::new("/shell/a:/shell/b"),
-            std::ffi::OsStr::new("/shell/b:/usr/bin"),
+            &joined(&["/shell/a", "/shell/b"]),
+            &joined(&["/shell/b", "/usr/bin"]),
         );
         let segs: Vec<String> = std::env::split_paths(&merged)
             .map(|p| p.display().to_string())
@@ -1748,8 +1816,10 @@ trailing noise";
         // 登录 shell 的段在前、继承里的重复段丢掉、顺序保持
         assert_eq!(segs, vec!["/shell/a", "/shell/b", "/usr/bin"]);
 
-        // PATH 里的空段（"::"）必须丢掉：它会变成"当前目录"，属安全隐患
-        let merged2 = merge_paths(std::ffi::OsStr::new("/x::/y"), std::ffi::OsStr::new(""));
+        // PATH 里的空段（POSIX 的 "::" / Windows 的 ";;"）必须丢掉：
+        // 它会变成"当前目录"，属安全隐患
+        let with_empty = joined(&["/x", "", "/y"]);
+        let merged2 = merge_paths(&with_empty, std::ffi::OsStr::new(""));
         let segs2: Vec<String> = std::env::split_paths(&merged2)
             .map(|p| p.display().to_string())
             .collect();

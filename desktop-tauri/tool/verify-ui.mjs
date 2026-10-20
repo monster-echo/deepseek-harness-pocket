@@ -338,6 +338,15 @@ for (const scheme of ["light", "dark"]) {
     `启动横幅：一键导入明确排除密钥 ✅`,
   );
 
+  // 平台说明（Windows 真机才出现）：不能把"没解析到登录 shell"报成超时
+  await page.goto(`http://127.0.0.1:${port}/index.html?step=env&winenv`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(600);
+  const winNote = await page.evaluate(() => document.body.innerText || "");
+  ok(
+    winNote.includes("Windows 不需要导入") && !winNote.includes("超时或没有 $SHELL"),
+    `平台说明：Windows 不误报为超时 ✅`,
+  );
+
   // 向导「环境变量」步骤（?step=env 直达）：分组候选与导入按钮要真的渲染出来
   await page.goto(`http://127.0.0.1:${port}/index.html?step=env`, { waitUntil: "networkidle" });
   await page.waitForTimeout(700);

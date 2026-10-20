@@ -13,6 +13,7 @@ import {
   type RepairReport, type UpdateInfo, type WorkerStatus,
 } from "../../lib/worker";
 import { Page, PageHeader } from "./PageHeader";
+import { EnvImportPanel } from "../../components/EnvImportPanel";
 import { DshcUpdateCard } from "../../onboarding/steps/DshcUpdateCard";
 import { LogTail } from "./run/LogTail";
 import { RunParams } from "./run/RunParams";
@@ -307,8 +308,13 @@ export function RunPage({ status, focus }: { status: WorkerStatus | null; focus?
       {healthy ? <div className="mt-4">{recovery}</div> : null}
 
       {/* ⑤ 高级：排查用，默认收起 */}
-      <Fold title="高级" hint="运行信息 · 文件位置 · 诊断">
-        <div className="divide-y divide-border">
+      <Fold
+        title="高级"
+        hint="Worker 环境 · 运行信息 · 文件位置 · 诊断"
+        defaultOpen={focus === "env"}
+      >
+        <EnvImportPanel variant="console" />
+        <div className="mt-3 divide-y divide-border border-t border-border pt-1">
           <Field label="版本">
             {run?.dshVersion || run?.bridgeVersion ? (
               <span className="flex items-center justify-end gap-1.5">

@@ -171,11 +171,40 @@ fn no_window(_cmd: &mut Command) {}
 
 /// 以受管/系统 Node 运行 dshc CLI，返回 stdout。
 /// node+bridge 从网络引导（toolchain.rs），本函数不再依赖安装包内置的 sidecar。
+///
+/// 用「便宜 PATH」：`status`/`stop`/`free-port` 这些只跑 dshc 自己，PATH 里有没有
+/// Homebrew 之类无所谓；**Worker 启动走 [`run_dshc_worker`]**（那里才需要登录 shell
+/// 的 PATH）。这个区分很重要：`status` 每 3 秒跑一次，绝不能让它去起一次登录 shell。
 fn run_dshc<R: Runtime>(app: &AppHandle<R>, args: &[&str]) -> Result<String, String> {
     let home = pocket_home(app)?;
     let tc = toolchain::resolve(&home)?;
-    let path_env = toolchain::path_env(&home, &tc.node.node_bin_dir)?;
+    run_dshc_with(app, &tc, args, toolchain::path_env(&home, &tc.node.node_bin_dir)?)
+}
 
+/// 启动/重启 Worker 专用：PATH 以**用户登录 shell 的 PATH** 为基线。
+///
+/// 为什么必须区分（本机实测）：GUI 应用继承的 PATH 只有
+/// `/usr/bin:/bin:/usr/sbin:/sbin`（launchd 默认），`.zshrc` 从来不会被 GUI 读；
+/// 而 dshc 会在 `start` 时把环境原样交给 detached supervisor，再由它
+/// `spawn(dsh, {env: {...process.env}})` 透传给 dsh —— 也就是说**这里给的 PATH 会一路
+/// 决定 dsh 与模型 shell 调用能看到哪些工具**。修复前 Worker 看不到 Homebrew/nvm/pyenv。
+///
+/// 注意一个上游语义（dsh-app-boot 的 loadLayeredEnv）：`$DSH_HOME/.env` 只在
+/// `process.env[name] === undefined` 时才生效 —— 我们在这里**有意**提供 PATH，
+/// 因此用户写在 `~/.dsh/.env` 里的 PATH 会被继承层挡住（UI 要提示这一点）。
+fn run_dshc_worker<R: Runtime>(app: &AppHandle<R>, args: &[&str]) -> Result<String, String> {
+    let home = pocket_home(app)?;
+    let tc = toolchain::resolve(&home)?;
+    run_dshc_with(app, &tc, args, toolchain::worker_path_env(&home, &tc.node.node_bin_dir)?)
+}
+
+/// 两个入口共用的实际 spawn 逻辑。
+fn run_dshc_with<R: Runtime>(
+    _app: &AppHandle<R>,
+    tc: &toolchain::Toolchain,
+    args: &[&str],
+    path_env: std::ffi::OsString,
+) -> Result<String, String> {
     let mut cmd = Command::new(&tc.node.node);
     no_window(&mut cmd);
     let out = cmd
@@ -1372,6 +1401,57 @@ fn port_cleanup<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     run_dshc(&app, &["free-port", "--port", &port.to_string(), "--json"])
 }
 
+/// Worker 环境体检（控制台「高级」与「导出诊断」共用；**只回键名，不回值**）。
+///
+/// 为什么需要它：`~/.dsh/.env` 里写了上游的 bootstrap-only 名字（`PATH`/`DSH_*`/`HOME`…）
+/// 会让 dsh **拒绝启动**，而用户只会看到一个笼统的启动失败；另外 `.env` 里写了继承层
+/// 已有的键（如 `TMPDIR`）也**不会生效**（launcher 只在 `undefined` 时才采纳）。
+/// 这两类都必须显式告诉用户，否则就是"照文档做了却没反应"。
+#[tauri::command]
+async fn worker_env_report<R: Runtime>(app: AppHandle<R>) -> serde_json::Value {
+    tauri::async_runtime::spawn_blocking(move || {
+        let worker_path = pocket_home(&app)
+            .and_then(|h| toolchain::resolve(&h).map(|tc| (h, tc)))
+            .ok()
+            .and_then(|(h, tc)| toolchain::worker_path_env(&h, &tc.node.node_bin_dir).ok());
+        toolchain::inspect_home_env_file(worker_path.as_deref())
+    })
+    .await
+    .unwrap_or_else(|e| serde_json::json!({ "error": format!("任务失败: {e}") }))
+}
+
+/// 扫描用户登录 shell 的环境，按分组返回**键名**（供启动引导 / 控制台）。
+///
+/// 值不经过这里：报告只含键名与分类，导入时前端也**只传键名**，值始终留在 Rust 内。
+#[tauri::command]
+async fn env_scan(force: Option<bool>) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = toolchain::dsh_home_dir()
+            .ok_or_else(|| "无法定位 dsh 主目录（$HOME / $DSH_HOME 都取不到）".to_string())?;
+        // force = UI 的「重新扫描」：清缓存重取，否则 300s TTL 内改 .zshrc 看不到变化
+        if force.unwrap_or(false) {
+            let _ = toolchain::login_shell_env_refresh();
+        }
+        Ok::<_, String>(toolchain::scan_login_env(&dir))
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 把选中的环境变量（**只有键名**）从登录 shell 取出来，写进 `$DSH_HOME/.env` 的受管块。
+///
+/// 为什么让 Rust 去取值而不是前端传值：值不该经过 IPC / 前端内存 / 日志。
+#[tauri::command]
+async fn env_import(keys: Vec<String>) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = toolchain::dsh_home_dir()
+            .ok_or_else(|| "无法定位 dsh 主目录（$HOME / $DSH_HOME 都取不到）".to_string())?;
+        toolchain::import_login_env(&dir, &keys)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
 /// 控制台内打开某个面板（前端主动调用）；`focus` 用于落在合并后的具体分区
 #[tauri::command]
 fn show_console<R: Runtime>(app: AppHandle<R>, panel: String, focus: Option<String>) {
@@ -1640,6 +1720,15 @@ fn export_diagnostics_impl<R: Runtime>(app: &AppHandle<R>) -> Result<String, Str
         })
         .unwrap_or_default();
 
+    // Worker 环境：**只有键名，没有值**（inspect_* 保证不外带值）。
+    // 排查"桌面端起不来 / 看不到 .zshrc"时，这一项比翻日志直接得多。
+    let worker_env = {
+        let wp = toolchain::resolve_node(&home)
+            .ok()
+            .and_then(|n| toolchain::worker_path_env(&home, &n.node_bin_dir).ok());
+        toolchain::inspect_home_env_file(wp.as_deref())
+    };
+
     let diag = serde_json::json!({
         "kind": "dsh-pocket-diagnostics",
         "generatedAt": now_ms(),
@@ -1652,6 +1741,7 @@ fn export_diagnostics_impl<R: Runtime>(app: &AppHandle<R>) -> Result<String, Str
         "bridge": bridge,
         "workerRun": run,
         "listeningPorts": listening_ports_report(),
+        "workerEnv": worker_env,
         "dshcLogTail": log_tail,
     });
     let path = home.join(format!("diagnostics-{}.json", now_ms()));
@@ -2170,7 +2260,8 @@ fn start_worker<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
     let dsh = managed_dsh_bin_for(app);
     let args = worker_start_args(app, dsh.as_deref());
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_dshc(app, &refs)
+    // Worker 启动专用入口：PATH 以登录 shell 为基线（见 run_dshc_worker 注释）
+    run_dshc_worker(app, &refs)
 }
 
 // ─────────────── 账号（loopback OAuth）───────────────
@@ -3100,6 +3191,9 @@ pub fn run() {
             take_onboarding_request,
             enter_web_surface,
             web_surface_state,
+            worker_env_report,
+            env_scan,
+            env_import,
             retry_web_surface,
             set_web_surface_intent,
             leave_web_surface,
@@ -3151,6 +3245,40 @@ pub fn run() {
                 }
                 std::process::exit(0);
             }
+            // --dump-worker-env：打印 Worker 启动实际会拿到的 PATH（脚本化排查用）。
+            // 为什么需要它：这类"桌面端看不到 .zshrc"的问题过去只能靠 ps eww 猜；
+            // 有了这个开关，用户/支持一条命令就能看到"到底给了 dsh 什么"。
+            if std::env::args().any(|a| a == "--dump-worker-env") {
+                let home = match pocket_home(app.handle()) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        eprintln!("[env] 无法定位主目录: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                match toolchain::resolve(&home) {
+                    Ok(tc) => {
+                        match toolchain::login_shell_path_cached() {
+                            Some(p) => println!("[env] 登录 shell PATH：{} 段", std::env::split_paths(&p).count()),
+                            None => println!("[env] 登录 shell PATH：未取到（回退继承 PATH）"),
+                        }
+                        match toolchain::worker_path_env(&home, &tc.node.node_bin_dir) {
+                            Ok(p) => {
+                                println!("[env] Worker PATH（换行分隔）：");
+                                let has_homebrew = std::env::split_paths(&p)
+                                    .any(|s| s.to_string_lossy().contains("/opt/homebrew"));
+                                for seg in std::env::split_paths(&p) {
+                                    println!("  {}", seg.display());
+                                }
+                                println!("[env] 含 /opt/homebrew: {has_homebrew}");
+                            }
+                            Err(e) => println!("[env] PATH 组装失败: {e}"),
+                        }
+                    }
+                    Err(e) => println!("[env] 工具链未就绪: {e}"),
+                }
+                std::process::exit(0);
+            }
             // 启动自检：sidecar 是否就绪、自启插件是否可用（售后排查用）
             #[cfg(debug_assertions)]
             {
@@ -3186,6 +3314,11 @@ pub fn run() {
             }
             build_tray(app.handle())?;
             install_menu(app.handle())?;
+            // 预热登录 shell 的 PATH：起一次 `zsh -i -l -c` 要 100ms~数秒（取决于 rc），
+            // 放后台线程先算掉，用户第一次点「启动 Worker」时就不用等它。
+            std::thread::spawn(|| {
+                let _ = toolchain::login_shell_path_cached();
+            });
             start_poller(app.handle().clone());
             // 开机即在线：未运行则拉起（与原 Flutter 端行为一致）；失败不再静默吞掉
             let handle = app.handle().clone();

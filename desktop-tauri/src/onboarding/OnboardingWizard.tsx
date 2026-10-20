@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, RotateCw, X } from "lucide-react";
 import { Button } from "../components/ui";
+import { EnvImportPanel } from "../components/EnvImportPanel";
 import {
   bootstrapComplete, bootstrapStatus, preflightCheck, workerStart,
   type BootstrapStatus, type PreflightReport,
 } from "../lib/worker";
 import { AccountStep } from "../guide/AccountStep";
-import { STEP_LABEL, STEP_ORDER, type StepId } from "./model";
+import { OPTIONAL_STEPS, STEP_LABEL, STEP_ORDER, type StepId } from "./model";
 import { useBootstrapProgress } from "./useBootstrapProgress";
 import { BridgeStep } from "./steps/BridgeStep";
 import { DoneStep } from "./steps/DoneStep";
@@ -115,7 +116,10 @@ export function OnboardingWizard({
   // 初始步：首次引导 → welcome 讲清楚要做什么；环境缺失重开 → 直达首个未满足项
   useEffect(() => {
     if (step === null && status !== null) {
-      setStep(status.onboardingDone ? firstUnmet : "welcome");
+      // 浏览器/无人核验调试入口：?step=env 直达某一步（与 ?wizard=dialog 同一套惯例）
+      const want = new URLSearchParams(window.location.search).get("step");
+      const forced = STEP_ORDER.find((s) => s === want);
+      setStep(forced ?? (status.onboardingDone ? firstUnmet : "welcome"));
     }
   }, [status, step, firstUnmet]);
 
@@ -124,7 +128,11 @@ export function OnboardingWizard({
   const navigatedBack = useRef(false);
   useEffect(() => {
     if (navigatedBack.current) return;
-    if (step !== null && step !== "welcome" && STEP_ORDER.indexOf(step) < STEP_ORDER.indexOf(firstUnmet)) {
+    if (
+      step !== null &&
+      !OPTIONAL_STEPS.includes(step) &&
+      STEP_ORDER.indexOf(step) < STEP_ORDER.indexOf(firstUnmet)
+    ) {
       setStep(firstUnmet);
     }
   }, [step, firstUnmet]);
@@ -132,6 +140,7 @@ export function OnboardingWizard({
   const stepIndex = step ? STEP_ORDER.indexOf(step) : -1;
   const canGoNext =
     step === "welcome" ||
+    step === "env" ||
     (step === "node" && nodeDone) ||
     (step === "bridge" && bridgeDone) ||
     (step === "harness" && harnessDone) ||
@@ -214,6 +223,9 @@ export function OnboardingWizard({
         return (
           <HarnessStep status={status} progress={latest["dsh"]} onDone={() => void refreshStatus()} />
         );
+      case "env":
+        // 可选步骤：把用户终端里的开发环境导入给 Worker（见 components/EnvImportPanel）
+        return <EnvImportPanel variant="wizard" />;
       case "account": {
         // 二维码依赖本机服务标识（Worker 首启生成）：进本步先静默拉起，出码即成功
         if (!accountWarm.current) {

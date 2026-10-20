@@ -248,6 +248,21 @@ for (const scheme of ["light", "dark"]) {
         .map((d) => d.querySelector("summary")?.textContent.trim() ?? ""));
     ok(focusLogs.some((s) => s.includes("dshc.log")),
        `focus=logs 深链直接展开日志区 ✅（展开=[${focusLogs.join("/")}]）`);
+
+    // Worker 环境体检：两类"照做了却没反应"的告警必须出现（浏览器 mock 造了这两种样本）
+    await page.goto(url("run"), { waitUntil: "networkidle" });
+    await page.waitForTimeout(500);
+    await page.evaluate(() => document.querySelectorAll("details").forEach((d) => (d.open = true)));
+    await page.waitForTimeout(400);
+    const env = await page.evaluate(() => document.body.innerText || "");
+    ok(env.includes("上游禁止写文件") && env.includes("GIT_PAGER"),
+       `环境导入：点名"不可导入（会让 Harness 拒绝启动）"的键 ✅`);
+    ok(env.includes("写了也不生效") && env.includes("TMPDIR"),
+       `环境导入：提示"已被系统提供"的键 ✅`);
+    ok(env.includes("移动开发") && env.includes("ANDROID_HOME") && env.includes("导入选中的"),
+       `环境导入：分组候选 + 导入按钮 ✅`);
+    ok(env.includes("来自登录 shell"),
+       `环境体检：显示 PATH 来源（登录 shell / 回退）✅`);
   }
 
   console.log("\n===== 运行页分区顺序随健康态变化（评分卡 §7）=====");
@@ -308,8 +323,34 @@ for (const scheme of ["light", "dark"]) {
   const gd = await page.evaluate(() => ({
     h1: document.querySelector("h1")?.textContent.trim() ?? null,
     aside: document.querySelectorAll("aside").length,
+    body: document.body.innerText || "",
+    buttons: [...document.querySelectorAll("button")].map((b) => (b.textContent || "").trim()),
   }));
   ok(Boolean(gd.h1) && gd.aside === 0, `引导面 标题=「${gd.h1}」侧栏=${gd.aside}（应为 0）`);
+  // 启动引导横幅：终端里有可导入的变量时必须出现（"启动时引导用户导入环境变量"的落点）
+  ok(
+    gd.body.includes("个环境变量可导入") && gd.buttons.includes("一键导入") && gd.buttons.includes("稍后"),
+    `启动横幅：检测到可导入变量 + 一键导入/稍后 ✅`,
+  );
+  // 一键导入的范围必须排除密钥（mock 在默认分组里放了一个 PUB_TOKEN 来钉这条策略）
+  ok(
+    gd.body.includes("不含") && gd.body.includes("密钥"),
+    `启动横幅：一键导入明确排除密钥 ✅`,
+  );
+
+  // 向导「环境变量」步骤（?step=env 直达）：分组候选与导入按钮要真的渲染出来
+  await page.goto(`http://127.0.0.1:${port}/index.html?step=env`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(700);
+  const envStep = await page.evaluate(() => ({
+    body: document.body.innerText || "",
+    nav: [...document.querySelectorAll("nav[aria-label='引导步骤'] *")].map((e) => e.textContent || "").join(" "),
+    checks: document.querySelectorAll("input[type=checkbox]").length,
+  }));
+  ok(envStep.nav.includes("环境变量"), `向导步骤条含「环境变量」✅`);
+  ok(
+    envStep.body.includes("移动开发") && envStep.body.includes("导入选中的") && envStep.checks > 0,
+    `向导环境步：分组 ${envStep.checks} 个勾选项 + 导入按钮 ✅`,
+  );
 
   // 恢复卡（设计文档不变量 I3：进入 Web 界面失败必须留下出口，不能出现"只能退出"的界面）
   await page.goto(`http://127.0.0.1:${port}/index.html?onboarded&navfail`, { waitUntil: "networkidle" });

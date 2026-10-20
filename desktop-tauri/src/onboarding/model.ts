@@ -1,17 +1,23 @@
 /** 向导步骤模型：状态机由 OnboardingWizard 持有，步骤组件只负责展示与动作。 */
 
-export type StepId = "welcome" | "node" | "bridge" | "harness" | "account" | "done";
+export type StepId = "welcome" | "node" | "bridge" | "harness" | "env" | "account" | "done";
 
-export const STEP_ORDER: StepId[] = ["welcome", "node", "bridge", "harness", "account", "done"];
+export const STEP_ORDER: StepId[] = ["welcome", "node", "bridge", "harness", "env", "account", "done"];
 
 export const STEP_LABEL: Record<StepId, string> = {
   welcome: "欢迎",
   node: "Node 运行时",
   bridge: "Worker 核心",
   harness: "Harness",
+  // 可选步骤：把用户终端里的开发环境（Flutter/Android/Homebrew/代理…）导入给 Worker。
+  // 为什么放在装完运行时之后：那时才真正需要它，用户也更容易理解"为什么要导入"。
+  env: "环境变量",
   account: "登录",
   done: "完成",
 };
+
+/** 可选步骤：不参与"必须先完成才能下一步"的判定，也不该被自动推进跳过。 */
+export const OPTIONAL_STEPS: StepId[] = ["welcome", "env"];
 
 export interface StepNav {
   goNext: () => void;

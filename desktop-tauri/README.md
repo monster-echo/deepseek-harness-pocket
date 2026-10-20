@@ -320,6 +320,27 @@ UI：Token 过期时按钮高亮；打开账号页若已过期但仍有 refreshT
 - **折叠用原生 `<details>` 时不要传受控 `open`**：本应用每 3 秒会因 worker 状态推送重渲染，
   受控 `open` 会把用户手动收起的折叠区又弹开。`components/ui.tsx` 的 `Fold` 用
   `useEffect` 只设**初始**状态。
+- **GUI 应用读不到 `.zshrc`，而 dsh 的 PATH 只能走"继承层"**：进程链是
+  `launchd → .app → node dshc → dsh`，全程没有 shell；`.zshrc` 只被**交互式** zsh 读取。
+  本机实测应用进程 `PATH=/usr/bin:/bin:/usr/sbin:/sbin`、环境只有 launchd 给的 12 个键。
+  修复方式只有一处：`run_dshc_worker()` 里用 `zsh -i -l -c` **夹标记**取 PATH（必须 `-i -l`；
+  本机一次 1441ms、stdout 里 ~1.7KB 是 rc 噪声）后注入——**`status` 等每 3 秒的调用不要走这条路**。
+  别照抄 VS Code 的"整份 env 快照"：Worker 可被手机远程驾驶，那是权限升级，不是便利。
+- **`$DSH_HOME/.env` 有硬性拒绝名单**：`PATH`/`HOME`/`SHELL`/`NODE_OPTIONS`/`GIT_*`/`SSL_CERT_*`/
+  `NODE_TLS_REJECT_UNAUTHORIZED` 等 49 个名字 + `DSH_`/`XDG_`/`DYLD_`/`BASH_FUNC_` 四个前缀，
+  写进**任何** `.env` 都会让 dsh 在应用任何值之前 throw → **启动失败**；只有四个代理名
+  （`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`）在 `$DSH_HOME/.env` 这层被豁免。
+  另外继承层优先（`process.env[name] === undefined` 才采纳 `.env`），所以重复的键写了也不生效。
+  控制台「运行 → 高级 → Worker 环境」会把这两类点名——名单逐字抄自 `dsh-app-boot/lib/index.js`。
+- **环境导入的"值"不进前端、不进日志、不进诊断**：`env_scan` 只回键名，`env_import(keys)`
+  只收键名，值由 Rust 从登录 shell 取出后直接写 `$DSH_HOME/.env`。写的是**受管块**
+  （`# >>> DSH Pocket 导入的终端环境` …），替换旧块但**保留用户手写的行**，文件 0600。
+  单测 `scan_report_lists_keys_never_values_*` 与 `managed_block_replaces_old_block_*` 钉住这两条。
+- **给向导加步骤要同时改自动推进**：`OnboardingWizard` 会在
+  `indexOf(step) < indexOf(firstUnmet)` 时自动跳步，因此"可选步骤"（如 `env`）必须进
+  `OPTIONAL_STEPS`，否则会被自动推进一闪而过；`canGoNext` 也要为它放行，否则「下一步」永远禁用。
+- **报告里永远不要带环境变量的"值"**：`workerEnv` 会进导出诊断外发。`inspect_env_file_*` 只回键名，
+  单测 `inspect_env_file_flags_refused_and_shadowed` 断言过这一点。
 
 ## 本轮新增：手机扫码授权登录（Telegram 同款）
 

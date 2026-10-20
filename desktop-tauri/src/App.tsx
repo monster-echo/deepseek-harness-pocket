@@ -4,6 +4,7 @@ import { GuidePage } from "./guide/GuidePage";
 import { ConsoleApp } from "./console/ConsoleApp";
 import { OnboardingWizard } from "./onboarding/OnboardingWizard";
 import { Button } from "./components/ui";
+import { EnvImportBanner } from "./components/EnvImportPanel";
 import {
   bootstrapStatus, enterWebSurface, leaveWebSurface, onNavState, onOpenOnboarding,
   onWebSurfaceFailed, onWorkerStartError, retryWebSurface, setWebSurfaceIntent, showConsole,
@@ -294,7 +295,13 @@ function MainSurface() {
   return (
     <>
       <DragStrip />
-      <GuidePage onOpenWizard={() => setWizardDialog(true)} />
+      <div className="flex h-full flex-col">
+        {/* 启动引导：终端里有可导入的环境变量时出现（导入完/点稍后即消失） */}
+        <EnvImportBanner onOpenDetail={() => void showConsole("run", "env")} />
+        <div className="min-h-0 flex-1">
+          <GuidePage onOpenWizard={() => setWizardDialog(true)} />
+        </div>
+      </div>
       {wizardDialog ? (
         <OnboardingWizard
           variant="dialog"

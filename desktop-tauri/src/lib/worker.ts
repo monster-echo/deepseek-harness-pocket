@@ -538,7 +538,7 @@ export async function deviceLinkRevoke(): Promise<void> {
  * 打开控制台并定位到某个面板；`focus` 用于落在合并后的具体分区
  * （如 `logs` → 运行页的日志折叠区直接展开，见评分卡 §3.2 的"能力不丢"）。
  */
-export async function showConsole(panel: string, focus?: "logs" | "params"): Promise<void> {
+export async function showConsole(panel: string, focus?: "logs" | "params" | "env"): Promise<void> {
   if (!isTauri()) return;
   return invoke("show_console", { panel, focus: focus ?? null });
 }
@@ -573,10 +573,158 @@ export async function onConsolePanel(cb: (panel: string) => void): Promise<Unlis
   return listen<string>("console-panel", (e) => cb(e.payload));
 }
 
+/* ── 终端环境导入（启动引导 / 控制台共用）────────────────────────── */
+
+/** 一个分组的候选键（**只有键名**）。 */
+export interface EnvGroup {
+  name: string;
+  keys: string[];
+  defaultChecked: boolean;
+  sensitiveKeys: string[];
+  refusedKeys: string[];
+}
+
+export interface EnvScanReport {
+  dshHome?: string | null;
+  envFile?: string | null;
+  envFileExists: boolean;
+  /** 能不能起登录 shell 取到环境（false = 超时/无 SHELL，已回退） */
+  loginShellOk: boolean;
+  discovered: number;
+  groups: EnvGroup[];
+  refusedKeys: string[];
+  shadowedKeys: string[];
+  junkKeys: string[];
+  sensitiveKeys: string[];
+  /** 上次导入（受管块里）的键名 */
+  alreadyImported: string[];
+  /** 尚未导入的候选数——决定"启动时要不要引导" */
+  pendingCount: number;
+}
+
+export interface EnvImportResult {
+  written: string[];
+  skipped: { key: string; reason: string }[];
+  envFile: string;
+  count: number;
+}
+
+const MOCK_ENV_SCAN: EnvScanReport = {
+  dshHome: "/Users/you/.dsh",
+  envFile: "/Users/you/.dsh/.env",
+  envFileExists: false,
+  loginShellOk: true,
+  discovered: 12,
+  groups: [
+    {
+      name: "移动开发",
+      keys: ["ANDROID_HOME", "DEVECO_SDK_HOME", "FLUTTER_STORAGE_BASE_URL", "JAVA_HOME", "PUB_HOSTED_URL", "PUB_TOKEN"],
+      defaultChecked: true,
+      // 故意放一个"在默认分组里的密钥"：一键导入不得把它带进去
+      sensitiveKeys: ["PUB_TOKEN"],
+      refusedKeys: [],
+    },
+    {
+      name: "包管理与镜像",
+      keys: ["HOMEBREW_PREFIX", "PNPM_HOME"],
+      defaultChecked: true,
+      sensitiveKeys: [],
+      refusedKeys: [],
+    },
+    {
+      name: "网络与代理",
+      keys: ["https_proxy", "http_proxy", "no_proxy"],
+      defaultChecked: true,
+      sensitiveKeys: [],
+      refusedKeys: [],
+    },
+    {
+      name: "shell 现场",
+      keys: ["PWD", "TERM", "_"],
+      defaultChecked: false,
+      sensitiveKeys: [],
+      refusedKeys: [],
+    },
+    {
+      name: "其他",
+      keys: ["GIT_PAGER"],
+      defaultChecked: false,
+      sensitiveKeys: [],
+      refusedKeys: ["GIT_PAGER"],
+    },
+  ],
+  refusedKeys: ["GIT_PAGER"],
+  shadowedKeys: ["TMPDIR"],
+  junkKeys: ["PWD", "TERM", "_"],
+  sensitiveKeys: ["PUB_TOKEN"],
+  alreadyImported: [],
+  pendingCount: 10,
+};
+
+/**
+ * 扫描终端环境（只回键名）。
+ * `force` = 用户点了「重新扫描」：清掉 300s 缓存重取，否则改完 `.zshrc` 看不到变化。
+ */
+export async function envScan(force = false): Promise<EnvScanReport> {
+  if (!isTauri()) return MOCK_ENV_SCAN;
+  return invoke<EnvScanReport>("env_scan", { force });
+}
+
+/** 导入选中的键（**只传键名**，值由 Rust 从登录 shell 取，不经过前端）。 */
+export async function envImport(keys: string[]): Promise<EnvImportResult> {
+  if (!isTauri()) return { written: keys, skipped: [], envFile: "/Users/you/.dsh/.env", count: keys.length };
+  return invoke<EnvImportResult>("env_import", { keys });
+}
+
 /** 控制台已开着时，Rust 侧再要求聚焦到某个分区（配合 `showConsole` 的 focus） */
 export async function onConsoleFocus(cb: (focus: string) => void): Promise<UnlistenFn> {
   if (!isTauri()) return () => {};
   return listen<string>("console-focus", (e) => cb(e.payload));
+}
+
+/* ── Worker 环境体检（`$DSH_HOME/.env` 与 PATH 来源）───────────────── */
+
+/**
+ * Worker 环境报告。**只有键名，永远没有值**——这份报告会进「导出诊断」。
+ *
+ * 为什么需要：`~/.dsh/.env` 里写上游的 bootstrap-only 名字（PATH、DSH_ 前缀、HOME…）会让
+ * dsh **拒绝启动**；写了继承层已有的键（如 TMPDIR）则**不会生效**。两类都得明说，
+ * 否则用户只会看到"照文档做了却没反应"。
+ */
+export interface WorkerEnvReport {
+  dshHome?: string | null;
+  envFile?: string | null;
+  envFileExists: boolean;
+  /** `.env` 里出现的键名（无值） */
+  envKeys: string[];
+  /** 会让 dsh 拒绝启动的键（必须点名） */
+  refusedKeys: string[];
+  /** 被继承层挡住、写了也不生效的键 */
+  shadowedKeys: string[];
+  /** 我们给 Worker 的 PATH 段数（含登录 shell 那一层） */
+  workerPathSegments?: number | null;
+  workerPathHasHomebrew?: boolean | null;
+  /** 从登录 shell 解析到的 PATH（null = 没取到，已回退继承 PATH） */
+  loginShellPath?: { segments: number; hasHomebrew: boolean } | null;
+  error?: string;
+}
+
+export async function workerEnvReport(): Promise<WorkerEnvReport> {
+  if (!isTauri()) {
+    // 浏览器态给一份"有问题的"样本：让 UI 的告警路径能被无人核验覆盖
+    return {
+      dshHome: "/Users/you/.dsh",
+      envFile: "/Users/you/.dsh/.env",
+      envFileExists: true,
+      envKeys: ["HTTPS_PROXY", "ANTHROPIC_API_KEY", "PATH", "TMPDIR"],
+      refusedKeys: ["PATH"],
+      shadowedKeys: ["TMPDIR"],
+      workerPathSegments: 45,
+      workerPathHasHomebrew: true,
+      loginShellPath: { segments: 51, hasHomebrew: true },
+    };
+  }
+  return invoke<WorkerEnvReport>("worker_env_report");
 }
 
 /** 菜单「文件 → 引导页」：重新打开引导向导 */

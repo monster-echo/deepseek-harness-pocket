@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Runtime};
@@ -368,6 +369,669 @@ fn path_env_with(base: &std::ffi::OsStr, home: &Path, node_bin_dir: &Path) -> Re
             .chain(std::env::split_paths(base)),
     )
     .map_err(|e| format!("PATH 组装失败: {e}"))
+}
+
+// ─────────── Worker 启动用的 PATH：补上"登录 shell 那一层" ───────────
+//
+// 背景（本机实测）：
+//   macOS 上 GUI 应用继承的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，
+//   `.zshrc` 永远不会被 GUI 进程读取（只有**交互式** zsh 才读）。
+//   于是 Worker / dsh / 模型 shell 调用看不到 Homebrew、nvm、pyenv、conda……
+//   而 dshc 会把环境一路透传（`spawn(dsh, { env: { ...process.env } })`），
+//   所以修复点只有一处：**我们 spawn dshc 时给的那个 PATH**。
+//
+// 为什么不照抄 VS Code 的"整份 env 快照"：Worker 是**可被手机远程驾驶**的守护进程，
+//   把用户整份环境（含各类密钥）灌进去等于权限升级。PATH 不是秘密、又最难手抄，
+//   是唯一值得自动补的一项；其余变量走 dsh 自己的 `$DSH_HOME/.env`。
+//
+// 另外，PATH **只能**走这条通道：上游 dsh-app-boot 的 `readEnvLayer` 把 PATH 列为
+//   bootstrap-only，任何 `.env` 里写 PATH 都会让 dsh 拒绝启动（见下面的拒绝名单）。
+
+/// 解析结果里 PATH 值的定界标记（用户 rc 可能 echo 噪声，必须夹标记再取中间）。
+const PATH_BEGIN: &str = "__DSH_POCKET_PATH_BEGIN__";
+const PATH_END: &str = "__DSH_POCKET_PATH_END__";
+
+/// 登录 shell 解析结果的缓存时长：够短以让"改了 .zshrc 重启 Worker"生效，
+/// 够长以免每次启动 Worker 都付一次起 shell 的代价（本机实测 ~1.45s）。
+const LOGIN_PATH_TTL: Duration = Duration::from_secs(300);
+/// 解析超时。VS Code 默认 10s；我们压到 5s——超时只是回退继承 PATH，
+/// 而"启动 Worker"是用户按了按钮在等的路径，不能让 rc 把它卡住 10 秒。
+const LOGIN_PATH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 合并两段 PATH：primary 在前，重复项与空段去掉（保序）。纯函数，便于单测。
+pub fn merge_paths(primary: &std::ffi::OsStr, fallback: &std::ffi::OsStr) -> std::ffi::OsString {
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut out: Vec<PathBuf> = Vec::new();
+    for p in std::env::split_paths(primary).chain(std::env::split_paths(fallback)) {
+        if p.as_os_str().is_empty() || seen.contains(&p) {
+            continue;
+        }
+        seen.push(p.clone());
+        out.push(p);
+    }
+    std::env::join_paths(out).unwrap_or_else(|_| primary.to_os_string())
+}
+
+/// 起一次登录+交互 shell，拿到**全部**环境（键+值），失败/超时返回 None。
+///
+/// 参数取 `-i -l -c`（VS Code 同款）：**必须 `-i -l` 才会读 `.zshrc`/`.zprofile`**，
+/// 只 `-c` 的话 zsh 只读 `.zshenv`。stderr 丢弃（rc 常往 stderr 喷），stdin 关闭。
+///
+/// **值只在本进程内流转**：用于（a）分类报告只取键名（b）把用户勾选的键写进
+/// `$DSH_HOME/.env`。绝不进日志、诊断、UI 或 IPC 返回值。
+/// `BASH_FUNC_*`（导出成环境变量的 shell 函数）在捕获处直接丢弃——它们会让每次
+/// 子 bash 都执行函数体，上游也专门把它们列为禁止前缀。
+fn login_shell_env_uncached() -> Option<Vec<(String, String)>> {
+    // Windows 不做：Explorer 启动的进程本来就继承用户环境（本问题只存在于 macOS/Linux）
+    if cfg!(target_os = "windows") {
+        return None;
+    }
+    let shell = std::env::var_os("SHELL")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| std::ffi::OsString::from("/bin/zsh"));
+    if !Path::new(&shell).exists() {
+        return None;
+    }
+    // `command env` 绕过 rc 里可能定义的 env 别名/函数
+    let script = format!(
+        "printf '%s\\n' '{PATH_BEGIN}'; command env; printf '%s\\n' '{PATH_END}'"
+    );
+    let mut cmd = std::process::Command::new(&shell);
+    cmd.args(["-i", "-l", "-c", &script])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped());
+    let started = Instant::now();
+    let mut child = cmd.spawn().ok()?;
+    let stdout = child.stdout.take()?;
+
+    // 读 stdout 放到线程里，主线程带超时等待——std 没有 wait_timeout
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::Read as _;
+        let mut buf = String::new();
+        let mut out = stdout;
+        let _ = out.read_to_string(&mut buf);
+        let _ = tx.send(buf);
+    });
+
+    let raw = match rx.recv_timeout(LOGIN_PATH_TIMEOUT) {
+        Ok(text) => text,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None; // 超时：杀掉并回退
+        }
+    };
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let entries = parse_marked_env(&raw);
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[env] login shell env: {} 项 ({}ms)",
+        entries.len(),
+        started.elapsed().as_millis()
+    );
+    if entries.is_empty() {
+        None
+    } else {
+        Some(entries)
+    }
+}
+
+/// 解析 `BEGIN\nKEY=VALUE…\nEND` 之间的环境（纯函数，便于单测）。
+/// 按**第一个** `=` 切分；`BASH_FUNC_*` 丢弃；格式不合法的行忽略。
+pub fn parse_marked_env(raw: &str) -> Vec<(String, String)> {
+    let Some(start) = raw.find(PATH_BEGIN) else { return Vec::new() };
+    let rest = &raw[start + PATH_BEGIN.len()..];
+    let Some(end) = rest.find(PATH_END) else { return Vec::new() };
+    let body = &rest[..end];
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in body.lines() {
+        let Some(eq) = line.find('=') else { continue };
+        let key = line[..eq].trim();
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        if key.starts_with("BASH_FUNC_") {
+            continue;
+        }
+        let value = line[eq + 1..].to_string();
+        match out.iter_mut().find(|(k, _)| k == key) {
+            Some(slot) => slot.1 = value,
+            None => out.push((key.to_string(), value)),
+        }
+    }
+    out
+}
+
+/// 带 TTL 缓存的登录 shell 环境（键+值）。
+static LOGIN_ENV_CACHE: LazyLock<Mutex<Option<(Instant, Option<Vec<(String, String)>>)>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+pub fn login_shell_env_cached() -> Option<Vec<(String, String)>> {
+    let mut guard = match LOGIN_ENV_CACHE.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if let Some((at, v)) = guard.as_ref() {
+        if at.elapsed() < LOGIN_PATH_TTL {
+            return v.clone();
+        }
+    }
+    let fresh = login_shell_env_uncached();
+    *guard = Some((Instant::now(), fresh.clone()));
+    fresh
+}
+
+/// 强制重新捕获（清缓存后重取）。
+///
+/// 为什么必须有：TTL 是 300s，而用户在 UI 上点「重新扫描」时**期望立刻生效**——
+/// 如果只读缓存，他改完 `.zshrc` 点重新扫描会发现"什么都没变"，然后合理地认为功能坏了。
+pub fn login_shell_env_refresh() -> Option<Vec<(String, String)>> {
+    if let Ok(mut g) = LOGIN_ENV_CACHE.lock() {
+        *g = None;
+    }
+    login_shell_env_cached()
+}
+
+/// 登录 shell 的 PATH（缓存）。
+pub fn login_shell_path_cached() -> Option<std::ffi::OsString> {
+    login_shell_env_cached().and_then(|env| {
+        env.into_iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| std::ffi::OsString::from(v))
+            .filter(|v| !v.is_empty())
+    })
+}
+
+/// Worker 启动用的 PATH：
+/// `[受管 node bin, 受管 tools bin] + 登录 shell PATH + 继承 PATH（去重、保序）`。
+///
+/// 无从解析（非 macOS/Linux、无 shell、超时）时退化为 [`path_env`] 的行为。
+pub fn worker_path_env(home: &Path, node_bin_dir: &Path) -> Result<std::ffi::OsString, String> {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let base = match login_shell_path_cached() {
+        Some(shell_path) => merge_paths(&shell_path, &inherited),
+        None => inherited,
+    };
+    path_env_with(&base, home, node_bin_dir)
+}
+
+// ─────────── `$DSH_HOME/.env` 检查（照抄上游的拒绝规则）───────────
+//
+// 上游 dsh-app-boot 的 `readEnvLayer` 会**在应用任何值之前**拒绝 bootstrap-only 名字：
+// 命中就 throw → **dsh 启动失败**。用户把 `PATH=`（或 `DSH_*`、`HOME`、把代理放错层）
+// 写进 `.env` 时，我们目前只能看到一个笼统的"启动失败"。
+// 下面的名单是**逐字**从 `dsh-app-boot/lib/index.js` 抄的，目的是让控制台直接指出
+// "是哪一行让 Worker 起不来"。
+
+/// 任何 `.env` 都不得设置的名字（大小写不敏感）。
+pub const DSH_ENV_REFUSED_NAMES: &[&str] = &[
+    "PATH", "HOME", "USERPROFILE", "SHELL", "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS",
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS",
+    "PERL5OPT", "PERL5LIB", "PYTHONSTARTUP", "PYTHONPATH", "RUBYOPT", "RUBYLIB",
+    "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "PYTHONHOME",
+    "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_EDITOR", "GIT_ASKPASS",
+    "SSH_ASKPASS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT",
+    "EDITOR", "VISUAL", "PAGER", "BROWSER",
+    "DEEPSEEK_BASE_URL", "DEEPSEEK_SEARCH_BASE_URL",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_TLS_REJECT_UNAUTHORIZED",
+];
+/// 任何 `.env` 都不得使用的前缀。
+pub const DSH_ENV_REFUSED_PREFIXES: &[&str] = &["DSH_", "XDG_", "DYLD_", "BASH_FUNC_"];
+/// 唯二例外：这四个代理名**允许出现在 `$DSH_HOME/.env`**（"用户自己的机器级默认值"）。
+/// CA/TLS 类名字不在例外里——"它们改变的是信任什么，而不是流量去哪"。
+pub const DSH_HOME_LAYER_PROXY_NAMES: &[&str] = &["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
+
+/// dsh 主目录：显式 > `$DSH_HOME` > `~/.dsh`（与 dsh-home-paths 同规则；本应用不传显式值）。
+pub fn dsh_home_dir() -> Option<PathBuf> {
+    if let Some(v) = std::env::var_os("DSH_HOME") {
+        if !v.is_empty() {
+            return Some(PathBuf::from(v));
+        }
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".dsh"))
+}
+
+/// 该名字写进 `$DSH_HOME/.env` 会不会让 dsh 拒绝启动。
+pub fn env_name_refused_in_home_layer(name: &str) -> bool {
+    let up = name.to_uppercase();
+    if DSH_HOME_LAYER_PROXY_NAMES.contains(&up.as_str()) {
+        return false; // 代理名在"用户自己那层"是允许的
+    }
+    DSH_ENV_REFUSED_NAMES.contains(&up.as_str())
+        || DSH_ENV_REFUSED_PREFIXES.iter().any(|p| up.starts_with(p))
+}
+
+/// 解析 `.env` 的**键名**（绝返回值：值里可能有密钥，而诊断报告要能外发）。
+/// 容忍 `# 注释`、`export KEY=v`、`KEY="v"`、空行。
+pub fn parse_env_keys(content: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        let Some(eq) = line.find('=') else { continue };
+        let name = line[..eq].trim();
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        if !out.iter().any(|k| k == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// 体检**某个目录**下的 `.env`（纯逻辑：不碰 shell、不读全局状态，便于单测）。
+///
+/// `inherited_keys`（大写）模拟"launcher 继承到的键"，用来判断哪些 `.env` 项**不会生效**
+/// ——上游规则是 `process.env[name] === undefined` 时才采纳 `.env` 的值。
+pub fn inspect_env_file_at(
+    dir: &Path,
+    worker_path: Option<&std::ffi::OsStr>,
+    inherited_keys: &[String],
+) -> serde_json::Value {
+    let path = dir.join(".env");
+    let exists = path.is_file();
+    let keys = std::fs::read_to_string(&path)
+        .map(|t| parse_env_keys(&t))
+        .unwrap_or_default();
+
+    let refused: Vec<String> = keys
+        .iter()
+        .filter(|k| env_name_refused_in_home_layer(k))
+        .cloned()
+        .collect();
+    let shadowed: Vec<String> = keys
+        .iter()
+        .filter(|k| {
+            let up = k.to_uppercase();
+            !refused.contains(k) && inherited_keys.contains(&up)
+        })
+        .cloned()
+        .collect();
+
+    serde_json::json!({
+        "dshHome": dir.display().to_string(),
+        "envFile": path.display().to_string(),
+        "envFileExists": exists,
+        "envKeys": keys,
+        "refusedKeys": refused,
+        "shadowedKeys": shadowed,
+        "workerPathSegments": worker_path.map(|p| std::env::split_paths(p).count()),
+        "workerPathHasHomebrew": worker_path
+            .map(|p| std::env::split_paths(p).any(|s| s.to_string_lossy().contains("/opt/homebrew"))),
+    })
+}
+
+/// `$DSH_HOME/.env` 的体检（外壳：解析主目录 + 继承键名，并附带登录 shell 的解析结果）。
+///
+/// 注意这里可能会起一次登录 shell（结果缓存 5 分钟），所以调用方要用 `spawn_blocking`。
+pub fn inspect_home_env_file(worker_path: Option<&std::ffi::OsStr>) -> serde_json::Value {
+    let inherited: Vec<String> = std::env::vars().map(|(k, _)| k.to_uppercase()).collect();
+    let mut report = match dsh_home_dir() {
+        Some(home) => inspect_env_file_at(&home, worker_path, &inherited),
+        None => serde_json::json!({ "error": "无法定位 $HOME，取不到 dsh 主目录" }),
+    };
+    if let Some(obj) = report.as_object_mut() {
+        obj.insert(
+            "loginShellPath".into(),
+            match login_shell_path_cached() {
+                Some(p) => {
+                    let segs: Vec<String> =
+                        std::env::split_paths(&p).map(|x| x.display().to_string()).collect();
+                    serde_json::json!({
+                        "segments": segs.len(),
+                        "hasHomebrew": segs.iter().any(|s| s.contains("/opt/homebrew")),
+                    })
+                }
+                None => serde_json::Value::Null,
+            },
+        );
+    }
+    report
+}
+
+// ─────────── 启动引导：把用户终端里的变量导入 `$DSH_HOME/.env` ───────────
+//
+// 目标：**普通用户不用知道环境变量是什么**，也能让 Worker 拿到 Flutter/Android/
+// Homebrew 这类配置。做法是"发现 → 分类 → 勾选 → 写入"，而不是把整份环境灌进去：
+//   - 会话现场的键（PWD/OLDPWD/SHLVL/TERM/_…）带上只会误导子进程 → 不导入；
+//   - 上游禁止的键（PATH/HOME/GIT_PAGER…）写进 `.env` 会让 dsh 拒绝启动 → 不写文件
+//     （其中 PATH 已由我们启动时注入，见 run_dshc_worker）；
+//   - 敏感键（*_API_KEY/_TOKEN/_SECRET…）默认不勾，由用户显式点头。
+// 值只在 Rust 内部流转：报告只给键名，IPC 只收键名。
+
+/// 受管块标记：整块可被替换/删除，用户自己写的行不受影响。
+const MANAGED_BEGIN: &str = "# >>> DSH Pocket \u{5bfc}\u{5165}\u{7684}\u{7ec8}\u{7aef}\u{73af}\u{5883}";
+const MANAGED_END: &str = "# <<< DSH Pocket";
+
+/// 分组名（顺序即 UI 展示顺序）。
+pub const ENV_GROUPS: &[&str] = &[
+    "移动开发", "语言运行时", "包管理与镜像", "网络与代理", "IDE 与 JVM", "shell 现场", "其他",
+];
+
+/// 键 → 分组。
+pub fn env_group_of(key: &str) -> &'static str {
+    let up = key.to_uppercase();
+    let starts = |p: &str| up.starts_with(p);
+    let proxy = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY"].contains(&up.as_str());
+    if proxy {
+        return "网络与代理";
+    }
+    if starts("ANDROID") || starts("FLUTTER") || starts("DEVECO") || starts("HARMONY")
+        || starts("OHOS") || starts("PUB_") || starts("GRADLE") || starts("NDK")
+        || starts("KOTLIN") || starts("DART") || up == "JAVA_HOME" || up == "SDKROOT"
+    {
+        return "移动开发";
+    }
+    if starts("NVM_") || starts("PNPM") || starts("CARGO") || starts("RUSTUP")
+        || starts("GOROOT") || starts("GOPATH") || starts("GO") || starts("PYENV")
+        || starts("CONDA") || starts("VIRTUAL_ENV") || starts("MISE_") || starts("ASDF")
+        || starts("RBENV") || starts("SDKMAN") || starts("NODE_")
+    {
+        return "语言运行时";
+    }
+    if starts("HOMEBREW") || starts("NPM_CONFIG") || starts("PIP_") || starts("MIX_")
+        || starts("COMPOSER") || up == "PUB_HOSTED_URL"
+    {
+        return "包管理与镜像";
+    }
+    if up.ends_with("_VM_OPTIONS") || starts("JETBRAINS") || starts("VSCODE") || starts("IDEA")
+        || starts("CLION") || starts("GOLAND") || starts("WEBSTORM") || starts("PHPSTORM")
+        || starts("PYCHARM") || starts("RIDER") || starts("RUBYMINE") || starts("DATAGRIP")
+        || starts("STUDIO") || starts("AQUA")
+    {
+        return "IDE 与 JVM";
+    }
+    if env_is_shell_scene(key) {
+        return "shell 现场";
+    }
+    "其他"
+}
+
+/// "这个键是某个 shell 会话此刻的现场"——带进长驻守护进程只会误导。
+pub fn env_is_shell_scene(key: &str) -> bool {
+    let up = key.to_uppercase();
+    matches!(
+        up.as_str(),
+        "PWD" | "OLDPWD" | "SHLVL" | "_" | "TERM" | "TERM_PROGRAM" | "TERM_PROGRAM_VERSION"
+            | "TERM_SESSION_ID" | "COLORTERM" | "ZSH" | "ZDOTDIR" | "FPATH" | "CLICOLOR"
+            | "CLICOLOR_FORCE" | "NO_COLOR" | "LS_COLORS" | "LSCOLORS" | "WINDOWID" | "DISPLAY"
+            | "COMMAND_MODE" | "LOGNAME" | "USER" | "SHELL" | "TMPDIR" | "WINDOW"
+            | "SECURITYSESSIONID" | "MANPATH" | "INFOPATH"
+    ) || up.starts_with("XPC_")
+        || up.starts_with("__CF")
+        || up.starts_with("SSH_")
+        || up.starts_with("ITERM_")
+}
+
+/// 敏感键：默认不勾，由用户显式确认。
+pub fn env_is_sensitive(key: &str) -> bool {
+    let up = key.to_uppercase();
+    let suffix = up.ends_with("_API_KEY")
+        || up.ends_with("_APIKEY")
+        || up.ends_with("_TOKEN")
+        || up.ends_with("_SECRET")
+        || up.ends_with("_PASSWORD")
+        || up.ends_with("_PASSWD")
+        || up.ends_with("_CREDENTIAL")
+        || up.ends_with("_PRIVATE_KEY")
+        || up.ends_with("_ACCESS_KEY")
+        || up.ends_with("_KEY");
+    suffix
+        || ["AWS_", "GITHUB_", "GITLAB_", "OPENAI_", "ANTHROPIC_", "AZURE_", "GOOGLE_",
+            "HUGGINGFACE_", "HF_", "COHERE_", "MISTRAL_", "REPLICATE_", "STRIPE_", "SLACK_",
+            "TELEGRAM_", "DISCORD_", "PYPI_", "TWINE_", "NPM_TOKEN"]
+            .iter()
+            .any(|p| up.starts_with(p))
+}
+
+/// dotenv 行格式化：含空白/引号/`#` 的值用双引号包裹并转义。
+/// 含换行的值无法可靠表示 → 返回 None（调用方计入 skipped）。
+pub fn format_env_line(key: &str, value: &str) -> Option<String> {
+    if value.contains('\n') || value.contains('\r') {
+        return None;
+    }
+    let needs_quote = value.is_empty()
+        || value.contains(' ')
+        || value.contains('\t')
+        || value.contains('"')
+        || value.contains('#')
+        || value.contains('\'');
+    if !needs_quote {
+        return Some(format!("{key}={value}"));
+    }
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    Some(format!("{key}=\"{escaped}\""))
+}
+
+/// 读 `$DSH_HOME/.env` 里**受管块**的键名（用于"已导入过什么/是否要重新导入"）。
+pub fn managed_block_keys(env_file: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(env_file) else { return Vec::new() };
+    let mut inside = false;
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with(MANAGED_BEGIN) {
+            inside = true;
+            continue;
+        }
+        if line.trim_start().starts_with(MANAGED_END) {
+            inside = false;
+            continue;
+        }
+        if inside {
+            if let Some(eq) = line.find('=') {
+                let k = line[..eq].trim();
+                if !k.is_empty() {
+                    out.push(k.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 把受管块写进 `$DSH_HOME/.env`：替换旧块、保留用户手写的其余行。文件权限 0600。
+pub fn write_managed_block(env_file: &Path, entries: &[(String, String)]) -> Result<(), String> {
+    if let Some(dir) = env_file.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("创建 {} 失败: {e}", dir.display()))?;
+    }
+    let existing = std::fs::read_to_string(env_file).unwrap_or_default();
+    // 去掉旧受管块（含两行标记），其余原样保留
+    let mut kept: Vec<&str> = Vec::new();
+    let mut inside = false;
+    for line in existing.lines() {
+        if line.trim_start().starts_with(MANAGED_BEGIN) {
+            inside = true;
+            continue;
+        }
+        if line.trim_start().starts_with(MANAGED_END) {
+            inside = false;
+            continue;
+        }
+        if !inside {
+            kept.push(line);
+        }
+    }
+    while kept.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+        kept.pop();
+    }
+
+    let mut body = String::new();
+    body.push_str(MANAGED_BEGIN);
+    body.push_str("\n");
+    for (k, v) in entries {
+        match format_env_line(k, v) {
+            Some(line) => body.push_str(&format!("{line}\n")),
+            None => body.push_str(&format!("# 跳过 {k}（值含换行，无法写入）\n")),
+        }
+    }
+    body.push_str(MANAGED_END);
+    body.push('\n');
+
+    let mut out = kept.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(&body);
+    std::fs::write(env_file, out).map_err(|e| format!("写入 {} 失败: {e}", env_file.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(env_file, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// 扫描：把登录 shell 的环境分类成"可导入的分组"，**只回键名**。
+pub fn scan_login_env(dir: &Path) -> serde_json::Value {
+    let env_file = dir.join(".env");
+    let inherited: Vec<String> = std::env::vars().map(|(k, _)| k.to_uppercase()).collect();
+    let already = managed_block_keys(&env_file);
+    scan_env_entries(login_shell_env_cached().as_deref(), dir, &already, &inherited)
+}
+
+/// 纯逻辑部分（不碰 shell、不读全局状态，便于单测）。
+///
+/// ⚠️ 报告里**只有键名，永远没有值**：它会被渲染进控制台、也可能进导出诊断。
+/// `entries` 里的值只在 `import_login_env` 写文件时使用。
+pub fn scan_env_entries(
+    entries: Option<&[(String, String)]>,
+    dir: &Path,
+    already: &[String],
+    inherited_keys: &[String],
+) -> serde_json::Value {
+    let env_file = dir.join(".env");
+    let empty: &[(String, String)] = &[];
+    let all = entries.unwrap_or(empty);
+
+    let mut groups: Vec<serde_json::Value> = Vec::new();
+    let mut refused: Vec<String> = Vec::new();
+    let mut shadowed: Vec<String> = Vec::new();
+    let mut junk: Vec<String> = Vec::new();
+    let mut sensitive: Vec<String> = Vec::new();
+
+    for g in ENV_GROUPS {
+        let mut keys: Vec<String> = Vec::new();
+        for (k, _v) in all {
+            if env_group_of(k) != *g {
+                continue;
+            }
+            keys.push(k.clone());
+            if env_name_refused_in_home_layer(k) {
+                refused.push(k.clone());
+            }
+            if inherited_keys.contains(&k.to_uppercase()) {
+                shadowed.push(k.clone());
+            }
+            if env_is_shell_scene(k) {
+                junk.push(k.clone());
+            }
+            if env_is_sensitive(k) {
+                sensitive.push(k.clone());
+            }
+        }
+        keys.sort();
+        if keys.is_empty() {
+            continue;
+        }
+        // 默认勾选：工具类分组；shell 现场 / IDE / 其他 与敏感键默认不勾
+        let default_checked = matches!(*g, "移动开发" | "语言运行时" | "包管理与镜像" | "网络与代理");
+        groups.push(serde_json::json!({
+            "name": g,
+            "keys": keys,
+            "defaultChecked": default_checked,
+            "sensitiveKeys": keys.iter().filter(|k| env_is_sensitive(k)).collect::<Vec<_>>(),
+            "refusedKeys": keys.iter().filter(|k| env_name_refused_in_home_layer(k)).collect::<Vec<_>>(),
+        }));
+    }
+
+    serde_json::json!({
+        "dshHome": dir.display().to_string(),
+        "envFile": env_file.display().to_string(),
+        "envFileExists": env_file.is_file(),
+        "loginShellOk": entries.is_some(),
+        "discovered": all.len(),
+        "groups": groups,
+        "refusedKeys": refused,
+        "shadowedKeys": shadowed,
+        "junkKeys": junk,
+        "sensitiveKeys": sensitive,
+        "alreadyImported": already,
+        // 尚未导入的候选数（用于"启动时是否值得引导"）
+        "pendingCount": all
+            .iter()
+            .filter(|(k, _)| {
+                !env_name_refused_in_home_layer(k)
+                    && !env_is_shell_scene(k)
+                    && !already.iter().any(|a| a == k)
+            })
+            .count(),
+    })
+}
+
+/// 纯逻辑：把"用户勾选的键"拆成「要写入的键值对」与「跳过的键+原因」。
+///
+/// 单独抽出来是为了可测：这条规则决定"界面说导入了 N 项，实际写了几项"，
+/// 一旦不一致，用户会看到"已导入 5 项"但文件里只有 3 项（我之前就写错过这一处）。
+pub fn plan_env_import(
+    env: &[(String, String)],
+    keys: &[String],
+) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut skipped: Vec<(String, String)> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for k in keys {
+        if seen.iter().any(|s| s == k) {
+            continue; // 去重：重复键会在受管块里写两行
+        }
+        seen.push(k.clone());
+        if env_name_refused_in_home_layer(k) {
+            skipped.push((k.clone(), "上游禁止写进 .env（会让 Harness 拒绝启动）".into()));
+            continue;
+        }
+        // 命令可被前端直接调用：不能只靠 UI 把现场变量禁掉
+        if env_is_shell_scene(k) {
+            skipped.push((k.clone(), "shell 会话现场变量，导入长驻进程只会误导".into()));
+            continue;
+        }
+        match env.iter().find(|(ek, _)| ek == k) {
+            // 值含换行的无法在 .env 里可靠表示：必须计入 skipped，否则计数与事实不符
+            Some((_, v)) if v.contains('\n') || v.contains('\r') => {
+                skipped.push((k.clone(), "值里含换行，无法写进 .env".into()));
+            }
+            Some((_, v)) => entries.push((k.clone(), v.clone())),
+            None => skipped.push((k.clone(), "登录 shell 里没有这个变量".into())),
+        }
+    }
+    (entries, skipped)
+}
+
+/// 导入：把选中的键（**只传键名**）的值从登录 shell 环境取出来写进受管块。
+pub fn import_login_env(dir: &Path, keys: &[String]) -> Result<serde_json::Value, String> {
+    let env = login_shell_env_cached()
+        .ok_or_else(|| "取不到登录 shell 环境（超时或没有 SHELL）".to_string())?;
+    let (entries, skipped) = plan_env_import(&env, keys);
+    let env_file = dir.join(".env");
+    write_managed_block(&env_file, &entries)?;
+    let written: Vec<String> = entries.iter().map(|(k, _)| k.clone()).collect();
+    Ok(serde_json::json!({
+        "written": written,
+        "skipped": skipped
+            .into_iter()
+            .map(|(k, r)| serde_json::json!({ "key": k, "reason": r }))
+            .collect::<Vec<_>>(),
+        "envFile": env_file.display().to_string(),
+        "count": entries.len(),
+    }))
 }
 
 // ── bootstrap ────────────────────────────────────────────
@@ -993,6 +1657,349 @@ mod tests {
         assert!(!is_loopback_url("https://registry.npmmirror.com/x"));
         assert!(!is_loopback_url("http://127.0.0.1.evil.com/x"));
         assert!(!is_loopback_url(""));
+    }
+
+    #[test]
+    fn parse_marked_env_survives_rc_noise_and_drops_function_exports() {
+        // 用户 rc 往 stdout 喷噪声是常态（p10k instant prompt / conda init 的 echo…）：
+        // 本机实测一次解析的 stdout 共 2350 字节、其中真内容才 ~600 字节。
+        let raw = "welcome back!\n\
+__DSH_POCKET_PATH_BEGIN__\n\
+PATH=/usr/bin:/bin\n\
+HOME=/Users/you\n\
+BASH_FUNC_foo%%=() {  echo hi; }\n\
+NOT_A_KEY-no_eq\n\
+=novalue\n\
+__DSH_POCKET_PATH_END__\n\
+trailing noise";
+        let env = parse_marked_env(raw);
+        // 标记之外的内容一律不要
+        assert_eq!(
+            env,
+            vec![
+                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ("HOME".to_string(), "/Users/you".to_string()),
+            ]
+        );
+        // 导出的 shell 函数必须丢弃：带上会让每次子 bash 执行函数体
+        assert!(!env.iter().any(|(k, _)| k.starts_with("BASH_FUNC_")));
+
+        // 值里含 `=` 时按第一个 `=` 切分
+        let with_eq = "__DSH_POCKET_PATH_BEGIN__\nFOO=a=b=c\n__DSH_POCKET_PATH_END__";
+        assert_eq!(parse_marked_env(with_eq), vec![("FOO".to_string(), "a=b=c".to_string())]);
+
+        // 重复键后者胜（env 输出里不应出现，但别崩/别给出含糊结果）
+        let dup = "__DSH_POCKET_PATH_BEGIN__\nK=1\nK=2\n__DSH_POCKET_PATH_END__";
+        assert_eq!(parse_marked_env(dup), vec![("K".to_string(), "2".to_string())]);
+
+        // 取不到标记 → 空，而不是半截内容
+        assert!(parse_marked_env("").is_empty());
+        assert!(parse_marked_env("no markers here").is_empty());
+        assert!(parse_marked_env("__DSH_POCKET_PATH_BEGIN__").is_empty(), "缺 END");
+    }
+
+    #[test]
+    fn plan_env_import_skips_what_cannot_be_written_and_counts_honestly() {
+        let env: Vec<(String, String)> = vec![
+            ("ANDROID_HOME".into(), "/Users/x/Library/Android/sdk".into()),
+            ("GIT_PAGER".into(), "delta".into()),      // 上游禁令 → 跳过
+            ("PWD".into(), "/Users/x/project".into()), // 会话现场 → 跳过
+            ("WEIRD".into(), "line1\nline2".into()),   // 值含换行 → 跳过
+            ("DUP".into(), "v".into()),
+        ];
+        let keys: Vec<String> = vec![
+            "ANDROID_HOME".into(),
+            "GIT_PAGER".into(),
+            "PWD".into(),
+            "WEIRD".into(),
+            "MISSING".into(), // 环境里没有 → 跳过
+            "DUP".into(),
+            "DUP".into(), // 重复 → 只写一次
+        ];
+        let (entries, skipped) = plan_env_import(&env, &keys);
+
+        // 真正写入的只有两项，且值随行走
+        assert_eq!(
+            entries,
+            vec![
+                ("ANDROID_HOME".to_string(), "/Users/x/Library/Android/sdk".to_string()),
+                ("DUP".to_string(), "v".to_string()),
+            ]
+        );
+        // 每个被跳过的键都要有原因（界面要能解释"为什么少了"）
+        assert_eq!(skipped.len(), 4, "GIT_PAGER/PWD/WEIRD/MISSING 都该被跳过");
+        assert!(skipped.iter().any(|(k, r)| k == "GIT_PAGER" && r.contains("上游禁止")));
+        assert!(skipped.iter().any(|(k, r)| k == "PWD" && r.contains("现场")));
+        assert!(skipped.iter().any(|(k, r)| k == "WEIRD" && r.contains("换行")));
+        assert!(skipped.iter().any(|(k, r)| k == "MISSING" && r.contains("没有这个变量")));
+        // 计数一致性：count == 实际写入数，而不是"用户勾选数"
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn merge_paths_keeps_order_and_drops_duplicates() {
+        let merged = merge_paths(
+            std::ffi::OsStr::new("/shell/a:/shell/b"),
+            std::ffi::OsStr::new("/shell/b:/usr/bin"),
+        );
+        let segs: Vec<String> = std::env::split_paths(&merged)
+            .map(|p| p.display().to_string())
+            .collect();
+        // 登录 shell 的段在前、继承里的重复段丢掉、顺序保持
+        assert_eq!(segs, vec!["/shell/a", "/shell/b", "/usr/bin"]);
+
+        // PATH 里的空段（"::"）必须丢掉：它会变成"当前目录"，属安全隐患
+        let merged2 = merge_paths(std::ffi::OsStr::new("/x::/y"), std::ffi::OsStr::new(""));
+        let segs2: Vec<String> = std::env::split_paths(&merged2)
+            .map(|p| p.display().to_string())
+            .collect();
+        assert_eq!(segs2, vec!["/x", "/y"]);
+    }
+
+    #[test]
+    fn parse_env_keys_is_lenient_but_never_returns_values() {
+        let content = "\
+# 注释行
+export FOO=bar
+BAZ=\"quoted value\"
+EMPTY=
+  INDENTED = spaced
+DUP=1
+DUP=2
+NOT_A_KEY-here=1
+";
+        let keys = parse_env_keys(content);
+        // 只回键名（诊断要能外发）；重复项去重；非法名忽略
+        assert_eq!(keys, vec!["FOO", "BAZ", "EMPTY", "INDENTED", "DUP"]);
+        assert!(!keys.iter().any(|k| k.contains("bar") || k.contains("quoted")));
+        assert!(parse_env_keys("").is_empty());
+        assert!(parse_env_keys("# only comments\n\n").is_empty());
+    }
+
+    #[test]
+    fn home_layer_env_rules_match_upstream() {
+        // 上游 readEnvLayer：这些名字出现在任何 .env 里都会**拒绝启动**
+        assert!(env_name_refused_in_home_layer("PATH"));
+        assert!(env_name_refused_in_home_layer("path"), "大小写不敏感");
+        assert!(env_name_refused_in_home_layer("HOME"));
+        assert!(env_name_refused_in_home_layer("SHELL"));
+        assert!(env_name_refused_in_home_layer("NODE_OPTIONS"));
+        assert!(env_name_refused_in_home_layer("DEEPSEEK_BASE_URL"));
+        // 前缀类
+        assert!(env_name_refused_in_home_layer("DSH_HOME"));
+        assert!(env_name_refused_in_home_layer("XDG_CONFIG_HOME"));
+        assert!(env_name_refused_in_home_layer("DYLD_INSERT_LIBRARIES"));
+        // CA/TLS 类：代理名有例外，这些**没有**（"改变的是信任什么"）
+        assert!(env_name_refused_in_home_layer("SSL_CERT_FILE"));
+        assert!(env_name_refused_in_home_layer("NODE_TLS_REJECT_UNAUTHORIZED"));
+        assert!(env_name_refused_in_home_layer("CURL_CA_BUNDLE"));
+        // 代理名在"用户自己那层"是**允许**的——这正是我们想让用户用的通道
+        assert!(!env_name_refused_in_home_layer("HTTPS_PROXY"));
+        assert!(!env_name_refused_in_home_layer("https_proxy"));
+        assert!(!env_name_refused_in_home_layer("NO_PROXY"));
+        // 普通变量不受限
+        assert!(!env_name_refused_in_home_layer("ANTHROPIC_API_KEY"));
+        assert!(!env_name_refused_in_home_layer("MY_TOOL_HOME"));
+    }
+
+    #[test]
+    fn inspect_env_file_flags_refused_and_shadowed() {
+        let dir = std::env::temp_dir().join(format!("dsh-pocket-env-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".env"),
+            "# 用户自己写的\nHTTPS_PROXY=http://127.0.0.1:7897\nANTHROPIC_API_KEY=sk-secret\nPATH=/evil\nTMPDIR=/tmp/x\n",
+        )
+        .unwrap();
+        // 模拟 launcher 继承到的键（含 TMPDIR）
+        let inherited = vec!["TMPDIR".to_string(), "PATH".to_string()];
+        let r = inspect_env_file_at(&dir, None, &inherited);
+        let arr = |k: &str| -> Vec<String> {
+            r[k].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+        };
+        assert_eq!(arr("refusedKeys"), vec!["PATH"], "PATH 会让 dsh 拒绝启动，必须点名");
+        assert_eq!(arr("shadowedKeys"), vec!["TMPDIR"], "继承层已有的键写了不会生效");
+        assert_eq!(arr("envKeys"), vec!["HTTPS_PROXY", "ANTHROPIC_API_KEY", "PATH", "TMPDIR"]);
+        // 代理名在 home 层是允许的 → 不能误报
+        assert!(!arr("refusedKeys").contains(&"HTTPS_PROXY".to_string()));
+        // **值绝不出现在报告里**（报告会进导出诊断）
+        let dumped = r.to_string();
+        assert!(!dumped.contains("7897") && !dumped.contains("sk-secret"), "报告里混进了值: {dumped}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn env_grouping_and_rules_cover_the_toolchains_users_care_about() {
+        assert_eq!(env_group_of("ANDROID_HOME"), "移动开发");
+        assert_eq!(env_group_of("FLUTTER_STORAGE_BASE_URL"), "移动开发");
+        assert_eq!(env_group_of("DEVECO_SDK_HOME"), "移动开发");
+        assert_eq!(env_group_of("JAVA_HOME"), "移动开发");
+        assert_eq!(env_group_of("NVM_DIR"), "语言运行时");
+        assert_eq!(env_group_of("PNPM_HOME"), "语言运行时");
+        assert_eq!(env_group_of("HOMEBREW_PREFIX"), "包管理与镜像");
+        assert_eq!(env_group_of("https_proxy"), "网络与代理");
+        assert_eq!(env_group_of("CLION_VM_OPTIONS"), "IDE 与 JVM");
+        assert_eq!(env_group_of("PWD"), "shell 现场");
+        assert_eq!(env_group_of("MY_OWN_THING"), "其他");
+
+        // 回归：`HOMEBREW_*` 不能被 `HOME` 前缀误判成"禁令名"（我第一版过滤脚本就错过）；
+        // 产品代码是"精确名 + 四个前缀"（DSH_/XDG_/DYLD_/BASH_FUNC_），不会犯这个错。
+        assert!(!env_name_refused_in_home_layer("HOMEBREW_PREFIX"));
+        assert!(!env_name_refused_in_home_layer("HOMEBREW_BREW_GIT_REMOTE"));
+        assert!(!env_name_refused_in_home_layer("RUBYMINE_VM_OPTIONS"));
+        assert!(!env_name_refused_in_home_layer("ANDROID_HOME"));
+        assert!(!env_name_refused_in_home_layer("HTTPS_PROXY"), "代理名在 home 层允许");
+        // 真正的禁令名照旧
+        assert!(env_name_refused_in_home_layer("GIT_PAGER"));
+        assert!(env_name_refused_in_home_layer("PAGER"));
+        assert!(env_name_refused_in_home_layer("PATH"));
+        assert!(env_name_refused_in_home_layer("BASH_FUNC_x%%"));
+    }
+
+    #[test]
+    fn sensitive_and_shell_scene_classification() {
+        assert!(env_is_sensitive("OPENAI_API_KEY"));
+        assert!(env_is_sensitive("MY_TOKEN"));
+        assert!(env_is_sensitive("AWS_SECRET_ACCESS_KEY"));
+        assert!(env_is_sensitive("GITHUB_TOKEN"));
+        assert!(!env_is_sensitive("ANDROID_HOME"));
+        assert!(!env_is_sensitive("JAVA_HOME"), "JAVA_HOME 不是密钥");
+        assert!(!env_is_sensitive("FLUTTER_STORAGE_BASE_URL"));
+
+        assert!(env_is_shell_scene("_"));
+        assert!(env_is_shell_scene("PWD"));
+        assert!(env_is_shell_scene("OLDPWD"));
+        assert!(env_is_shell_scene("SHLVL"));
+        assert!(env_is_shell_scene("TERM"));
+        assert!(env_is_shell_scene("SSH_AUTH_SOCK"));
+        assert!(env_is_shell_scene("XPC_FLAGS"));
+        assert!(!env_is_shell_scene("ANDROID_HOME"));
+    }
+
+    #[test]
+    fn format_env_line_quotes_only_when_needed() {
+        assert_eq!(format_env_line("FOO", "/a/b"), Some("FOO=/a/b".to_string()));
+        assert_eq!(format_env_line("FOO", "/a b"), Some("FOO=\"/a b\"".to_string()));
+        assert_eq!(format_env_line("FOO", "a#b"), Some("FOO=\"a#b\"".to_string()));
+        assert_eq!(format_env_line("FOO", "say \"hi\""), Some("FOO=\"say \\\"hi\\\"\"".to_string()));
+        assert_eq!(format_env_line("FOO", ""), Some("FOO=\"\"".to_string()));
+        // 含换行的值无法在 dotenv 里可靠表示 → 明确返回 None（调用方计入 skipped）
+        assert_eq!(format_env_line("FOO", "a\nb"), None);
+    }
+
+    #[test]
+    fn managed_block_replaces_old_block_and_keeps_user_lines() {
+        let dir = std::env::temp_dir().join(format!("dsh-pocket-envblk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join(".env");
+        // 用户自己写的行 + 一份过期的受管块
+        std::fs::write(
+            &f,
+            "MY_OWN=1\n# >>> DSH Pocket 导入的终端环境\nOLD_KEY=old\n# <<< DSH Pocket\nLAST=2\n",
+        )
+        .unwrap();
+
+        write_managed_block(
+            &f,
+            &[
+                ("ANDROID_HOME".to_string(), "/Users/x/Library/Android/sdk".to_string()),
+                ("FLUTTER_X".to_string(), "/a b/c".to_string()),
+            ],
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(&f).unwrap();
+        assert!(text.contains("MY_OWN=1"), "用户手写的行必须保留");
+        assert!(text.contains("LAST=2"), "块之后的行也必须保留");
+        assert!(!text.contains("OLD_KEY"), "旧受管块必须被替换掉");
+        assert!(text.contains("ANDROID_HOME=/Users/x/Library/Android/sdk"));
+        assert!(text.contains("FLUTTER_X=\"/a b/c\""), "含空格的值要加引号");
+        assert_eq!(text.matches("# >>> DSH Pocket").count(), 1, "不能出现两个受管块");
+        assert_eq!(managed_block_keys(&f), vec!["ANDROID_HOME", "FLUTTER_X"]);
+
+        // 幂等：再写一次不应堆积
+        write_managed_block(&f, &[("FOO".to_string(), "bar".to_string())]).unwrap();
+        let text2 = std::fs::read_to_string(&f).unwrap();
+        assert_eq!(text2.matches("# >>> DSH Pocket").count(), 1);
+        assert!(text2.contains("MY_OWN=1") && text2.contains("LAST=2"));
+        assert_eq!(managed_block_keys(&f), vec!["FOO"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_report_lists_keys_never_values_and_marks_what_cannot_be_imported() {
+        let dir = std::env::temp_dir().join(format!("dsh-pocket-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let entries: Vec<(String, String)> = vec![
+            ("ANDROID_HOME".into(), "/Users/x/Library/Android/sdk".into()),
+            ("JAVA_HOME".into(), "/Library/Java/JavaVirtualMachines/x".into()),
+            ("GIT_PAGER".into(), "delta".into()),          // 禁令名 → 不可导入
+            ("PWD".into(), "/Users/x/project".into()),     // 会话现场 → 不默认勾
+            ("OPENAI_API_KEY".into(), "sk-LEAK-ME".into()), // 敏感 → 默认不勾
+            ("TMPDIR".into(), "/var/folders/xyz".into()),  // 继承层已有 → 写了无效
+            ("HOMEBREW_PREFIX".into(), "/opt/homebrew".into()), // 不能误判成禁令
+        ];
+        let inherited = vec!["TMPDIR".to_string()];
+        let r = scan_env_entries(Some(&entries), &dir, &["JAVA_HOME".to_string()], &inherited);
+
+        let arr = |k: &str| -> Vec<String> {
+            r[k].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+        };
+        assert!(arr("refusedKeys").contains(&"GIT_PAGER".to_string()));
+        assert!(!arr("refusedKeys").contains(&"HOMEBREW_PREFIX".to_string()));
+        assert!(arr("junkKeys").contains(&"PWD".to_string()));
+        assert!(arr("sensitiveKeys").contains(&"OPENAI_API_KEY".to_string()));
+        assert!(arr("shadowedKeys").contains(&"TMPDIR".to_string()));
+        // 已经导入过的 JAVA_HOME 不该再算候选；GIT_PAGER/PWD 也不算
+        assert_eq!(r["pendingCount"], 3, "候选 = ANDROID_HOME + OPENAI_API_KEY + HOMEBREW_PREFIX");
+        // 分组与默认勾选
+        let groups = r["groups"].as_array().unwrap();
+        let mobile = groups.iter().find(|g| g["name"] == "移动开发").unwrap();
+        assert_eq!(mobile["defaultChecked"], true);
+        let shell = groups.iter().find(|g| g["name"] == "shell 现场").unwrap();
+        assert_eq!(shell["defaultChecked"], false);
+        // **值绝不出现在报告里**
+        let dumped = r.to_string();
+        assert!(!dumped.contains("LEAK-ME"), "报告里混进了值: {dumped}");
+        assert!(!dumped.contains("/var/folders/xyz") && !dumped.contains("/opt/homebrew"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// 真机探针：**不进默认测试套件**，人工核验"这台机器上 Worker 到底拿到什么 PATH"。
+    ///
+    /// 为什么默认 `#[ignore]`：它会真的起一次用户登录 shell（**执行其 rc 的副作用**），
+    /// 本机实测耗时 ~1.45s、stdout 里有 ~1.7KB rc 噪声。这类东西不该出现在 CI 里。
+    /// 用法：`cargo test --lib -- --ignored --nocapture worker_env_probe`
+    #[test]
+    #[ignore = "会起真实登录 shell（执行用户 rc），仅人工排查时显式运行"]
+    fn worker_env_probe() {
+        let home = PathBuf::from(std::env::var("HOME").expect("HOME")).join(".deepseek-harness-pocket");
+        let node_bin = home.join("runtimes").join("node").join("v24.21.0").join("bin");
+
+        println!("── 登录 shell PATH ──");
+        match login_shell_path_cached() {
+            Some(p) => {
+                let segs: Vec<String> = std::env::split_paths(&p).map(|x| x.display().to_string()).collect();
+                println!("段数 = {}", segs.len());
+                println!("含 /opt/homebrew = {}", segs.iter().any(|s| s.contains("/opt/homebrew")));
+            }
+            None => println!("未取到（容器/无 SHELL 环境属正常）"),
+        }
+
+        println!("── Worker PATH（worker_path_env）──");
+        let p = worker_path_env(&home, &node_bin).expect("worker_path_env");
+        let segs: Vec<String> = std::env::split_paths(&p).map(|x| x.display().to_string()).collect();
+        println!("段数 = {}", segs.len());
+        for s in segs.iter().take(3) {
+            println!("  [前缀] {s}");
+        }
+        println!("含 /opt/homebrew = {}", segs.iter().any(|s| s.contains("/opt/homebrew")));
+
+        // 不变量：受管 node 目录必须在最前（否则 dsh 可能用到系统 node）
+        assert!(segs.first().map(|s| s.ends_with("v24.21.0/bin")).unwrap_or(false),
+                "受管 node bin 必须排在第一位，实际第一位 = {:?}", segs.first());
     }
 
     fn temp_file(name: &str, content: &[u8]) -> std::path::PathBuf {

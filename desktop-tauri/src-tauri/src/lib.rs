@@ -835,9 +835,6 @@ fn url_origin(url: &str) -> Option<String> {
     tauri::Url::parse(url).ok().map(|u| u.origin().ascii_serialization())
 }
 
-/// 401 页面打标标题（webview eval 注入，无需远程 IPC 白名单）
-const REAUTH_FLAG_TITLE: &str = "DSH_POCKET_REAUTH";
-
 /// 「页面自己报告连不上」打标标题。
 ///
 /// 为什么需要它（复核 A-①）：**Windows 的 wry/webview2 把加载失败也报成 `Finished`**
@@ -852,9 +849,14 @@ const UNREACHABLE_FLAG_TITLE: &str = "DSH_POCKET_UNREACHABLE";
 /// 错误页自证脚本：只认浏览器错误页专有的错误码/文案，避免误伤 dsh 自己的界面。
 const UNREACHABLE_PROBE_JS: &str = "if (/ERR_CONNECTION_REFUSED|ERR_EMPTY_RESPONSE|ERR_TIMED_OUT|ERR_ADDRESS_UNREACHABLE|ERR_CONNECTION_RESET|ERR_SOCKET_NOT_CONNECTED|ERR_NAME_NOT_RESOLVED|无法访问此网站|找不到服务器|This site can.t be reached|can.t be reached/.test(((document.body&&document.body.innerText)||'')+' '+(document.title||''))) document.title='DSH_POCKET_UNREACHABLE';";
 
-/// 自愈：主窗口若停在旧 token 的 dsh web 401 页（worker 重启换 token / 手动刷新 / 会话过期），
-/// 自动用最新 webUrl 重新导航。dsh web 认证后会把 token 从 URL 剥离，无法靠 URL 对比，
-/// 因此向页面注入一行 JS 检测认证失效文案，命中则改标题，Rust 侧读标题发现后强制重导航。
+/// 自愈：主窗口若停在旧 token 的 dsh web 401 页（worker 重启换 token / 会话丢失），
+/// 用**本 tick 轮询到的最新 webUrl** 在页面内直接重新导航。
+///
+/// 为什么在页面里 `location.replace` 而不是早期那套「改 document.title → Rust 下个
+/// tick 读标题」的回路：标记可能被页面自己的 JS 冲掉（dsh SPA 会写 title），两次
+/// tick 之间标记一丢就永远不触发，401 页就这么卡住。改为探测与修复同 tick 完成：
+/// 无往返、无竞态；token 轮换后最多 3 秒（一个轮询周期）自愈，且带的一定是最新
+/// token（dsh 认证后会把 URL 里的 token 剥离，无法靠 URL 对比，只能认页面文案）。
 ///
 /// 同一处还承担"页面自证不可达"的检测（见 [`UNREACHABLE_FLAG_TITLE`]）。
 fn selfheal_auth_probe<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
@@ -870,8 +872,11 @@ fn selfheal_auth_probe<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
     if url_origin(cur.as_str()).as_deref() != url_origin(web_url).as_deref() {
         return;
     }
+    // 401 文案命中 → 页面自己换到带最新 token 的地址。
+    // serde_json 的字符串字面量即合法 JS 字面量（web_url 来自 run.json 的 http 地址）。
     let _ = win.eval(&format!(
-        "if (/authentication required/i.test(document.body ? document.body.innerText : '')) document.title = '{REAUTH_FLAG_TITLE}';"
+        "if (/authentication required/i.test(document.body ? document.body.innerText : '')) location.replace({});",
+        serde_json::to_string(web_url).unwrap_or_else(|_| format!("'{web_url}'")),
     ));
     let _ = win.eval(UNREACHABLE_PROBE_JS);
     // 主窗口常驻态是 dsh web 页（外部页面加不了 drag-region）：
@@ -888,11 +893,7 @@ fn selfheal_auth_probe<R: Runtime>(app: &AppHandle<R>, web_url: &str) {
     // WebKit 菜单焦点时序补丁：修「模型菜单点了没反应/请求不发」（Safari 同病，见注释）。
     inject_menu_focus_shim(&win);
     if let Ok(title) = win.title() {
-        if title == REAUTH_FLAG_TITLE {
-            let _ = win.eval("document.title = document.title.replace('DSH_POCKET_REAUTH', '');");
-            nav_force_reconnect(app, web_url);
-            notify(app, "DSH Pocket", "控制台已自动重新认证");
-        } else if title == UNREACHABLE_FLAG_TITLE {
+        if title == UNREACHABLE_FLAG_TITLE {
             let _ = win.eval("document.title = document.title.replace('DSH_POCKET_UNREACHABLE', '');");
             // 与看门狗同一条失败路径：计数 → 回退到引导面 + 恢复卡（退避仍由状态机管）
             let next = {
